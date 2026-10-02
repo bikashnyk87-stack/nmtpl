@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0b1f33">
+  <title>NMTPL Central Operations Platform</title>
+  <link rel="stylesheet" href="/static/platform.css?v=0.12.1">
+<link rel="stylesheet" href="/static/ux_v1.css?v=1.0rc1"></head>
+<body>
+<section id="loginView" class="login-screen hidden">
+  <div class="login-copy"><div><div class="brand-logo">N</div><h1>NMTPL Central Operations Platform</h1><p>One controlled operating system for TIOM, SOCP and KOCP — production, trips, weighbridge, HSD, people, equipment, reconciliation, reports, maps and management control.</p><div class="login-bullets"><div><b>3 Sites · One Control Centre</b><span>Site-isolated operations with consolidated management visibility.</span></div><div><b>Role-aware access</b><span>Entry users see only their permitted site, module and action.</span></div><div><b>Operational audit</b><span>Every critical change retains source, user, time and revision history.</span></div><div><b>Scalable foundation</b><span>Designed for staged growth, background jobs and 300+ concurrent users.</span></div></div></div></div>
+  <div class="login-pane"><form id="loginForm" class="login-card"><h2>Sign in</h2><p>Use your NMTPL operations account.</p><div class="field"><span>User ID</span><input id="loginId" autocomplete="username" required></div><div class="field"><span>Password</span><input id="password" type="password" autocomplete="current-password" required></div><button class="btn dark" type="submit">Sign in to Operations</button><div id="loginError" class="login-error"></div></form></div>
+</section>
+
+<div id="appView" class="shell hidden">
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-logo">N</div><div><strong>NMTPL</strong><span>Mining Operations</span></div></div>
+    <div class="site-switcher"><label>Workspace</label><select id="siteSwitcher"><option value="CENTRAL">Central Control Centre</option></select></div>
+    <nav id="sideNav" class="nav-scroll"></nav>
+    <div class="sidebar-foot"><b id="sideVersion">v0.12</b><br>Central platform structure</div>
+  </aside>
+  <section class="main">
+    <header class="topbar">
+      <button id="mobileMenu" class="mobile-menu">☰</button>
+      <div class="crumb"><small id="crumbTop">NMTPL / CENTRAL</small><strong id="crumbTitle">Executive Dashboard</strong></div>
+      <div class="top-search"><input id="globalSearch" placeholder="Search module, vehicle, employee, report…"></div>
+      <div class="top-actions"><span id="clockChip" class="top-chip"></span><span class="top-chip">LIVE PLATFORM</span><button id="logoutBtn" class="top-btn">Sign out</button><div class="userbox"><div class="avatar" id="avatar">N</div><div><span>Signed in</span><b id="userName">User</b></div></div></div>
+    </header>
+    <main id="workspace" class="content"><div class="empty"><b>Loading platform…</b></div></main>
+  </section>
+</div>
+<div id="toast" class="toast"></div>
+<script src="/static/net.js?v=erp-r3"></script>
+<script src="/static/central.js?v=0.12.1-r3"></script>
+<script src="/static/central_ops.js?v=0.12.1"></script>
+<script src="/static/admin_master_ops.js?v=0.12.1"></script>
+<script src="/static/central_ux_v1.js?v=1.0rc1"></script>
+</body></html>

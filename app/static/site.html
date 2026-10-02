@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#0f766e">
+  <title>NMTPL Daily Operations</title>
+  <link rel="stylesheet" href="/static/platform.css?v=0.12.1">
+  <link rel="stylesheet" href="/static/ux_v1.css?v=1.0rc1">
+  <link rel="stylesheet" href="/static/simple_field_v1.css?v=1.0rc3-r3">
+</head>
+<body class="field-mode">
+  <div id="appView" class="field-app-shell">
+    <header class="field-app-header">
+      <div class="field-brand">
+        <div class="brand-logo">N</div>
+        <div><strong>NMTPL</strong><span id="brandSub">Daily Operations</span></div>
+      </div>
+      <div class="field-header-tools">
+        <div class="field-site-picker"><label>Site</label><select id="siteSwitcher"></select></div>
+        <span id="clockChip" class="field-clock"></span>
+        <button id="centralBtn" class="btn outline">Management</button>
+        <button id="logoutBtn" class="btn outline">Sign out</button>
+        <div class="userbox field-user"><div class="avatar" id="avatar">N</div><div><span>Signed in</span><b id="userName">User</b></div></div>
+      </div>
+    </header>
+
+    <section class="field-context-head">
+      <div class="crumb"><small id="crumbTop">NMTPL</small><strong id="crumbTitle">Daily Operations</strong></div>
+      <div id="siteFoot" class="field-site-name">Loading site…</div>
+    </section>
+
+    <nav id="sideNav" class="field-nav"></nav>
+    <main id="workspace" class="field-content"><div class="empty"><b>Loading daily operations…</b></div></main>
+  </div>
+
+  <!-- compatibility hooks used by the existing runtime; not shown in Simple Field Mode -->
+  <button id="mobileMenu" type="button" hidden>Menu</button>
+  <input id="globalSearch" type="hidden" value="">
+  <div id="toast" class="toast"></div>
+
+  <script src="/static/net.js?v=erp-r3"></script>
+<script src="/static/site.js?v=0.12.1-r3"></script>
+  <script src="/static/site_ops.js?v=0.12.1"></script>
+  <script src="/static/site_master_ops.js?v=0.12.1"></script>
+  <script src="/static/ux_v1.js?v=1.0rc1"></script>
+  <script src="/static/simple_field_v1.js?v=1.0rc3-r3"></script>
+</body>
+</html>

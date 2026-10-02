@@ -1,0 +1,35 @@
+
+(function(){
+const L={
+DASHBOARD:['DB','Dashboard','Today’s site status and work.'],ATTENDANCE:['AT','Attendance','Mark who is present for the shift.'],
+SHIFT_CONTROL:['SH','Shift Assignment','Assign driver/operator, machine, location and activity.'],PRODUCTION:['PR','Production','TIOM verified production workflow.'],
+FIELD_ENTRY:['FE','Field Entry','Enter live field production and movement.'],MIS:['MI','Paper Report Entry','Enter paper shift reports and match them with Field/WB data.'],
+TRIP:['TR','Trip Entry','Enter vehicle, loader/excavator, route, material and quantity.'],OB:['OB','OB Entry','Enter KOCP over-burden trips and CuM quantity.'],
+WB:['WB','Weighbridge','Enter/upload WB records and validate gross, tare and net.'],RECONCILIATION:['RC','Check & Match','Review unmatched Trip/Field/Paper/WB records.'],
+HSD:['HS','Fuel / HSD','Opening stock, receipts, issues and adjustments.'],GPS:['GP','GPS & Routes','View available vehicle positions and routes.'],
+FLEET:['FL','Fleet Status','Running, idle, breakdown and maintenance status.'],MECHANICAL:['ME','Mechanical Maintenance','Breakdown, service, PM/WGP, DEF, tyres and equipment history.'],LOADER:['LD','Loader Performance','Loader trips, quantity and fuel.'],
+EXCAVATOR:['EX','Excavator Performance','Excavator trips, HMR and fuel.'],DRIVER:['DR','Driver Performance','Driver allocation and trip performance.'],
+GP_DESTINATION:['GD','Routes / Unloading Points','GP numbers, unloading points and destination performance.'],
+MCL_FACTOR:['MF','MCL Quantity Rules','Approved coal MT/trip and OB CuM/trip rules from MCL.'],
+MCL_SURVEY:['MS','MCL Certified Quantity','MCL/survey-approved quantity used for final billing comparison.'],
+HMR_KMR:['HK','Machine Meter (HMR/KMR)','Enter machine hour/kilometre opening and closing readings.'],
+BILLING:['BL','Billing Check','Compare operational CuM with MCL-certified billable quantity.'],
+REPORTS:['RP','Reports','Daily, shift, period and Excel reports.'],MASTERS:['MA','Masters','Employees, vehicles/equipment, locations and materials.'],
+DATA_QUALITY:['DQ','Data Issues','Missing mappings, duplicates and unmatched records.'],MAP:['MP','Site Map','Site map and operational locations.'],
+SATELLITE:['SA','Satellite','Sentinel-2 observations and change records.'],AUDIT:['AU','History & Approvals','Who changed or approved important records.']
+}; Object.entries(L).forEach(([k,v])=>{if(META[k])META[k]=v});
+const G=[['TODAY',['DASHBOARD','ATTENDANCE','SHIFT_CONTROL','PRODUCTION','FIELD_ENTRY','MIS','TRIP','OB','WB','HSD','HMR_KMR']],
+['REVIEW',['RECONCILIATION','MCL_FACTOR','MCL_SURVEY','BILLING','DATA_QUALITY']],
+['PERFORMANCE',['FLEET','LOADER','EXCAVATOR','DRIVER','GP_DESTINATION','GPS','MAP','SATELLITE']],
+['CONTROL',['MECHANICAL','REPORTS','MASTERS','AUDIT']]];
+setNav=function(){const a=new Set(state.ctx?.modules||[]),n=$('sideNav');n.innerHTML=G.map(([s,ms])=>{ms=ms.filter(m=>a.has(m));return ms.length?`<div class="nav-section">${s}</div>`+ms.map(m=>{const x=META[m];return `<button class="nav-item ${state.module===m?'active':''}" data-module="${m}"><span class="nav-icon">${x[0]}</span><span class="nav-label">${x[1]}</span>${LEGACY_TIOM.has(m)&&siteId==='TIOM'?'<span class="nav-badge">LIVE</span>':''}</button>`}).join(''):''}).join('');n.querySelectorAll('[data-module]').forEach(b=>b.onclick=()=>{state.module=b.dataset.module;render();setNav()})};
+const daily={TIOM:['ATTENDANCE','SHIFT_CONTROL','FIELD_ENTRY','MIS','WB','HSD'],SOCP:['ATTENDANCE','SHIFT_CONTROL','TRIP','WB','HSD'],KOCP:['ATTENDANCE','SHIFT_CONTROL','TRIP','OB','HSD','HMR_KMR']};
+const review={TIOM:['RECONCILIATION','DATA_QUALITY'],SOCP:['RECONCILIATION','DATA_QUALITY'],KOCP:['RECONCILIATION','MCL_FACTOR','MCL_SURVEY','BILLING','DATA_QUALITY']};
+function cards(ms){const a=new Set(state.ctx?.modules||[]);ms=(ms||[]).filter(m=>a.has(m));return ms.length?`<div class="task-cards">${ms.map(m=>{const x=META[m];return `<button class="task-card" onclick="setModule('${m}')"><span class="task-icon">${x[0]}</span><div><b>${x[1]}</b><small>${x[2]}</small></div><strong>Open →</strong></button>`}).join('')}</div>`:'<div class="simple-empty">No tasks assigned.</div>'}
+moduleCards=function(){return cards(daily[siteId])};
+const oldContext=context; context=function(){const c=state.ctx;return `<div class="context-strip"><span class="context-pill live">${siteId}</span><span class="context-pill">Date ${c.operatingDate}</span><span class="context-pill">Current Shift ${c.shift}</span><span class="context-pill">${c.shifts.map(s=>`${s.shift} ${s.start}–${s.end}`).join(' · ')}</span></div>`};
+const oldHero=moduleHero; moduleHero=function(m){const x=META[m],tip={MCL_FACTOR:'Use only the value formally supplied/approved by MCL.',MCL_SURVEY:'Enter the certified quantity exactly as received.',BILLING:'This compares quantities; it does not change original trips.',RECONCILIATION:'Run after entry and review exceptions before reporting.',DATA_QUALITY:'Resolve only after the underlying record is checked.'}[m];return `<section class="module-hero"><div><h1>${x[1]}</h1><p>${x[2]}</p>${tip?`<div class="plain-tip">${tip}</div>`:''}</div><div class="hero-meta"><span class="hero-badge">${siteId}</span><span class="hero-badge">${state.ctx.operatingDate}</span><span class="hero-badge">Shift ${state.ctx.shift}</span></div></section>`};
+renderDashboard=function(){const d=state.dash||{},rv=review[siteId]||[];return pageHead(`${siteId} Dashboard`,state.ctx.siteName,`<button class="btn outline" onclick="refreshDashboard()">Refresh</button>${siteId==='TIOM'?'<button class="btn dark" onclick="location.href=\'/tiom\'">Open Current TIOM</button>':''}`)+context()+`<div class="kpi-grid">${kpi('Quantity MT',fmt(d.quantityMt,2),'Today','hero')}${kpi('Trips',fmt(d.trips),'Posted','blue')}${kpi(siteId==='KOCP'?'OB CuM':'CuM',fmt(d.quantityCum,2),'Approved basis','amber')}${kpi('Fuel',fmt(d.hsdIssuedL,1)+' L','Issued','green')}${kpi('WB Rows',fmt(d.wbRows),'Valid','violet')}${kpi('Shift',state.ctx.shift,'Current','blue')}</div>`+panel('Today’s Work',cards(daily[siteId]),'Use only the task you need')+(rv.length?panel('Review & Approve',cards(rv),'Exceptions and approvals'):'')+`<div class="dashboard-grid"><div>${panel('Shift Times',`<div class="exception-list">${state.ctx.shifts.map(s=>`<div class="exception-row ${s.shift===state.ctx.shift?'ok':''}"><span class="exception-dot"></span><div><b>Shift ${s.shift}</b><small>${s.start} – ${s.end}</small></div><strong>${s.shift===state.ctx.shift?'CURRENT':'SET'}</strong></div>`).join('')}</div>`)}</div><div>${panel('Daily Order','<div class="plain-help"><ol><li>Attendance</li><li>Shift Assignment</li><li>Trip / Production / WB</li><li>Fuel / Machine Meter</li><li>Check & Match</li><li>Reports</li></ol><small>Menus not assigned to the user are hidden automatically.</small></div>')}</div></div>`};
+const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC1';
+setTimeout(()=>{try{setNav();if(state.module==='DASHBOARD')render()}catch(e){console.warn(e)}},250);
+})();
