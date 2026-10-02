@@ -5,7 +5,7 @@ from pathlib import Path
 from fastapi import FastAPI, Depends, Request, HTTPException
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from app.db import engine, get_db, SessionLocal
+from app.db import engine, get_db, SessionLocal, Base
 from app.auth import WebUser, WebSession, get_user, require, MODULES, hash_password
 from app.config import settings
 from app.models import MasterOption, WbHeaderAlias
@@ -18,10 +18,10 @@ from app.services.site_context import seed_default_sites_and_shifts
 
 @asynccontextmanager
 async def lifespan(app):
-    MasterOption.__table__.create(engine, checkfirst=True)
-    WbHeaderAlias.__table__.create(engine, checkfirst=True)
-    WebUser.__table__.create(engine, checkfirst=True)
-    WebSession.__table__.create(engine, checkfirst=True)
+    # Fresh database safety: create the complete registered core schema first so
+    # all FK targets (persons/equipment/locations/products/etc.) exist before
+    # multisite and maintenance extension tables are created.
+    Base.metadata.create_all(engine, checkfirst=True)
     create_multisite_tables(engine)
     create_maintenance_tables(engine)
     # Pilot migration safety: if an older build left exactly one active account
@@ -138,4 +138,3 @@ def tiom_mechanical_app():
 def mechanical_app(site_id: str):
     # Compatibility only: site modules stay inside their ERP workspace.
     return RedirectResponse(f'/site/{site_id}', status_code=307)
-
