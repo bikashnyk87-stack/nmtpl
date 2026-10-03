@@ -131,7 +131,17 @@ def gmail_once():
         cfg["review_rows_label"],
     ]
     labels = worker.ensure_labels(service, label_names)
-    results = worker.poll_once(service, cfg, labels)
+    results = []
+    retry_message_id = os.getenv("WB_GMAIL_RETRY_MESSAGE_ID", "").strip()
+    if retry_message_id:
+        message = service.users().messages().get(
+            userId="me", id=retry_message_id, format="full"
+        ).execute()
+        retry_result = worker.process_message(service, message, cfg, labels)
+        results.append(retry_result)
+        logger.info("Targeted WB Gmail retry completed message=%s status=%s",
+                    retry_message_id, retry_result.get("status"))
+    results.extend(worker.poll_once(service, cfg, labels))
     counts = {}
     for item in results:
         key = item.get("status", "UNKNOWN")

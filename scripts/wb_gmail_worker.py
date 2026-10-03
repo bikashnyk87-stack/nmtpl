@@ -608,10 +608,18 @@ def process_message(service, message, cfg, labels):
         add.append(labels[cfg["review_required_label"]])
     elif outcomes == {"DUPLICATE"}:
         add.append(labels[cfg["duplicate_label"]])
+        remove.extend([
+            labels[cfg["error_label"]],
+            labels[cfg["review_required_label"]],
+        ])
         if cfg.get("archive_success", True):
             remove.extend(["INBOX", "UNREAD"])
     else:
         add.append(labels[cfg["processed_label"]])
+        remove.extend([
+            labels[cfg["error_label"]],
+            labels[cfg["review_required_label"]],
+        ])
         if any(int(r.get("review", 0)) > 0 for r in results):
             add.append(labels[cfg["review_rows_label"]])
         if cfg.get("archive_success", True):
