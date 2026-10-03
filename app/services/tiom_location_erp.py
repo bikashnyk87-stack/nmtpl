@@ -71,9 +71,11 @@ def canonicalize_wb(
     material_key = (str(wb.material_code or ""), str(wb.material_name or ""))
 
     if source_key not in source_cache:
-        source_cache[source_key] = resolver.resolve_raw(wb.source_raw, "SOURCE") if wb.source_raw else None
+        candidate = resolver.resolve_raw(wb.source_raw, "SOURCE") if wb.source_raw else None
+        source_cache[source_key] = candidate if candidate and db.get(Location, candidate) else None
     if destination_key not in destination_cache:
-        destination_cache[destination_key] = resolver.resolve_raw(wb.destination_raw, "DESTINATION") if wb.destination_raw else None
+        candidate = resolver.resolve_raw(wb.destination_raw, "DESTINATION") if wb.destination_raw else None
+        destination_cache[destination_key] = candidate if candidate and db.get(Location, candidate) else None
     if material_key not in material_cache:
         material_cache[material_key] = resolve_product_id(db, wb)
 
