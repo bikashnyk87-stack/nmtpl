@@ -10,6 +10,8 @@ from app.services.cloud_sync import (
     create_device,
     latest_change_id,
     read_changes,
+    read_snapshot_table,
+    snapshot_manifest,
     source_enabled,
     validate_device,
 )
@@ -55,3 +57,33 @@ def changes(
     if not device:
         raise HTTPException(401, "Invalid or inactive sync device token.")
     return read_changes(db, after, limit)
+
+
+@router.get("/snapshot-manifest")
+def get_snapshot_manifest(
+    x_nmtpl_sync_token: str | None = Header(default=None, alias="X-NMTPL-Sync-Token"),
+    db: Session = Depends(get_db),
+):
+    _source_required()
+    device = validate_device(db, x_nmtpl_sync_token or "")
+    if not device:
+        raise HTTPException(401, "Invalid or inactive sync device token.")
+    return snapshot_manifest(db)
+
+
+@router.get("/snapshot/{table_name}")
+def get_snapshot_table(
+    table_name: str,
+    offset: int = 0,
+    limit: int = 500,
+    x_nmtpl_sync_token: str | None = Header(default=None, alias="X-NMTPL-Sync-Token"),
+    db: Session = Depends(get_db),
+):
+    _source_required()
+    device = validate_device(db, x_nmtpl_sync_token or "")
+    if not device:
+        raise HTTPException(401, "Invalid or inactive sync device token.")
+    try:
+        return read_snapshot_table(db, table_name, offset, limit)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc

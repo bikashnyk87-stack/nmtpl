@@ -8,7 +8,7 @@ import secrets
 from datetime import datetime, timezone
 from uuid import uuid4
 
-from sqlalchemy import text
+from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger("nmtpl.sync")
@@ -216,3 +216,88 @@ def latest_change_id(db: Session) -> int:
     return int(db.execute(text(
         "SELECT COALESCE(MAX(change_id), 0) FROM sync_change_log"
     )).scalar() or 0)
+
+
+def snapshot_manifest(db: Session) -> dict:
+    """Return a point-in-time watermark plus FK-safe table order for bootstrap."""
+    bind = db.get_bind()
+    inspector = inspect(bind)
+    existing = [name for name in SYNC_TABLES if inspector.has_table(name)]
+    existing_set = set(existing)
+
+    dependencies: dict[str, set[str]] = {name: set() for name in existing}
+    for table_name in existing:
+        for fk in inspector.get_foreign_keys(table_name):
+            parent = fk.get("referred_table")
+            if parent in existing_set and parent != table_name:
+                dependencies[table_name].add(parent)
+
+    ordered: list[str] = []
+    remaining = {name: set(deps) for name, deps in dependencies.items()}
+    while remaining:
+        ready = [name for name in existing if name in remaining and not remaining[name]]
+        if not ready:
+            # Defensive fallback for any schema cycle: preserve the declared stable
+            # order. Most TIOM business tables are acyclic; this prevents a hang.
+            ordered.extend(name for name in existing if name in remaining)
+            break
+        for name in ready:
+            ordered.append(name)
+            remaining.pop(name, None)
+        for deps in remaining.values():
+            deps.difference_update(ready)
+
+    return {
+        "watermark": latest_change_id(db),
+        "tables": ordered,
+        "dependencies": {
+            name: sorted(dependencies[name])
+            for name in ordered
+        },
+    }
+
+
+def read_snapshot_table(
+    db: Session,
+    table_name: str,
+    offset: int,
+    limit: int,
+) -> dict:
+    """Read current rows for one allowlisted table in deterministic PK order."""
+    if table_name not in SYNC_TABLES or not _NAME_RE.fullmatch(table_name):
+        raise ValueError("Table is not available for synchronization.")
+
+    bind = db.get_bind()
+    inspector = inspect(bind)
+    if not inspector.has_table(table_name):
+        return {
+            "table": table_name,
+            "rows": [],
+            "offset": max(0, int(offset)),
+            "nextOffset": None,
+            "hasMore": False,
+        }
+
+    limit = max(1, min(int(limit), 500))
+    offset = max(0, int(offset))
+    pk = inspector.get_pk_constraint(table_name).get("constrained_columns") or []
+
+    # Names originate from SQLAlchemy inspection and table_name is also allowlisted.
+    order_sql = ", ".join(f'"{name}"' for name in pk) if pk else "ctid"
+    rows = db.execute(
+        text(
+            f'SELECT to_jsonb(t) AS row '
+            f'FROM "{table_name}" AS t '
+            f'ORDER BY {order_sql} LIMIT :limit OFFSET :offset'
+        ),
+        {"limit": limit, "offset": offset},
+    ).scalars().all()
+
+    has_more = len(rows) >= limit
+    return {
+        "table": table_name,
+        "rows": rows,
+        "offset": offset,
+        "nextOffset": offset + len(rows) if has_more else None,
+        "hasMore": has_more,
+    }
