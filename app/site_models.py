@@ -755,6 +755,43 @@ class TiomMisTripDetail(Base):
     entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class TiomLeadDistance(Base):
+    """Approved TIOM haul lead master by source area, bench RL, destination and WB path."""
+    __tablename__ = "tiom_lead_distance"
+
+    lead_id: Mapped[str] = mapped_column(String(180), primary_key=True)
+    source_location_id: Mapped[str] = mapped_column(ForeignKey("locations.location_id"), index=True)
+    bench_rl_m: Mapped[int] = mapped_column(Integer, index=True)
+    destination_location_id: Mapped[str] = mapped_column(ForeignKey("locations.location_id"), index=True)
+    route_mode: Mapped[str] = mapped_column(String(20), index=True)  # WITH_WB / WITHOUT_WB
+    lead_km: Mapped[Decimal] = mapped_column(Numeric(8, 3))
+    material_scope: Mapped[str | None] = mapped_column(String(30), index=True)
+    source_document: Mapped[str | None] = mapped_column(String(180))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    entered_by: Mapped[str] = mapped_column(String(60), default="SYSTEM")
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint(
+            "source_location_id", "bench_rl_m", "destination_location_id", "route_mode",
+            name="uq_tiom_lead_route"
+        ),
+        Index("ix_tiom_lead_lookup", "source_location_id", "bench_rl_m", "destination_location_id", "route_mode", "active"),
+    )
+
+
+class TiomMisTripLead(Base):
+    """Lead-distance snapshot used by one submitted/draft MIS trip row."""
+    __tablename__ = "tiom_mis_trip_lead"
+
+    row_id: Mapped[str] = mapped_column(ForeignKey("tiom_mis_trip_row.row_id"), primary_key=True)
+    bench_rl_m: Mapped[int | None] = mapped_column(Integer, index=True)
+    route_mode: Mapped[str | None] = mapped_column(String(20), index=True)
+    lead_km: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
+    lead_rule_id: Mapped[str | None] = mapped_column(ForeignKey("tiom_lead_distance.lead_id"), index=True)
+    lead_status: Mapped[str] = mapped_column(String(30), default="NOT_CONFIGURED", index=True)
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class TiomHsdReceiptDetail(Base):
     """TIOM management fields layered on the existing FIFO HSD purchase lot."""
     __tablename__ = "tiom_hsd_receipt_detail"
@@ -834,6 +871,8 @@ MULTISITE_TABLES = [
     TiomMisTripRow,
     TiomTripFactor,
     TiomMisTripDetail,
+    TiomLeadDistance,
+    TiomMisTripLead,
     TiomHsdReceiptDetail,
     TiomHsdIssueDetail,
     TiomMisReconciliation,
