@@ -34,6 +34,7 @@ from app.models import (
 from app.services.reconcile import auto_reconcile
 from app.services.time_context import TZ, now_local
 from app.services.wb_mapping import find_wb_sheet, row_value, build_location_resolver, expected_movement_date
+from app.services.tiom_location_erp import canonicalize_wb_rows
 
 CONFIG_PATH = ROOT / "config" / "wb_gmail_config.json"
 TOKEN_PATH = ROOT / "config" / "gmail_token.json"
@@ -444,7 +445,11 @@ def ingest_xlsx(content, filename, cfg, message_id):
             status = "REVIEW" if issues else "VALID"
             issue_text = "; ".join(issues + warnings) or None
             key = f"{batch.batch_id}:{move}:{rno}"
-            db.add(WbMovement(
+            source_code_raw=str(value("source_code") or "").strip()
+            source_name_raw=str(value("source_name") or "").strip()
+            dest_code_raw=str(value("dest_code") or "").strip()
+            dest_name_raw=str(value("dest_name") or "").strip()
+            movement=WbMovement(
                 movement_key=key,
                 batch_id=batch.batch_id,
                 operating_date=operating_date,
@@ -454,15 +459,16 @@ def ingest_xlsx(content, filename, cfg, message_id):
                 vehicle_id=vehicle_id,
                 material_code=str(value("matcode") or "").strip() or None,
                 material_name=str(value("matname") or "").strip() or None,
-                source_raw=source or None,
-                destination_raw=dest or None,
+                source_raw=source_code_raw or source_name_raw or None,
+                destination_raw=dest_code_raw or dest_name_raw or None,
                 tare_kg=tare,
                 gross_kg=gross,
                 net_kg=net or Decimal("0"),
                 weigh_at=weigh_at or datetime.combine(operating_date, definition.start_time, TZ),
                 row_status=status,
                 issue=issue_text,
-            ))
+            )
+            db.add(movement); new_wb_rows.append(movement)
             if status == "VALID":
                 valid += 1
                 total_net += net or Decimal("0")
@@ -472,6 +478,8 @@ def ingest_xlsx(content, filename, cfg, message_id):
         if valid + review == 0:
             db.rollback()
             raise ValueError("No WB movement rows were found in the attachment.")
+        db.flush()
+        canonicalize_wb_rows(db,new_wb_rows)
 
         batch.valid_rows = valid
         batch.review_rows = review
