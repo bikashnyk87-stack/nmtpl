@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 
 from app.models import Location, WbMovement
 from app.site_models import TiomLocationRole, TiomWbCanonical
-from app.services.tiom_erp import resolve_location_id, resolve_product_id
+from app.services.tiom_erp import resolve_product_id
+from app.services.wb_mapping import build_location_resolver
 from app.services.time_context import now_local
 
 
@@ -51,10 +52,34 @@ def location_options(db: Session, role: str) -> list[dict]:
     ]
 
 
-def canonicalize_wb(db: Session, wb: WbMovement) -> TiomWbCanonical:
-    source_id = resolve_location_id(db, wb.source_raw, "SOURCE")
-    destination_id = resolve_location_id(db, wb.destination_raw, "DESTINATION")
-    material_id = resolve_product_id(db, wb)
+def canonicalize_wb(
+    db: Session,
+    wb: WbMovement,
+    *,
+    resolver=None,
+    source_cache: dict | None = None,
+    destination_cache: dict | None = None,
+    material_cache: dict | None = None,
+) -> TiomWbCanonical:
+    resolver = resolver or build_location_resolver(db)
+    source_cache = source_cache if source_cache is not None else {}
+    destination_cache = destination_cache if destination_cache is not None else {}
+    material_cache = material_cache if material_cache is not None else {}
+
+    source_key = str(wb.source_raw or "")
+    destination_key = str(wb.destination_raw or "")
+    material_key = (str(wb.material_code or ""), str(wb.material_name or ""))
+
+    if source_key not in source_cache:
+        source_cache[source_key] = resolver.resolve_raw(wb.source_raw, "SOURCE") if wb.source_raw else None
+    if destination_key not in destination_cache:
+        destination_cache[destination_key] = resolver.resolve_raw(wb.destination_raw, "DESTINATION") if wb.destination_raw else None
+    if material_key not in material_cache:
+        material_cache[material_key] = resolve_product_id(db, wb)
+
+    source_id = source_cache[source_key]
+    destination_id = destination_cache[destination_key]
+    material_id = material_cache[material_key]
     missing = []
     if wb.source_raw and not source_id:
         missing.append("SOURCE")
@@ -78,17 +103,37 @@ def canonicalize_wb(db: Session, wb: WbMovement) -> TiomWbCanonical:
 
 def canonicalize_wb_rows(db: Session, rows: list[WbMovement]) -> dict[str, TiomWbCanonical]:
     out = {}
+    resolver = build_location_resolver(db)
+    source_cache: dict[str, str | None] = {}
+    destination_cache: dict[str, str | None] = {}
+    material_cache: dict[tuple[str, str], str | None] = {}
     for wb in rows:
-        out[wb.movement_key] = canonicalize_wb(db, wb)
+        out[wb.movement_key] = canonicalize_wb(
+            db, wb,
+            resolver=resolver,
+            source_cache=source_cache,
+            destination_cache=destination_cache,
+            material_cache=material_cache,
+        )
     db.flush()
     return out
 
 
 def backfill_wb_canonical(db: Session) -> dict:
     rows = list(db.scalars(select(WbMovement)))
+    resolver = build_location_resolver(db)
+    source_cache: dict[str, str | None] = {}
+    destination_cache: dict[str, str | None] = {}
+    material_cache: dict[tuple[str, str], str | None] = {}
     mapped = source_missing = destination_missing = material_missing = 0
     for wb in rows:
-        c = canonicalize_wb(db, wb)
+        c = canonicalize_wb(
+            db, wb,
+            resolver=resolver,
+            source_cache=source_cache,
+            destination_cache=destination_cache,
+            material_cache=material_cache,
+        )
         if c.mapping_status == "OK":
             mapped += 1
         if wb.source_raw and not c.source_location_id:
