@@ -15,6 +15,7 @@ from app.services.attendance_automation import automation_loop
 from app.site_models import create_multisite_tables
 from app.maintenance_models import create_maintenance_tables
 from app.services.site_context import seed_default_sites_and_shifts
+from app.services.cloud_sync import init_sync_source
 
 @asynccontextmanager
 async def lifespan(app):
@@ -24,6 +25,7 @@ async def lifespan(app):
     Base.metadata.create_all(engine, checkfirst=True)
     create_multisite_tables(engine)
     create_maintenance_tables(engine)
+    init_sync_source(engine)
     # Pilot migration safety: if an older build left exactly one active account
     # with no management/modules, treat it as the original local administrator.
     # Never auto-promote when multiple accounts exist.
@@ -98,9 +100,10 @@ async def response_headers(request, call_next):
         response.headers['Cache-Control'] = 'public, max-age=31536000, immutable' if request.url.query else 'public, max-age=300, must-revalidate'
     return response
 
-from app.routers import volvo, automation
+from app.routers import volvo, automation, sync
 app.include_router(volvo.router)
 app.include_router(automation.router)
+app.include_router(sync.router)
 app.include_router(health.router)
 app.include_router(webapp.router)
 app.include_router(sites.router)
