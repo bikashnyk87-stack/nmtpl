@@ -1,5 +1,6 @@
 import asyncio
 import os
+import json
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from fastapi import FastAPI, Depends, Request, HTTPException
@@ -34,7 +35,8 @@ async def lifespan(app):
         ensure_wb_header_mapping(db)
         seed_default_sites_and_shifts(db)
         if os.getenv("TIOM_TEMP_REFERENCE_SEED", "").strip().lower() in {"1","true","yes","on"}:
-            seed_tiom_temp_reference_data(db)
+            seed_counts=seed_tiom_temp_reference_data(db)
+            print("TIOM_TEMP_REFERENCE_SEED_OK="+json.dumps(seed_counts,sort_keys=True),flush=True)
         users = db.query(WebUser).all()
         # Cloud test bootstrap: create the first administrator only when the database
         # is empty and explicit Render environment variables are provided. No
