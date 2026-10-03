@@ -1,0 +1,22 @@
+{
+  "enabled": true,
+  "authorized_mailbox": "",
+  "poll_seconds": 180,
+  "max_messages_per_poll": 25,
+  "gmail_query": "has:attachment filename:xlsx",
+  "allowed_senders": [
+    "@amns.in"
+  ],
+  "subject_keywords": [],
+  "processed_label": "NMTPL_WB_PROCESSED",
+  "duplicate_label": "NMTPL_WB_DUPLICATE",
+  "error_label": "NMTPL_WB_ERROR",
+  "review_required_label": "NMTPL_WB_REVIEW_REQUIRED",
+  "review_rows_label": "NMTPL_WB_REVIEW_ROWS",
+  "archive_success": true,
+  "auto_confirm": true,
+  "max_review_percent": 5,
+  "weight_tolerance_kg": 5,
+  "max_file_mb": 15,
+  "start_after_utc": "2026-09-22T12:13:09Z"
+}
