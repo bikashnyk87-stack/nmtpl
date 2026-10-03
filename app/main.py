@@ -52,7 +52,6 @@ async def lifespan(app):
                 ))
                 db.flush()
                 users = db.query(WebUser).all()
-        print('SYNC_DIAG_ADMIN_IDS=' + ','.join(u.login_id for u in users if u.admin and u.active), flush=True)
         if len(users) == 1:
             u = users[0]
             if u.active and not u.admin and not (u.modules or '').strip():
