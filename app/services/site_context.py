@@ -62,6 +62,11 @@ def seed_default_sites_and_shifts(db) -> None:
     db.flush()
 
     shift_defaults = {
+        "TIOM": {
+            "A": (time(6, 0), time(14, 0), 1),
+            "B": (time(14, 0), time(22, 0), 2),
+            "C": (time(22, 0), time(6, 0), 3),
+        },
         "SOCP": {
             "A": (time(6, 0), time(14, 0), 1),
             "B": (time(14, 0), time(22, 0), 2),
@@ -88,24 +93,14 @@ def seed_default_sites_and_shifts(db) -> None:
                     active=True,
                 ))
 
-    # TIOM follows the existing ShiftMaster during the transition so the
-    # production pilot is not silently reconfigured.
-    try:
-        from app.models import ShiftMaster
-        legacy = list(db.scalars(select(ShiftMaster).where(ShiftMaster.active.is_(True))))
-        for idx, old in enumerate(legacy, start=1):
-            row = db.get(SiteShift, {"site_id": "TIOM", "shift": old.shift})
-            if not row:
-                db.add(SiteShift(
-                    site_id="TIOM",
-                    shift=old.shift,
-                    shift_name=f"Shift {old.shift}",
-                    start_time=old.start_time,
-                    end_time=old.end_time,
-                    scheduled_hours=old.scheduled_hours,
-                    sequence_no=idx,
-                    active=True,
-                ))
-    except Exception:
-        # The migration script may be run before legacy masters are initialized.
-        pass
+    # TIOM shift boundaries are explicit and authoritative for the cloud pilot.
+    # Existing rows are corrected to the confirmed A/B/C schedule so overnight
+    # C-shift activity (00:00-05:59) remains on the previous operating date.
+    for shift, (start, end, seq) in shift_defaults["TIOM"].items():
+        row = db.get(SiteShift, {"site_id": "TIOM", "shift": shift})
+        if row:
+            row.start_time = start
+            row.end_time = end
+            row.scheduled_hours = 8
+            row.sequence_no = seq
+            row.active = True
