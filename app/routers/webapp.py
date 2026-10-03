@@ -675,8 +675,8 @@ def dashboard_desk(db, user, p):
         elif 'FINE' in u: material_buckets['FINES'] += t
         elif 'ROM' in u: material_buckets['ROM'] += t
         else: material_buckets['OTHER'] += t
-        if has_token(src,'CRUSH') or has_token(dst,'CRUSH'):
-            machine = dst if has_token(dst,'CRUSH') else src
+        if has_token(src,'CRUSH','OCP') or has_token(dst,'CRUSH','OCP'):
+            machine = dst if has_token(dst,'CRUSH','OCP') else src
             key=(machine,label); row=crusher_rows.setdefault(key,{'machine':machine,'material':label,'trips':0,'tonnes':0.0})
             row['trips']+=1;row['tonnes']+=t
         if has_token(src,'SCREEN','MSP-','MSP ') or has_token(dst,'SCREEN','MSP-','MSP '):
@@ -837,7 +837,7 @@ def dashboard_desk(db, user, p):
     avg_cycle=sum(cycle_samples)/len(cycle_samples) if cycle_samples else None
 
     ore_tonnes=wb_tonnes-material_buckets['WASTE']-material_buckets['REJECT']
-    crusher_feed=sum(tonnes(w) for w in wb if has_token(w.destination_raw,'CRUSH'))
+    crusher_feed=sum(tonnes(w) for w in wb if has_token(w.destination_raw,'CRUSH','OCP'))
     screen_feed=sum(tonnes(w) for w in wb if has_token(w.destination_raw,'SCREEN','MSP-','MSP '))
     fuel_per_tonne=float(hsd_litres)/wb_tonnes if wb_tonnes else 0.0
     fuel_per_trip=float(hsd_litres)/wb_trips if wb_trips else 0.0
@@ -846,8 +846,8 @@ def dashboard_desk(db, user, p):
     # Material flow uses recorded stages only; crusher/screen/stock are WB-location classifications.
     stock_trips=sum(1 for w in wb if has_token(w.destination_raw,'STOCK') or re.fullmatch(r'S\d+',str(w.destination_raw or '').strip().upper()))
     stock_tonnes=sum(tonnes(w) for w in wb if has_token(w.destination_raw,'STOCK') or re.fullmatch(r'S\d+',str(w.destination_raw or '').strip().upper()))
-    crusher_trips=sum(1 for w in wb if has_token(w.source_raw,'CRUSH') or has_token(w.destination_raw,'CRUSH'))
-    crusher_tonnes=sum(tonnes(w) for w in wb if has_token(w.source_raw,'CRUSH') or has_token(w.destination_raw,'CRUSH'))
+    crusher_trips=sum(1 for w in wb if has_token(w.source_raw,'CRUSH','OCP') or has_token(w.destination_raw,'CRUSH','OCP'))
+    crusher_tonnes=sum(tonnes(w) for w in wb if has_token(w.source_raw,'CRUSH','OCP') or has_token(w.destination_raw,'CRUSH','OCP'))
     screen_trips=sum(1 for w in wb if has_token(w.source_raw,'SCREEN','MSP-','MSP ') or has_token(w.destination_raw,'SCREEN','MSP-','MSP '))
     screen_tonnes=sum(tonnes(w) for w in wb if has_token(w.source_raw,'SCREEN','MSP-','MSP ') or has_token(w.destination_raw,'SCREEN','MSP-','MSP '))
     excavator_trip_count=sum(r['trips'] for r in excavator_rows); excavator_tonnes=sum(r['tonnes'] for r in excavator_rows)
@@ -986,10 +986,13 @@ def dashboard_desk(db, user, p):
     mis_row_ids=[r.row_id for r in mis_rows]
     mis_details={x.row_id:x for x in db.scalars(select(TiomMisTripDetail).where(TiomMisTripDetail.row_id.in_(mis_row_ids)))} if mis_row_ids else {}
     mis_recs={x.row_id:x for x in db.scalars(select(TiomMisReconciliation).where(TiomMisReconciliation.row_id.in_(mis_row_ids)))} if mis_row_ids else {}
+    mis_leads={x.row_id:x for x in db.scalars(select(TiomMisTripLead).where(TiomMisTripLead.row_id.in_(mis_row_ids)))} if mis_row_ids else {}
     mis_products={x.product_id:x for x in db.scalars(select(Product))}
     mis_trip_count=len(mis_rows); mis_ob_trips=0; mis_ob_qty=Decimal('0'); mis_rom_trips=0; mis_rom_qty=Decimal('0')
     mis_total_qty=Decimal('0'); mis_wb_linked=0; mis_factor_trips=0
-    mis_materials={}; mis_sources={}; mis_destinations={}; mis_vehicles={}; mis_machines={}
+    lead_resolved_trips=0; lead_missing_trips=0; lead_with_wb=0; lead_without_wb=0
+    lead_covered_qty=Decimal('0'); lead_ton_km=Decimal('0')
+    mis_materials={}; mis_sources={}; mis_destinations={}; mis_vehicles={}; mis_machines={}; lead_routes={}
     for r in mis_rows:
         d=mis_details.get(r.row_id)
         if not d: continue
@@ -1010,8 +1013,21 @@ def dashboard_desk(db, user, p):
         add_metric(mis_vehicles,vehicle,float(qty))
         add_metric(mis_machines,machine,float(qty))
         rec=mis_recs.get(r.row_id)
+        lead=mis_leads.get(r.row_id)
         if rec and rec.wb_movement_key: mis_wb_linked+=1
         else: mis_factor_trips+=1
+        route_mode=(lead.route_mode if lead else None) or ('WITH_WB' if rec and rec.wb_movement_key else None)
+        if route_mode=='WITH_WB': lead_with_wb+=1
+        elif route_mode=='WITHOUT_WB': lead_without_wb+=1
+        if lead and lead.lead_status=='OK' and lead.lead_km is not None:
+            lead_km=Decimal(lead.lead_km)
+            ton_km=qty*lead_km
+            lead_resolved_trips+=1; lead_covered_qty+=qty; lead_ton_km+=ton_km
+            rk=(src,dst,route_mode or 'UNSPECIFIED')
+            lr=lead_routes.setdefault(rk,{'source':src,'destination':dst,'routeMode':route_mode or 'UNSPECIFIED','trips':0,'tonnes':Decimal('0'),'leadKmSum':Decimal('0'),'tonKm':Decimal('0')})
+            lr['trips']+=1; lr['tonnes']+=qty; lr['leadKmSum']+=lead_km; lr['tonKm']+=ton_km
+        else:
+            lead_missing_trips+=1
         txt=(' '.join([str(d.material_id or ''),str(prod.name if prod else r.material_raw or '')])).upper()
         if re.search(r'(^|[^A-Z0-9])OB([^A-Z0-9]|$)',txt): mis_ob_trips+=1; mis_ob_qty+=qty
         elif 'ROM' in txt: mis_rom_trips+=1; mis_rom_qty+=qty
@@ -1021,6 +1037,66 @@ def dashboard_desk(db, user, p):
             out.append({key_name:x['label'],'trips':x['trips'],'tonnes':round(x['tonnes'],2),
                         'avgPayload':round(x['tonnes']/x['trips'],2) if x['trips'] else 0})
         return out
+
+    lead_route_rows=[]
+    for x in sorted(lead_routes.values(),key=lambda z:(z['tonKm'],z['trips']),reverse=True):
+        avg_lead=(x['tonKm']/x['tonnes']) if x['tonnes']>0 else (x['leadKmSum']/x['trips'] if x['trips'] else Decimal('0'))
+        lead_route_rows.append({
+            'source':x['source'],'destination':x['destination'],'routeMode':x['routeMode'],
+            'trips':x['trips'],'tonnes':round(float(x['tonnes']),2),
+            'avgLeadKm':round(float(avg_lead),3),'tonKm':round(float(x['tonKm']),2)
+        })
+    weighted_avg_lead=(lead_ton_km/lead_covered_qty) if lead_covered_qty>0 else Decimal('0')
+
+    # Build 7-day MIS/lead trend independently of the currently selected period.
+    # This mirrors the existing 7-day WB trend and preserves the selected shift scope.
+    trend_mis_stmt=select(TiomMisReport).where(
+        TiomMisReport.operating_date>=trend_start,TiomMisReport.operating_date<=end_day,
+        TiomMisReport.status=='SUBMITTED'
+    )
+    if selected_shift!='ALL': trend_mis_stmt=trend_mis_stmt.where(TiomMisReport.shift==selected_shift)
+    elif allowed_shifts: trend_mis_stmt=trend_mis_stmt.where(TiomMisReport.shift.in_(allowed_shifts))
+    trend_reports=list(db.scalars(trend_mis_stmt))
+    trend_report_map={x.report_id:x for x in trend_reports}
+    trend_ids=list(trend_report_map)
+    trend_rows=list(db.scalars(select(TiomMisTripRow).where(TiomMisTripRow.report_id.in_(trend_ids)))) if trend_ids else []
+    trend_row_ids=[x.row_id for x in trend_rows]
+    trend_details={x.row_id:x for x in db.scalars(select(TiomMisTripDetail).where(TiomMisTripDetail.row_id.in_(trend_row_ids)))} if trend_row_ids else {}
+    trend_leads={x.row_id:x for x in db.scalars(select(TiomMisTripLead).where(TiomMisTripLead.row_id.in_(trend_row_ids)))} if trend_row_ids else {}
+    for row in trend_rows:
+        report=trend_report_map.get(row.report_id); detail=trend_details.get(row.row_id)
+        if not report or not detail: continue
+        key=str(report.operating_date)
+        if key not in seven: continue
+        qty=Decimal(detail.calculated_qty_mt or 0)
+        seven[key]['misQty']=seven[key].get('misQty',0.0)+float(qty)
+        lead=trend_leads.get(row.row_id)
+        if lead and lead.lead_status=='OK' and lead.lead_km is not None:
+            seven[key]['leadTonKm']=seven[key].get('leadTonKm',0.0)+float(qty*Decimal(lead.lead_km))
+
+    cumulative_trips=0; cumulative_tonnes=0.0; cumulative_fuel=0.0; cumulative_mis=0.0; cumulative_lead_ton_km=0.0
+    seven_rows=[]
+    for key in sorted(seven):
+        row=seven[key]
+        row.setdefault('misQty',0.0); row.setdefault('leadTonKm',0.0)
+        cumulative_trips+=int(row.get('trips') or 0)
+        cumulative_tonnes+=float(row.get('tonnes') or 0)
+        cumulative_fuel+=float(row.get('fuel') or 0)
+        cumulative_mis+=float(row.get('misQty') or 0)
+        cumulative_lead_ton_km+=float(row.get('leadTonKm') or 0)
+        seven_rows.append({
+            'date':row['date'],'trips':row['trips'],'tonnes':round(row['tonnes'],2),'fuel':round(row['fuel'],1),
+            'misQty':round(row['misQty'],2),'leadTonKm':round(row['leadTonKm'],2),
+            'cumulativeTrips':cumulative_trips,'cumulativeTonnes':round(cumulative_tonnes,2),
+            'cumulativeFuel':round(cumulative_fuel,1),'cumulativeMisQty':round(cumulative_mis,2),
+            'cumulativeLeadTonKm':round(cumulative_lead_ton_km,2)
+        })
+
+    month_rows=[]; month_cumulative=0.0
+    for offset in range((end_day-month_start).days+1):
+        md=month_start+timedelta(days=offset); daily=float(month_days.get(str(md),0.0))
+        month_cumulative+=daily
+        month_rows.append({'date':str(md),'tonnes':round(daily,2),'cumulativeTonnes':round(month_cumulative,2)})
 
     # Shift Production report quantities: calculated from submitted MIS + submitted Plant/Shifting rows.
     prod_periods=set()
@@ -1041,6 +1117,7 @@ def dashboard_desk(db, user, p):
         f=_tiom_shift_ftd(db,pd,ps,False)
         shift_excavation+=f.get('TOTAL_EXCAVATION',Decimal('0')); shift_processed+=f.get('TOTAL_PRODUCTION',Decimal('0'))
 
+    exceptions.append({'label':'MIS rows missing lead','value':lead_missing_trips,'severity':'warn' if lead_missing_trips else 'ok'})
     crusher_out=[]
     for r in sorted(crusher_rows.values(),key=lambda x:x['tonnes'],reverse=True):
         crusher_out.append(dict(r,tonnes=round(r['tonnes'],2),avgFeed=round(r['tonnes']/r['trips'],2) if r['trips'] else 0,utilization=None))
@@ -1066,6 +1143,9 @@ def dashboard_desk(db, user, p):
             'deployed':deployed,'loading':open_loading,'inTransit':in_transit,
             'misReports':len(mis_reports),'misDrafts':len(mis_drafts),'misTrips':mis_trip_count,
             'misOperationalQty':round(float(mis_total_qty),2),'misWbLinkedTrips':mis_wb_linked,'misFactorTrips':mis_factor_trips,
+            'leadResolvedTrips':lead_resolved_trips,'leadMissingTrips':lead_missing_trips,
+            'leadWithWbTrips':lead_with_wb,'leadWithoutWbTrips':lead_without_wb,
+            'avgLeadKm':round(float(weighted_avg_lead),3),'leadTonKm':round(float(lead_ton_km),2),
             'misObTrips':mis_ob_trips,'misObQty':round(float(mis_ob_qty),2),'misRomTrips':mis_rom_trips,'misRomQty':round(float(mis_rom_qty),2),
             'shiftExcavationMt':round(float(shift_excavation),2),'shiftProcessedMt':round(float(shift_processed),2),
         },
@@ -1074,8 +1154,9 @@ def dashboard_desk(db, user, p):
         'misMaterials':_mis_rows(mis_materials)[:30],'misSources':_mis_rows(mis_sources)[:30],
         'misDestinations':_mis_rows(mis_destinations)[:30],
         'misVehicles':_mis_rows(mis_vehicles,'vehicle')[:40],'misMachines':_mis_rows(mis_machines,'machine')[:40],
+        'leadRoutes':lead_route_rows[:50],
         'crusher':crusher_out[:30],'screens':screen_out[:30],'loaders':loader_rows[:20],'excavators':excavator_rows[:20],
-        'vehicles':vehicle_rows[:30],'fuelByEquipment':fuel_rows[:30],'shiftComparison':shift_comp_rows,'sevenDay':seven_rows,'monthly':monthly,
+        'vehicles':vehicle_rows[:30],'fuelByEquipment':fuel_rows[:30],'shiftComparison':shift_comp_rows,'sevenDay':seven_rows,'monthTrend':month_rows,'monthly':monthly,
         'equipmentStatus':[{'label':k,'value':v} for k,v in status_counts.items()],
         'heatmapMaterials':matrix_materials,'heatmap':heatmap[:30],'materialFlow':material_flow,
         'topPerformers':performer_pool,'bottomPerformers':bottom_performers,'exceptions':exceptions,
@@ -1090,6 +1171,7 @@ def dashboard_desk(db, user, p):
         'notes':[
             'WB tonnes/trips use only the latest CONFIRMED batch for each date/shift and every VALID WB row remains production truth.',
             'MIS Manual Entry panels use SUBMITTED driver reports only. Draft reports are shown as pending counts and are excluded from production until Submit Shift Report is used.',
+            'Lead KM is resolved only when Source + Bench RL + Destination + WB route match the approved lead master. Missing or unconfigured routes are flagged and excluded from Ton-km.',
             'MIS operational MT is displayed separately from authoritative WB tonnes. WB-linked MIS rows are evidence only and are never added again to WB production totals; unlinked rows use the approved trip factor.',
             'Loader/excavator tonnes and machine-material heatmap use exact MATCHED / MANUAL_MATCH field↔WB records only.',
             'Running/idle and utilization are activity proxies from the latest attendance condition plus recorded production activity; auxiliary machine work is not treated as proven idle.',
