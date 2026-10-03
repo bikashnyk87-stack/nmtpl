@@ -1872,19 +1872,26 @@ async def wb_upload(request: Request, operatingDate: str = Form(...), shift: str
 
         key=f'{batch.batch_id}:{move}:{rno}'
         status='REVIEW' if issues else 'VALID'
-        db.add(WbMovement(
+        source_code_raw=str(row_value(row,idx,'source_code') or '').strip()
+        source_name_raw=str(row_value(row,idx,'source_name') or '').strip()
+        dest_code_raw=str(row_value(row,idx,'dest_code') or '').strip()
+        dest_name_raw=str(row_value(row,idx,'dest_name') or '').strip()
+        movement=WbMovement(
             movement_key=key,batch_id=batch.batch_id,operating_date=day,shift=sh,movement_no=move,vehicle_raw=vehicle_raw,
             vehicle_id=vehicle_map.get(norm_vehicle(vehicle_raw)),
             material_code=str(row_value(row,idx,'matcode') or '').strip() or None,
             material_name=str(row_value(row,idx,'matname') or '').strip() or None,
-            source_raw=source or None,destination_raw=dest or None,
+            source_raw=source_code_raw or source_name_raw or None,destination_raw=dest_code_raw or dest_name_raw or None,
             tare_kg=tare,gross_kg=gross,net_kg=net or Decimal('0'),
             weigh_at=weigh_at or datetime.combine(day,definition.start_time,TZ),row_status=status,
             issue='; '.join(issues) or None
-        ))
+        )
+        db.add(movement); new_wb_rows.append(movement)
         if status=='VALID': valid+=1
         else: review+=1
     batch.valid_rows=valid;batch.review_rows=review
+    db.flush()
+    canonicalize_wb_rows(db,new_wb_rows)
     audit(db,user,'WB_PREVIEW','wb_import_batch',batch.batch_id,{
         'file':batch.file_name,'sheet':ws.title,'valid':valid,'review':review,
         'headerMappings':header_diag.get('matched',{}),
