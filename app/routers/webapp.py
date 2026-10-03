@@ -35,11 +35,12 @@ from app.services.wb_mapping import (
 )
 from app.services.attendance_automation import auto_close_shift
 from app.services.tiom_erp import authoritative_wb as tiom_authoritative_wb, vehicle_matches as tiom_wb_vehicle_matches, movement_payload as tiom_wb_payload, wb_report_contributions as tiom_wb_report_contributions
+from app.services.tiom_location_erp import canonicalize_wb_rows, location_options
 from app.site_models import (
     TiomSourceDeployment, TiomMisReport, TiomMisTripRow, TiomMisTripDetail, TiomTripFactor,
     TiomHsdReceiptDetail, TiomHsdIssueDetail, SiteAssetMeter,
     TiomShiftProductionReport, TiomShiftProductionMovement, TiomShiftReportBaseline, TiomMisReconciliation,
-    TiomLeadDistance, TiomMisTripLead
+    TiomLeadDistance, TiomMisTripLead, TiomLocationRole, TiomWbCanonical
 )
 
 router = APIRouter(prefix='/api/web', tags=['webapp'])
@@ -581,23 +582,29 @@ def dashboard_desk(db, user, p):
     hsd = scoped_range(HsdIssue, start_day, end_day)
     active_batch, wb_all = authoritative_wb(start_day, end_day)
 
+    wb_canonical_all = canonicalize_wb_rows(db, wb_all)
+    source_options = location_options(db, 'SOURCE')
+    destination_options = location_options(db, 'DESTINATION')
     available_materials = sorted({material_label(w) for w in wb_all})
-    available_sources = sorted({(w.source_raw or 'Unknown').strip() for w in wb_all})
-    available_destinations = sorted({(w.destination_raw or 'Unknown').strip() for w in wb_all})
+    available_sources = source_options
+    available_destinations = destination_options
     available_vehicles = sorted({(w.vehicle_id or w.vehicle_raw or 'Unknown').strip() for w in wb_all})
+    source_ids = {x['id'] for x in source_options}
+    destination_ids = {x['id'] for x in destination_options}
     material_filter = str(p.get('materialFilter') or '').strip()
     source_filter = str(p.get('sourceFilter') or '').strip()
     destination_filter = str(p.get('destinationFilter') or '').strip()
     vehicle_filter = str(p.get('vehicleFilter') or '').strip()
     if material_filter and material_filter not in available_materials: material_filter = ''
-    if source_filter and source_filter not in available_sources: source_filter = ''
-    if destination_filter and destination_filter not in available_destinations: destination_filter = ''
+    if source_filter and source_filter not in source_ids: source_filter = ''
+    if destination_filter and destination_filter not in destination_ids: destination_filter = ''
     if vehicle_filter and vehicle_filter not in available_vehicles: vehicle_filter = ''
     wb = [w for w in wb_all if
           (not material_filter or material_label(w) == material_filter) and
-          (not source_filter or (w.source_raw or 'Unknown').strip() == source_filter) and
-          (not destination_filter or (w.destination_raw or 'Unknown').strip() == destination_filter) and
+          (not source_filter or (wb_canonical_all.get(w.movement_key) and wb_canonical_all[w.movement_key].source_location_id == source_filter)) and
+          (not destination_filter or (wb_canonical_all.get(w.movement_key) and wb_canonical_all[w.movement_key].destination_location_id == destination_filter)) and
           (not vehicle_filter or (w.vehicle_id or w.vehicle_raw or 'Unknown').strip() == vehicle_filter)]
+    wb_canonical = {w.movement_key: wb_canonical_all.get(w.movement_key) for w in wb}
     if vehicle_filter:
         trips = [t for t in trips if (t.vehicle_id or '').strip() == vehicle_filter]
         hsd = [x for x in hsd if (x.machine_id or '').strip() == vehicle_filter]
@@ -664,9 +671,12 @@ def dashboard_desk(db, user, p):
         if stamp:
             hourly[stamp.hour]['trips'] += 1; hourly[stamp.hour]['tonnes'] += t
         add_metric(materials, label, t)
-        src = (w.source_raw or 'Unknown').strip(); dst = (w.destination_raw or 'Unknown').strip()
+        canon=wb_canonical.get(w.movement_key)
+        src_id=canon.source_location_id if canon else None; dst_id=canon.destination_location_id if canon else None
+        src_obj=location_map.get(src_id) if src_id else None; dst_obj=location_map.get(dst_id) if dst_id else None
+        src=src_obj.location_name if src_obj else 'UNMAPPED'; dst=dst_obj.location_name if dst_obj else 'UNMAPPED'
         add_metric(sources, src, t); add_metric(destinations, dst, t)
-        route_key = f'{src} → {dst}'; rr = add_metric(routes, route_key, t); rr['source']=src; rr['destination']=dst; rr.setdefault('cycleSamples',[])
+        route_key = f'{src_id or "UNMAPPED"} → {dst_id or "UNMAPPED"}'; rr = add_metric(routes, route_key, t); rr['source']=src; rr['destination']=dst; rr.setdefault('cycleSamples',[])
         vk = (w.vehicle_id or w.vehicle_raw or 'Unknown').strip(); vr = add_metric(vehicles, vk, t); vr['vehicle']=vk
         u = label.upper()
         if 'WASTE' in u or 'OVERBURDEN' in u or re.search(r'(^|[^A-Z])OB([^A-Z]|$)',u): material_buckets['WASTE'] += t
@@ -696,7 +706,8 @@ def dashboard_desk(db, user, p):
 
     # Route cycle time from exact WB↔field matches.
     for t,w in exact_pairs:
-        rk=f'{(w.source_raw or "Unknown").strip()} → {(w.destination_raw or "Unknown").strip()}'
+        canon=wb_canonical.get(w.movement_key)
+        rk=f'{canon.source_location_id if canon and canon.source_location_id else "UNMAPPED"} → {canon.destination_location_id if canon and canon.destination_location_id else "UNMAPPED"}'
         cycle=duration_minutes(t.loading_start_at,t.unload_at)
         if rk in routes and cycle is not None: routes[rk]['cycleSamples'].append(cycle)
 
@@ -1117,6 +1128,10 @@ def dashboard_desk(db, user, p):
         f=_tiom_shift_ftd(db,pd,ps,False)
         shift_excavation+=f.get('TOTAL_EXCAVATION',Decimal('0')); shift_processed+=f.get('TOTAL_PRODUCTION',Decimal('0'))
 
+    wb_source_unmapped=sum(1 for x in wb_canonical.values() if x and not x.source_location_id)
+    wb_destination_unmapped=sum(1 for x in wb_canonical.values() if x and not x.destination_location_id)
+    exceptions.append({'label':'WB source unmapped to Location Master','value':wb_source_unmapped,'severity':'warn' if wb_source_unmapped else 'ok'})
+    exceptions.append({'label':'WB destination unmapped to Location Master','value':wb_destination_unmapped,'severity':'warn' if wb_destination_unmapped else 'ok'})
     exceptions.append({'label':'MIS rows missing lead','value':lead_missing_trips,'severity':'warn' if lead_missing_trips else 'ok'})
     crusher_out=[]
     for r in sorted(crusher_rows.values(),key=lambda x:x['tonnes'],reverse=True):
@@ -2565,6 +2580,8 @@ def tiom_mis_desk(db,user,p):
     equipment=list(db.scalars(select(Equipment).where(Equipment.active).order_by(Equipment.machine_id)))
     persons=list(db.scalars(select(Person).where(Person.active).order_by(Person.name)))
     locations=list(db.scalars(select(Location).where(Location.active).order_by(Location.location_name)))
+    source_locations=location_options(db,'SOURCE')
+    destination_locations=location_options(db,'DESTINATION')
     products=list(db.scalars(select(Product).where(Product.active).order_by(Product.name)))
     activities=list(db.scalars(select(ActivityMaster).where(ActivityMaster.active).order_by(ActivityMaster.activity)))
     lead_rules=list(db.scalars(select(TiomLeadDistance).where(TiomLeadDistance.active).order_by(
@@ -2584,6 +2601,8 @@ def tiom_mis_desk(db,user,p):
         'leadRules':[{'id':x.lead_id,'sourceLocationId':x.source_location_id,'benchRl':x.bench_rl_m,'destinationLocationId':x.destination_location_id,'routeMode':x.route_mode,'leadKm':float(x.lead_km),'materialScope':x.material_scope or ''} for x in lead_rules],
         'operators':[{'id':x.employee_id,'label':f'{x.name} · {x.employee_id} · {x.role}'} for x in persons],
         'locations':[{'id':x.location_id,'label':f'{x.location_name} · {x.location_id}'} for x in locations],
+        'sourceLocations':[{'id':x['id'],'label':f"{x['label']} · {x['id']}"} for x in source_locations],
+        'destinationLocations':[{'id':x['id'],'label':f"{x['label']} · {x['id']}"} for x in destination_locations],
         'products':[{'id':x.product_id,'label':f'{x.name} · {x.product_id}'} for x in products],
         'factors':[{'id':x.factor_id,'materialCode':x.material_code,'factor':float(x.factor_mt_per_trip),'effectiveFrom':str(x.effective_from),'effectiveTo':str(x.effective_to) if x.effective_to else '','active':x.active,'notes':x.notes or ''} for x in factors],
         'deployments':_tiom_source_deployments(db,day,sh),

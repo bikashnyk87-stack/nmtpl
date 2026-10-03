@@ -755,6 +755,33 @@ class TiomMisTripDetail(Base):
     entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class TiomLocationRole(Base):
+    """ERP role classification for one canonical Location master record."""
+    __tablename__ = "tiom_location_role"
+
+    role_id: Mapped[str] = mapped_column(String(180), primary_key=True)
+    location_id: Mapped[str] = mapped_column(ForeignKey("locations.location_id"), index=True)
+    role: Mapped[str] = mapped_column(String(20), index=True)  # SOURCE / DESTINATION
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    entered_by: Mapped[str] = mapped_column(String(60), default="SYSTEM")
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint("location_id", "role", name="uq_tiom_location_role"),
+    )
+
+
+class TiomWbCanonical(Base):
+    """1:1 ERP canonical mapping for legacy/raw WB movement fields."""
+    __tablename__ = "tiom_wb_canonical"
+
+    movement_key: Mapped[str] = mapped_column(ForeignKey("wb_movement.movement_key"), primary_key=True)
+    source_location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.location_id"), index=True)
+    destination_location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.location_id"), index=True)
+    material_id: Mapped[str | None] = mapped_column(ForeignKey("products.product_id"), index=True)
+    mapping_status: Mapped[str] = mapped_column(String(40), default="UNMAPPED", index=True)
+    normalized_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+
 class TiomLeadDistance(Base):
     """Approved TIOM haul lead master by source area, bench RL, destination and WB path."""
     __tablename__ = "tiom_lead_distance"
@@ -871,6 +898,8 @@ MULTISITE_TABLES = [
     TiomMisTripRow,
     TiomTripFactor,
     TiomMisTripDetail,
+    TiomLocationRole,
+    TiomWbCanonical,
     TiomLeadDistance,
     TiomMisTripLead,
     TiomHsdReceiptDetail,

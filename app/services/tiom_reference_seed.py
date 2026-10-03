@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.models import ActivityMaster, Equipment, Location, LocationAlias
 from app.site_models import TiomLeadDistance
+from app.services.tiom_location_erp import upsert_location_role
 
 log = logging.getLogger("nmtpl.tiom_reference")
 
@@ -29,7 +30,7 @@ def seed_tiom_temp_reference_data(db: Session) -> dict:
 
     resolved: dict[str, str] = {}
 
-    def ensure_location(item: dict) -> str:
+    def ensure_location(item: dict, role: str) -> str:
         preferred = item["id"]
         obj = by_id.get(preferred) or by_norm.get(_norm(item["name"]))
         if not obj:
@@ -51,14 +52,18 @@ def seed_tiom_temp_reference_data(db: Session) -> dict:
         for alias in item.get("aliases") or []:
             row = db.get(LocationAlias, alias)
             if not row:
-                db.add(LocationAlias(alias=alias, location_id=obj.location_id, direction="ANY", active=True))
+                db.add(LocationAlias(alias=alias, location_id=obj.location_id, direction=role, active=True))
             else:
                 row.location_id = obj.location_id
+                row.direction = role if row.direction not in {"ANY", role} else row.direction
                 row.active = True
+        upsert_location_role(db, obj.location_id, role, "TEMP_SEED")
         return obj.location_id
 
-    for item in REFERENCE["sources"] + REFERENCE["destinations"]:
-        ensure_location(item)
+    for item in REFERENCE["sources"]:
+        ensure_location(item, "SOURCE")
+    for item in REFERENCE["destinations"]:
+        ensure_location(item, "DESTINATION")
 
     for item in REFERENCE["equipment"]:
         obj = db.get(Equipment, item["id"])
