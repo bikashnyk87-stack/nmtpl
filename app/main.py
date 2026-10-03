@@ -59,12 +59,16 @@ async def lifespan(app):
         db.commit()
 
     attendance_task = asyncio.create_task(automation_loop(), name="attendance-auto-close")
+    cloud_automation_task = asyncio.create_task(automation.automation_loop(), name="cloud-integrations")
     try:
         yield
     finally:
         attendance_task.cancel()
+        cloud_automation_task.cancel()
         with suppress(asyncio.CancelledError):
             await attendance_task
+        with suppress(asyncio.CancelledError):
+            await cloud_automation_task
 
 
 app = FastAPI(title="NMTPL Central Operations Platform", version="1.0.0-tiom2.1.0-field-hardening", lifespan=lifespan)

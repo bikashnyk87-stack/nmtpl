@@ -1,15 +1,16 @@
 from __future__ import annotations
 
+import asyncio
 import hmac
 import json
 import logging
 import os
+import time
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, Header, HTTPException
-from sqlalchemy.orm import Session
+from fastapi import APIRouter, Header, HTTPException
 
-from app.db import get_db
+from app.db import SessionLocal
 from app.services.volvo_client import VolvoClient, VolvoError, credential
 from app.services.volvo_store import collect as collect_volvo
 
@@ -71,48 +72,78 @@ def _gmail_config(worker):
     return cfg
 
 
+def gmail_once():
+    _prepare_gmail_token()
+    from scripts import wb_gmail_worker as worker
+
+    cfg = _gmail_config(worker)
+    if not cfg.get("enabled"):
+        worker.write_status(state="DISABLED", message="WB_GMAIL_ENABLED is false.")
+        return {"ok": True, "state": "DISABLED", "messages_seen": 0, "counts": {}}
+    if not cfg.get("allowed_senders"):
+        raise RuntimeError("No WB Gmail approved sender is configured.")
+
+    service = worker.gmail_service()
+    label_names = [
+        cfg["processed_label"],
+        cfg["duplicate_label"],
+        cfg["error_label"],
+        cfg["review_required_label"],
+        cfg["review_rows_label"],
+    ]
+    labels = worker.ensure_labels(service, label_names)
+    results = worker.poll_once(service, cfg, labels)
+    counts = {}
+    for item in results:
+        key = item.get("status", "UNKNOWN")
+        counts[key] = counts.get(key, 0) + 1
+
+    worker.write_status(
+        state="RUNNING",
+        last_poll=worker.datetime.now(worker.timezone.utc).isoformat(),
+        messages_seen=len(results),
+        counts=counts,
+    )
+    logger.info("WB Gmail cloud poll complete messages=%s counts=%s", len(results), counts)
+    return {"ok": True, "state": "RUNNING", "messages_seen": len(results), "counts": counts}
+
+
+def _volvo_credentials() -> tuple[str, str]:
+    username = (
+        credential("VOLVO_API_USERNAME")
+        or credential("VOLVO_USERNAME")
+        or credential("VOLVO_USER")
+    )
+    password = (
+        credential("VOLVO_API_PASSWORD")
+        or credential("VOLVO_PASSWORD")
+        or credential("VOLVO_PASS")
+    )
+    return username, password
+
+
+def volvo_once():
+    username, password = _volvo_credentials()
+    if not username or not password:
+        raise RuntimeError("Volvo API username/password are not configured on the Render web service.")
+
+    with SessionLocal() as db:
+        try:
+            counts = collect_volvo(db, VolvoClient(username, password))
+            logger.info("Volvo cloud sync complete counts=%s", counts)
+            return {"ok": True, "counts": counts}
+        except Exception:
+            db.rollback()
+            raise
+
+
 @router.post("/gmail")
 def run_gmail(
     x_automation_key: str | None = Header(default=None, alias="X-Automation-Key"),
 ):
     _require_automation_key(x_automation_key)
     try:
-        _prepare_gmail_token()
-        from scripts import wb_gmail_worker as worker
-
-        cfg = _gmail_config(worker)
-        if not cfg.get("enabled"):
-            worker.write_status(state="DISABLED", message="WB_GMAIL_ENABLED is false.")
-            return {"ok": True, "state": "DISABLED"}
-
-        if not cfg.get("allowed_senders"):
-            raise RuntimeError("No WB Gmail approved sender is configured.")
-
-        service = worker.gmail_service()
-        label_names = [
-            cfg["processed_label"],
-            cfg["duplicate_label"],
-            cfg["error_label"],
-            cfg["review_required_label"],
-            cfg["review_rows_label"],
-        ]
-        labels = worker.ensure_labels(service, label_names)
-        results = worker.poll_once(service, cfg, labels)
-        counts = {}
-        for item in results:
-            key = item.get("status", "UNKNOWN")
-            counts[key] = counts.get(key, 0) + 1
-
-        worker.write_status(
-            state="RUNNING",
-            last_poll=worker.datetime.now(worker.timezone.utc).isoformat(),
-            messages_seen=len(results),
-            counts=counts,
-        )
-        logger.info("WB Gmail cloud poll complete messages=%s counts=%s", len(results), counts)
-        return {"ok": True, "state": "RUNNING", "messages_seen": len(results), "counts": counts}
-    except HTTPException:
-        raise
+        return gmail_once()
     except Exception as exc:
         logger.exception("WB Gmail cloud poll failed")
         try:
@@ -126,25 +157,64 @@ def run_gmail(
 @router.post("/volvo")
 def run_volvo(
     x_automation_key: str | None = Header(default=None, alias="X-Automation-Key"),
-    db: Session = Depends(get_db),
 ):
     _require_automation_key(x_automation_key)
-    username = credential("VOLVO_API_USERNAME")
-    password = credential("VOLVO_API_PASSWORD")
-    if not username or not password:
-        raise HTTPException(
-            503,
-            "VOLVO_API_USERNAME / VOLVO_API_PASSWORD are not configured on the Render web service.",
-        )
     try:
-        counts = collect_volvo(db, VolvoClient(username, password))
-        logger.info("Volvo cloud sync complete counts=%s", counts)
-        return {"ok": True, "counts": counts}
+        return volvo_once()
     except VolvoError as exc:
-        db.rollback()
         logger.warning("Volvo cloud sync failed: %s", exc)
         raise HTTPException(503, f"Volvo automation failed: {exc}") from exc
     except Exception as exc:
-        db.rollback()
         logger.exception("Volvo cloud sync failed")
-        raise HTTPException(503, "Volvo automation failed unexpectedly.") from exc
+        raise HTTPException(503, f"Volvo automation failed: {exc}") from exc
+
+
+async def automation_loop():
+    """Zero-cost Render test loop.
+
+    Runs inside the single web-service instance. It restarts automatically with
+    the Render service. On Render free tier it pauses when the web service sleeps.
+    """
+    gmail_interval = max(60, int(os.getenv("WB_GMAIL_POLL_SECONDS", "180")))
+    volvo_interval = max(60, int(os.getenv("VOLVO_POLL_SECONDS", "300")))
+    gmail_due = 0.0
+    volvo_due = 0.0
+    gmail_missing_logged = False
+    volvo_missing_logged = False
+
+    await asyncio.sleep(5)
+    logger.info(
+        "Cloud automation loop started gmail_interval=%ss volvo_interval=%ss",
+        gmail_interval,
+        volvo_interval,
+    )
+
+    while True:
+        now = time.monotonic()
+
+        if now >= gmail_due:
+            gmail_due = now + gmail_interval
+            if os.getenv("GMAIL_TOKEN_JSON", "").strip():
+                try:
+                    await asyncio.to_thread(gmail_once)
+                    gmail_missing_logged = False
+                except Exception:
+                    logger.exception("Automatic WB Gmail poll failed")
+            elif not gmail_missing_logged:
+                logger.warning("WB Gmail auto-poll waiting for GMAIL_TOKEN_JSON")
+                gmail_missing_logged = True
+
+        if now >= volvo_due:
+            volvo_due = now + volvo_interval
+            username, password = _volvo_credentials()
+            if username and password:
+                try:
+                    await asyncio.to_thread(volvo_once)
+                    volvo_missing_logged = False
+                except Exception:
+                    logger.exception("Automatic Volvo sync failed")
+            elif not volvo_missing_logged:
+                logger.warning("Volvo auto-sync waiting for Render Volvo API credentials")
+                volvo_missing_logged = True
+
+        await asyncio.sleep(15)
