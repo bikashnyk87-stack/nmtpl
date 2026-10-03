@@ -64,6 +64,28 @@ async def lifespan(app):
                 u.modules = ','.join(sorted(MODULES))
                 u.shifts = 'ALL'
         db.commit()
+        if os.getenv("TIOM_TEMP_SELFTEST", "").strip().lower() in {"1","true","yes","on"}:
+            admin_user=next((x for x in users if x.active and x.admin),None)
+            if not admin_user:
+                raise RuntimeError("TIOM temp self-test requires an active admin user.")
+            mis_test=webapp.tiom_mis_desk(db,admin_user,{})
+            dash_test=webapp.dashboard_desk(db,admin_user,{"mode":"TODAY","shift":"ALL"})
+            expected_activities={"STACKING","DRILL FACE","TWIN HOPPER CLEANING","QDS","DISPATCH"}
+            activity_ids={x.get("id") for x in mis_test.get("activities",[])}
+            machine_ids={x.get("id") for x in mis_test.get("machines",[])}
+            required_machines={"DOZER D8-1","DOZER D8-2","DOZER D6-3","DOZER D6-4","GRADER-01","GRADER-02","01.HITACHI-210 (DRILL)","02.HITACHI-210 (DRILL)-2"}
+            kpis=dash_test.get("kpis",{})
+            checks={
+                "activitiesVisible":expected_activities.issubset(activity_ids),
+                "machinesVisible":required_machines.issubset(machine_ids),
+                "leadRulesVisible":len(mis_test.get("leadRules",[])),
+                "leadDashboardKeys":all(x in kpis for x in ("leadResolvedTrips","leadMissingTrips","leadWithWbTrips","leadWithoutWbTrips","avgLeadKm","leadTonKm")),
+                "sevenDayCumulative":all("cumulativeTonnes" in x and "cumulativeLeadTonKm" in x for x in dash_test.get("sevenDay",[])),
+                "monthCumulative":all("cumulativeTonnes" in x for x in dash_test.get("monthTrend",[])),
+            }
+            if not all(v is True or (k=="leadRulesVisible" and int(v)>=276) for k,v in checks.items()):
+                raise RuntimeError("TIOM temp self-test failed: "+json.dumps(checks,sort_keys=True))
+            print("TIOM_TEMP_SELFTEST_OK="+json.dumps(checks,sort_keys=True),flush=True)
 
     attendance_task = asyncio.create_task(automation_loop(), name="attendance-auto-close")
     cloud_automation_task = asyncio.create_task(automation.automation_loop(), name="cloud-integrations")
