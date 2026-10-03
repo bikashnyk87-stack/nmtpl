@@ -78,6 +78,10 @@ async def lifespan(app):
             machine_ids={x.get("id") for x in mis_test.get("machines",[])}
             required_machines={"DOZER D8-1","DOZER D8-2","DOZER D6-3","DOZER D6-4","GRADER-01","GRADER-02","01.HITACHI-210 (DRILL)","02.HITACHI-210 (DRILL)-2"}
             kpis=dash_test.get("kpis",{})
+            production_source_ids={x.get("id") for x in mis_test.get("sourceLocations",[])}
+            production_destination_ids={x.get("id") for x in mis_test.get("destinationLocations",[])}
+            dashboard_source_ids={x.get("id") for x in dash_test.get("availableSources",[])}
+            dashboard_destination_ids={x.get("id") for x in dash_test.get("availableDestinations",[])}
             checks={
                 "activitiesVisible":expected_activities.issubset(activity_ids),
                 "machinesVisible":required_machines.issubset(machine_ids),
@@ -85,6 +89,9 @@ async def lifespan(app):
                 "leadDashboardKeys":all(x in kpis for x in ("leadResolvedTrips","leadMissingTrips","leadWithWbTrips","leadWithoutWbTrips","avgLeadKm","leadTonKm")),
                 "sevenDayCumulative":all("cumulativeTonnes" in x and "cumulativeLeadTonKm" in x for x in dash_test.get("sevenDay",[])),
                 "monthCumulative":all("cumulativeTonnes" in x for x in dash_test.get("monthTrend",[])),
+                "sourceMasterConsistent":production_source_ids==dashboard_source_ids and len(production_source_ids)>=5,
+                "destinationMasterConsistent":production_destination_ids==dashboard_destination_ids and len(production_destination_ids)>=29,
+                "dashboardUsesCanonicalFilters":all(isinstance(x,dict) and x.get("id") and x.get("label") for x in dash_test.get("availableSources",[])+dash_test.get("availableDestinations",[])),
             }
             if not all(v is True or (k=="leadRulesVisible" and int(v)>=276) for k,v in checks.items()):
                 raise RuntimeError("TIOM temp self-test failed: "+json.dumps(checks,sort_keys=True))
