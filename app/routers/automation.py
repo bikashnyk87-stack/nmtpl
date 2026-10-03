@@ -17,6 +17,7 @@ from app.services.volvo_store import collect as collect_volvo
 router = APIRouter(prefix="/api/automation", tags=["automation"])
 logger = logging.getLogger("nmtpl.automation")
 ROOT = Path(__file__).resolve().parents[2]
+RENDER_SECRETS = Path("/etc/secrets")
 
 
 def _require_automation_key(x_automation_key: str | None) -> None:
@@ -32,16 +33,54 @@ def _split_env(name: str) -> list[str] | None:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
-def _prepare_gmail_token() -> Path:
-    raw = os.getenv("GMAIL_TOKEN_JSON", "").strip()
+def _secret_file_text(*names: str) -> str:
+    for name in names:
+        path = RENDER_SECRETS / name
+        try:
+            if path.is_file():
+                return path.read_text(encoding="utf-8-sig").strip()
+        except OSError:
+            continue
+    return ""
+
+
+def _secret_dotenv_values() -> dict[str, str]:
+    raw = _secret_file_text(".env", "env", "nmtpl.env")
+    out: dict[str, str] = {}
     if not raw:
-        raise RuntimeError("GMAIL_TOKEN_JSON is not configured on the Render web service.")
+        return out
+    for line in raw.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key, value = key.strip(), value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        if key:
+            out[key] = value
+    return out
+
+
+def _gmail_token_raw() -> str:
+    return (
+        os.getenv("GMAIL_TOKEN_JSON", "").strip()
+        or _secret_file_text("gmail_token.json", "GMAIL_TOKEN_JSON")
+    )
+
+
+def _prepare_gmail_token() -> Path:
+    raw = _gmail_token_raw()
+    if not raw:
+        raise RuntimeError(
+            "Gmail token is not configured. Set GMAIL_TOKEN_JSON or add Render Secret File gmail_token.json."
+        )
     try:
         payload = json.loads(raw)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("GMAIL_TOKEN_JSON is not valid JSON.") from exc
+        raise RuntimeError("Gmail token JSON is invalid.") from exc
     if not isinstance(payload, dict) or not payload.get("refresh_token"):
-        raise RuntimeError("GMAIL_TOKEN_JSON does not contain a refresh token.")
+        raise RuntimeError("Gmail token JSON does not contain a refresh token.")
 
     path = ROOT / "config" / "gmail_token.json"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -109,23 +148,38 @@ def gmail_once():
 
 
 def _volvo_credentials() -> tuple[str, str]:
+    secret_env = _secret_dotenv_values()
     username = (
         credential("VOLVO_API_USERNAME")
         or credential("VOLVO_USERNAME")
         or credential("VOLVO_USER")
+        or secret_env.get("VOLVO_API_USERNAME", "")
+        or secret_env.get("VOLVO_USERNAME", "")
+        or secret_env.get("VOLVO_USER", "")
     )
     password = (
         credential("VOLVO_API_PASSWORD")
         or credential("VOLVO_PASSWORD")
         or credential("VOLVO_PASS")
+        or secret_env.get("VOLVO_API_PASSWORD", "")
+        or secret_env.get("VOLVO_PASSWORD", "")
+        or secret_env.get("VOLVO_PASS", "")
     )
+    base_url = (
+        os.getenv("VOLVO_API_BASE_URL", "").strip()
+        or secret_env.get("VOLVO_API_BASE_URL", "").strip()
+    )
+    if base_url and not os.getenv("VOLVO_API_BASE_URL"):
+        os.environ["VOLVO_API_BASE_URL"] = base_url
     return username, password
 
 
 def volvo_once():
     username, password = _volvo_credentials()
     if not username or not password:
-        raise RuntimeError("Volvo API username/password are not configured on the Render web service.")
+        raise RuntimeError(
+            "Volvo API credentials are not configured. Set Render environment variables or add a Secret File named .env."
+        )
 
     with SessionLocal() as db:
         try:
@@ -194,14 +248,14 @@ async def automation_loop():
 
         if now >= gmail_due:
             gmail_due = now + gmail_interval
-            if os.getenv("GMAIL_TOKEN_JSON", "").strip():
+            if _gmail_token_raw():
                 try:
                     await asyncio.to_thread(gmail_once)
                     gmail_missing_logged = False
                 except Exception:
                     logger.exception("Automatic WB Gmail poll failed")
             elif not gmail_missing_logged:
-                logger.warning("WB Gmail auto-poll waiting for GMAIL_TOKEN_JSON")
+                logger.warning("WB Gmail auto-poll waiting for Gmail token environment variable or Secret File")
                 gmail_missing_logged = True
 
         if now >= volvo_due:
@@ -214,7 +268,7 @@ async def automation_loop():
                 except Exception:
                     logger.exception("Automatic Volvo sync failed")
             elif not volvo_missing_logged:
-                logger.warning("Volvo auto-sync waiting for Render Volvo API credentials")
+                logger.warning("Volvo auto-sync waiting for Render Volvo API credentials or .env Secret File")
                 volvo_missing_logged = True
 
         await asyncio.sleep(15)
