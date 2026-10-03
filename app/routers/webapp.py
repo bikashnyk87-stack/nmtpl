@@ -959,20 +959,67 @@ def dashboard_desk(db, user, p):
                            'avgTime':round(sum(samples)/len(samples),1) if samples else None})
 
     # TIOM MIS operational quantities are reported separately from authoritative WB tonnes.
+    # Submitted manual rows are exposed to the dashboard in their own operational
+    # views. WB-linked rows remain visible here as MIS evidence but are NEVER added
+    # again to authoritative WB production totals.
     mis_stmt=select(TiomMisReport).where(
         TiomMisReport.operating_date>=start_day,TiomMisReport.operating_date<=end_day,TiomMisReport.status=='SUBMITTED'
     )
-    if selected_shift!='ALL': mis_stmt=mis_stmt.where(TiomMisReport.shift==selected_shift)
-    elif allowed_shifts: mis_stmt=mis_stmt.where(TiomMisReport.shift.in_(allowed_shifts))
+    draft_stmt=select(TiomMisReport).where(
+        TiomMisReport.operating_date>=start_day,TiomMisReport.operating_date<=end_day,TiomMisReport.status=='DRAFT'
+    )
+    if selected_shift!='ALL':
+        mis_stmt=mis_stmt.where(TiomMisReport.shift==selected_shift)
+        draft_stmt=draft_stmt.where(TiomMisReport.shift==selected_shift)
+    elif allowed_shifts:
+        mis_stmt=mis_stmt.where(TiomMisReport.shift.in_(allowed_shifts))
+        draft_stmt=draft_stmt.where(TiomMisReport.shift.in_(allowed_shifts))
     mis_reports=list(db.scalars(mis_stmt))
-    mis_ids=[r.report_id for r in mis_reports]
+    mis_drafts=list(db.scalars(draft_stmt))
+    if vehicle_filter:
+        mis_reports=[r for r in mis_reports if r.vehicle_id==vehicle_filter]
+        mis_drafts=[r for r in mis_drafts if r.vehicle_id==vehicle_filter]
+    mis_report_map={r.report_id:r for r in mis_reports}
+    mis_ids=list(mis_report_map)
     mis_rows=list(db.scalars(select(TiomMisTripRow).where(TiomMisTripRow.report_id.in_(mis_ids)))) if mis_ids else []
-    mis_details={x.row_id:x for x in db.scalars(select(TiomMisTripDetail).where(TiomMisTripDetail.row_id.in_([r.row_id for r in mis_rows])))} if mis_rows else {}
+    mis_row_ids=[r.row_id for r in mis_rows]
+    mis_details={x.row_id:x for x in db.scalars(select(TiomMisTripDetail).where(TiomMisTripDetail.row_id.in_(mis_row_ids)))} if mis_row_ids else {}
+    mis_recs={x.row_id:x for x in db.scalars(select(TiomMisReconciliation).where(TiomMisReconciliation.row_id.in_(mis_row_ids)))} if mis_row_ids else {}
+    mis_products={x.product_id:x for x in db.scalars(select(Product))}
     mis_trip_count=len(mis_rows); mis_ob_trips=0; mis_ob_qty=Decimal('0'); mis_rom_trips=0; mis_rom_qty=Decimal('0')
+    mis_total_qty=Decimal('0'); mis_wb_linked=0; mis_factor_trips=0
+    mis_materials={}; mis_sources={}; mis_destinations={}; mis_vehicles={}; mis_machines={}
     for r in mis_rows:
-        d=mis_details.get(r.row_id); txt=str((d.material_id if d else '') or r.material_raw or '').upper(); qty=Decimal(d.calculated_qty_mt or 0) if d else Decimal('0')
+        d=mis_details.get(r.row_id)
+        if not d: continue
+        report=mis_report_map.get(r.report_id)
+        prod=mis_products.get(d.material_id) if d.material_id else None
+        mat=(prod.name if prod else (d.material_id or r.material_raw or 'Unmapped')).strip()
+        src_obj=location_map.get(d.source_location_id) if d.source_location_id else None
+        dst_obj=location_map.get(d.destination_location_id) if d.destination_location_id else None
+        src=(src_obj.location_name if src_obj else (d.source_location_id or r.source_raw or 'Unknown')).strip()
+        dst=(dst_obj.location_name if dst_obj else (d.destination_location_id or r.destination_raw or 'Unknown')).strip()
+        vehicle=(report.vehicle_id if report else 'Unknown') or 'Unknown'
+        machine=d.machine_id or 'Unknown'
+        qty=Decimal(d.calculated_qty_mt or 0)
+        mis_total_qty+=qty
+        add_metric(mis_materials,mat,float(qty))
+        add_metric(mis_sources,src,float(qty))
+        add_metric(mis_destinations,dst,float(qty))
+        add_metric(mis_vehicles,vehicle,float(qty))
+        add_metric(mis_machines,machine,float(qty))
+        rec=mis_recs.get(r.row_id)
+        if rec and rec.wb_movement_key: mis_wb_linked+=1
+        else: mis_factor_trips+=1
+        txt=(' '.join([str(d.material_id or ''),str(prod.name if prod else r.material_raw or '')])).upper()
         if re.search(r'(^|[^A-Z0-9])OB([^A-Z0-9]|$)',txt): mis_ob_trips+=1; mis_ob_qty+=qty
         elif 'ROM' in txt: mis_rom_trips+=1; mis_rom_qty+=qty
+    def _mis_rows(store,key_name='label'):
+        out=[]
+        for x in sorted(store.values(),key=lambda z:(z['tonnes'],z['trips']),reverse=True):
+            out.append({key_name:x['label'],'trips':x['trips'],'tonnes':round(x['tonnes'],2),
+                        'avgPayload':round(x['tonnes']/x['trips'],2) if x['trips'] else 0})
+        return out
 
     # Shift Production report quantities: calculated from submitted MIS + submitted Plant/Shifting rows.
     prod_periods=set()
@@ -1016,11 +1063,16 @@ def dashboard_desk(db, user, p):
             'avgTripsVehicle':round(avg_trips_vehicle,1),'avgTripsLoader':round(avg_trips_loader,1),'avgTripsExcavator':round(avg_trips_exc,1),
             'avgTonnesLoader':round(avg_tonnes_loader,1),'avgTonnesExcavator':round(avg_tonnes_exc,1),'totalRoutes':len(routes),
             'deployed':deployed,'loading':open_loading,'inTransit':in_transit,
-            'misReports':len(mis_reports),'misTrips':mis_trip_count,'misObTrips':mis_ob_trips,'misObQty':round(float(mis_ob_qty),2),'misRomTrips':mis_rom_trips,'misRomQty':round(float(mis_rom_qty),2),
+            'misReports':len(mis_reports),'misDrafts':len(mis_drafts),'misTrips':mis_trip_count,
+            'misOperationalQty':round(float(mis_total_qty),2),'misWbLinkedTrips':mis_wb_linked,'misFactorTrips':mis_factor_trips,
+            'misObTrips':mis_ob_trips,'misObQty':round(float(mis_ob_qty),2),'misRomTrips':mis_rom_trips,'misRomQty':round(float(mis_rom_qty),2),
             'shiftExcavationMt':round(float(shift_excavation),2),'shiftProcessedMt':round(float(shift_processed),2),
         },
         'hourly':[dict(x,tonnes=round(x['tonnes'],2)) for x in hourly.values()],
         'materials':mat_rows,'sources':source_rows[:20],'destinations':dest_rows[:20],'routes':route_rows[:20],
+        'misMaterials':_mis_rows(mis_materials)[:30],'misSources':_mis_rows(mis_sources)[:30],
+        'misDestinations':_mis_rows(mis_destinations)[:30],
+        'misVehicles':_mis_rows(mis_vehicles,'vehicle')[:40],'misMachines':_mis_rows(mis_machines,'machine')[:40],
         'crusher':crusher_out[:30],'screens':screen_out[:30],'loaders':loader_rows[:20],'excavators':excavator_rows[:20],
         'vehicles':vehicle_rows[:30],'fuelByEquipment':fuel_rows[:30],'shiftComparison':shift_comp_rows,'sevenDay':seven_rows,'monthly':monthly,
         'equipmentStatus':[{'label':k,'value':v} for k,v in status_counts.items()],
@@ -1036,7 +1088,8 @@ def dashboard_desk(db, user, p):
         },
         'notes':[
             'WB tonnes/trips use only the latest CONFIRMED batch for each date/shift and every VALID WB row remains production truth.',
-            'MIS Trips / OB Operational MT are shown separately from WB tonnes; they come from submitted driver reports and approved trip factors and are not added to WB production tonnes.',
+            'MIS Manual Entry panels use SUBMITTED driver reports only. Draft reports are shown as pending counts and are excluded from production until Submit Shift Report is used.',
+            'MIS operational MT is displayed separately from authoritative WB tonnes. WB-linked MIS rows are evidence only and are never added again to WB production totals; unlinked rows use the approved trip factor.',
             'Loader/excavator tonnes and machine-material heatmap use exact MATCHED / MANUAL_MATCH field↔WB records only.',
             'Running/idle and utilization are activity proxies from the latest attendance condition plus recorded production activity; auxiliary machine work is not treated as proven idle.',
             'Crusher/screen panels classify WB source/destination labels/codes containing CRUSH, SCREEN or MSP; dedicated crusher/screen process telemetry is not yet stored.'
