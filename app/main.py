@@ -18,7 +18,6 @@ from app.maintenance_models import create_maintenance_tables
 from app.services.site_context import seed_default_sites_and_shifts
 from app.services.cloud_sync import init_sync_source
 from app.services.tiom_reference_seed import seed_tiom_temp_reference_data
-from app.services.tiom_location_erp import backfill_wb_canonical
 
 @asynccontextmanager
 async def lifespan(app):
@@ -37,9 +36,7 @@ async def lifespan(app):
         seed_default_sites_and_shifts(db)
         if os.getenv("TIOM_TEMP_REFERENCE_SEED", "").strip().lower() in {"1","true","yes","on"}:
             seed_counts=seed_tiom_temp_reference_data(db)
-            wb_map_counts=backfill_wb_canonical(db)
             print("TIOM_TEMP_REFERENCE_SEED_OK="+json.dumps(seed_counts,sort_keys=True),flush=True)
-            print("TIOM_ERP_WB_CANONICAL="+json.dumps(wb_map_counts,sort_keys=True),flush=True)
         users = db.query(WebUser).all()
         # Cloud test bootstrap: create the first administrator only when the database
         # is empty and explicit Render environment variables are provided. No
