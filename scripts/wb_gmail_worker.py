@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.services.reconcile import auto_reconcile
 from app.services.time_context import TZ, now_local
+from app.services.wb_mapping import find_wb_sheet, row_value, build_location_resolver, expected_movement_date
 
 CONFIG_PATH = ROOT / "config" / "wb_gmail_config.json"
 TOKEN_PATH = ROOT / "config" / "gmail_token.json"
@@ -324,31 +325,13 @@ def ingest_xlsx(content, filename, cfg, message_id):
         wb = load_workbook(BytesIO(content), data_only=True, read_only=True)
     except Exception as exc:
         raise ValueError("Unable to read XLSX file.") from exc
-    ws = wb.active
-    header_row, headers = find_header(ws)
-
-    idx = {
-        "move": col(headers, "Movement No"),
-        "date": col(headers, "Movement Date"),
-        "shift": col(headers, "Shift Code"),
-        "vehicle": col(headers, "Vehicle Number"),
-        "matcode": col(headers, "Material Number"),
-        "matname": col(headers, "Material Description"),
-        # Prefer stable codes/IDs over inconsistent description/name text.
-        "source": col(headers, "Source Location Id", "Source Location", "Source Location Name"),
-        "dest": col(headers, "Destination Location", "Destination Location Id", "Destination Location Name"),
-        "tare": col(headers, "Tare Weight"),
-        "gross": col(headers, "Gross Weight"),
-        "net": col(headers, "Net Weight"),
-        "time": col(headers, "GW Created Time"),
-    }
-    required = [k for k in ("date", "shift", "vehicle", "time") if idx[k] is None]
-    if required:
-        raise ValueError("Required WB columns missing: " + ", ".join(required))
-
-    operating_date, shift = infer_file_context(ws, header_row, idx)
-
     with SessionLocal() as db:
+        # Use the same DB-backed WB header mapping/sheet detection as the
+        # working manual/base-server WB upload. This supports aliases,
+        # duplicate headers and WB data living on a non-active worksheet.
+        ws, header_row, idx, header_diag = find_wb_sheet(wb, db)
+        operating_date, shift = infer_file_context(ws, header_row, idx)
+
         definition = db.get(ShiftMaster, shift)
         if not definition or not definition.active:
             raise ValueError(f"Shift {shift} is not active in Shift Master.")
@@ -376,6 +359,7 @@ def ingest_xlsx(content, filename, cfg, message_id):
         vehicle_map.update({norm_vehicle(e.vehicle_no): e.machine_id for e in eq if e.vehicle_no})
         for alias in db.scalars(select(VehicleAlias).where(VehicleAlias.active)):
             vehicle_map[norm_vehicle(alias.alias)] = alias.machine_id
+        location_resolver = build_location_resolver(db)
 
         batch = WbImportBatch(
             batch_id=str(uuid4()),
@@ -400,8 +384,7 @@ def ingest_xlsx(content, filename, cfg, message_id):
                 continue
 
             def value(key):
-                i = idx.get(key)
-                return row[i] if i is not None and i < len(row) else None
+                return row_value(row, idx, key)
 
             vehicle_raw = str(value("vehicle") or "").strip()
             if not vehicle_raw:
@@ -413,8 +396,6 @@ def ingest_xlsx(content, filename, cfg, message_id):
             row_day = date_value(value("date"))
             raw_shift = str(value("shift") or "").strip().upper()[:1]
 
-            if row_day != operating_date:
-                issues.append(f"Movement Date {row_day} != file date {operating_date}")
             if raw_shift != shift:
                 issues.append(f"Shift {raw_shift or '?'} != file shift {shift}")
 
@@ -422,19 +403,34 @@ def ingest_xlsx(content, filename, cfg, message_id):
             weigh_at = wb_weigh_at(operating_date, definition, clock)
             if not weigh_at:
                 issues.append("Invalid or out-of-shift GW Created Time")
+            else:
+                expected_day = expected_movement_date(operating_date, clock, definition)
+                if row_day and expected_day and row_day != expected_day:
+                    issues.append(
+                        f"Movement Date {row_day} != expected calendar date {expected_day} "
+                        f"for operating date {operating_date} / Shift {shift}"
+                    )
 
-            tare = decimal_value(value("tare")) or Decimal("0")
-            gross = decimal_value(value("gross")) or Decimal("0")
+            tare = decimal_value(value("tare"))
+            gross = decimal_value(value("gross"))
             net = decimal_value(value("net"))
-            if net is None and gross >= tare:
+            tare = tare if tare is not None else Decimal("0")
+            if gross is None and net is not None:
+                gross = tare + net
+            if net is None and gross is not None and gross >= tare:
                 net = gross - tare
+            gross = gross if gross is not None else Decimal("0")
             if gross <= 0 or net is None or net <= 0 or gross < tare:
                 issues.append("Invalid tare/gross/net weight")
             elif abs((gross - tare) - net) > tolerance:
                 issues.append(f"Gross-Tare differs from Net by more than {tolerance} kg")
 
-            source = str(value("source") or "").strip()
-            dest = str(value("dest") or "").strip()
+            source = location_resolver.resolve(
+                value("source_code"), value("source_name"), "SOURCE"
+            )
+            dest = location_resolver.resolve(
+                value("dest_code"), value("dest_name"), "DESTINATION"
+            )
             if not source:
                 issues.append("Source location missing")
             if not dest:
@@ -491,6 +487,9 @@ def ingest_xlsx(content, filename, cfg, message_id):
             "review": review,
             "review_percent": round(review_pct, 2),
             "unmapped_vehicles": sorted(unmapped_vehicles),
+            "sheet": ws.title,
+            "header_mappings": header_diag.get("matched", {}),
+            "duplicate_headers": header_diag.get("duplicates", {}),
         })
 
         archive = archive_bytes(content, filename, operating_date, shift, digest)
