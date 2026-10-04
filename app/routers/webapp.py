@@ -2401,6 +2401,37 @@ def _tiom_parse_bench_rl(value):
     return int(raw)
 
 
+def _tiom_bench_rl_from_location(db, source_id):
+    """Read Bench RL from the canonical source itself (e.g. 15HA/RL-800).
+
+    Source/Face locations already carry the bench level, so field users should
+    never re-enter the same RL in a second section.
+    """
+    if not source_id:
+        return None
+    loc=db.get(Location,str(source_id))
+    values=[str(source_id)]
+    if loc:
+        values.extend([str(loc.location_id or ''),str(loc.location_name or '')])
+    for value in values:
+        m=re.search(r'(?:^|[/\\\s_.-])RL\s*[-:=]?\s*(-?\d{2,4})(?:\D|$)',value.upper())
+        if m:
+            try:
+                return int(m.group(1))
+            except Exception:
+                pass
+    return None
+
+
+def _tiom_location_display(label, location_id):
+    label=str(label or '').strip(); location_id=str(location_id or '').strip()
+    if not label:
+        return location_id
+    if not location_id or label.upper()==location_id.upper():
+        return label
+    return f'{label} · {location_id}'
+
+
 def _tiom_route_mode(value):
     text_value=str(value or '').strip().upper().replace(' ','_').replace('-','_')
     aliases={'WITHWB':'WITH_WB','WITH_WB':'WITH_WB','WB':'WITH_WB',
@@ -2733,7 +2764,7 @@ def _tiom_source_deployments(db, day, sh):
             'deploymentId':r.deployment_id,
             'sourceLocationId':r.source_location_id,
             'sourceLabel':(f'{loc.location_name} · {loc.location_id}' if loc else r.source_location_id),
-            'benchRl':source_contexts.get(r.source_location_id).bench_rl_m if source_contexts.get(r.source_location_id) else None,
+            'benchRl':_tiom_bench_rl_from_location(db,r.source_location_id) or (source_contexts.get(r.source_location_id).bench_rl_m if source_contexts.get(r.source_location_id) else None),
             'machineId':r.machine_id,
             'machineLabel':(_tiom_asset_label(eq) if eq else r.machine_id),
             'activity':r.activity or 'EXCAVATION',
@@ -3011,11 +3042,11 @@ def tiom_mis_desk(db,user,p):
             'destinationLocationId':x.destination_location_id,'routeMode':x.route_mode,
             'leadKm':float(x.lead_km),'materialScope':x.material_scope or ''
         } for x in lead_rules],
-        'sourceContexts':_tiom_source_context_rows(db,day,sh),
+        'sourceContexts':_tiom_source_context_rows(db,day,sh),  # legacy compatibility only
         'operators':[{'id':x.employee_id,'label':f'{x.name} · {x.employee_id} · {x.role}'} for x in persons],
-        'locations':[{'id':x.location_id,'label':f'{x.location_name} · {x.location_id}','role':x.role or 'UNCLASSIFIED'} for x in locations],
-        'sourceLocations':[{'id':x['id'],'label':f"{x['label']} · {x['id']}"} for x in source_locations],
-        'destinationLocations':[{'id':x['id'],'label':f"{x['label']} · {x['id']}"} for x in destination_locations],
+        'locations':[{'id':x.location_id,'label':_tiom_location_display(x.location_name,x.location_id),'role':x.role or 'UNCLASSIFIED'} for x in locations],
+        'sourceLocations':[{'id':x['id'],'label':_tiom_location_display(x['label'],x['id']),'benchRl':_tiom_bench_rl_from_location(db,x['id'])} for x in source_locations],
+        'destinationLocations':[{'id':x['id'],'label':_tiom_location_display(x['label'],x['id'])} for x in destination_locations],
         'products':[{'id':x.product_id,'label':f'{x.name} · {x.product_id}'} for x in products],
         'factors':[{'id':x.factor_id,'materialCode':x.material_code,'factor':float(x.factor_mt_per_trip),'effectiveFrom':str(x.effective_from),'effectiveTo':str(x.effective_to) if x.effective_to else '','active':x.active,'notes':x.notes or ''} for x in factors],
         'deployments':_tiom_source_deployments(db,day,sh),
@@ -3164,8 +3195,6 @@ def save_tiom_mis_report(db,user,p,submit=False):
     deployments=list(db.scalars(select(TiomSourceDeployment).where(
         TiomSourceDeployment.operating_date==day,TiomSourceDeployment.shift==sh,TiomSourceDeployment.active.is_(True)
     )))
-    if not deployments:
-        raise HTTPException(422,'Save Shift Deployment first. Each source must have its loader/excavator deployment before driver trips are entered.')
     batch,wb_rows=tiom_authoritative_wb(db,day,sh)
     wbmap={w.movement_key:w for w in wb_rows}
     already_linked={r.wb_movement_key:r.row_id for r in db.scalars(select(TiomMisReconciliation).where(TiomMisReconciliation.wb_movement_key.is_not(None)))}
@@ -3188,14 +3217,31 @@ def save_tiom_mis_report(db,user,p,submit=False):
         if not all([material_id,source_id,dest_id]): raise HTTPException(422,f'Row {i}: material, source and destination are required. Map the WB master values if they were not recognised automatically.')
         prod=active_resource(db,Product,material_id); active_resource(db,Location,source_id); active_resource(db,Location,dest_id)
         dep_machines=[d.machine_id for d in deployments if d.source_location_id==source_id]
-        if not machine_id and len(set(dep_machines))==1: machine_id=dep_machines[0]
-        if not machine_id: raise HTTPException(422,f'Row {i}: choose equipment / machine deployed at source {source_id}.')
+        if not machine_id and len(set(dep_machines))==1:
+            machine_id=dep_machines[0]
+        if not machine_id:
+            raise HTTPException(422,f'Row {i}: choose the loader / excavator used at {source_id}.')
         machine=active_resource(db,Equipment,machine_id)
-        if machine.group=='TRANSPORT': raise HTTPException(422,f'Row {i}: choose working equipment / machine, not the tripper/dumper transport vehicle.')
+        if machine.group in {'TRANSPORT','HSD_TANKER'}:
+            raise HTTPException(422,f'Row {i}: choose working loading equipment, not transport/tanker equipment.')
         loading=_tiom_shift_date_time(db,day,sh,lt) if lt else None; unloading=_tiom_shift_date_time(db,day,sh,ut) if ut else None
-        if loading and unloading and unloading<loading: unloading+=timedelta(days=1)
+        if loading and unloading and unloading<loading:
+            unloading+=timedelta(days=1)
         dep_matches=[d for d in deployments if d.source_location_id==source_id and d.machine_id==machine_id]
-        if not dep_matches: raise HTTPException(422,f'Row {i}: {machine_id} is not deployed at source {source_id} for Shift {sh}. Update Shift Deployment first.')
+        if not dep_matches:
+            activity='EXCAVATION' if 'EXCAV' in str(machine.type or '').upper() else 'LOADING'
+            if not db.get(ActivityMaster,activity):
+                db.add(ActivityMaster(activity=activity,vehicle_required=False,active=True))
+                db.flush()
+            auto_dep=TiomSourceDeployment(
+                deployment_id=str(uuid4()),operating_date=day,shift=sh,
+                source_location_id=source_id,machine_id=machine_id,activity=activity,
+                from_at=None,to_at=None,active=True,
+                notes='Auto-created from MIS trip entry; HMR/auxiliary details can be added in Machine Setup.',
+                entered_by=user.login_id,entered_at=now_local()
+            )
+            db.add(auto_dep); db.flush()
+            deployments.append(auto_dep)
         if wb:
             factor=None; qty=Decimal(wb.net_kg or 0)/Decimal('1000')
             material_raw=wb.material_name or wb.material_code or prod.name
@@ -3207,7 +3253,9 @@ def save_tiom_mis_report(db,user,p,submit=False):
         db.add(r); db.flush()
         db.add(TiomMisTripDetail(row_id=row_id,machine_id=machine_id,material_id=material_id,source_location_id=source_id,destination_location_id=dest_id,factor_mt_per_trip=factor,calculated_qty_mt=qty,entered_at=now_local()))
         source_ctx=source_contexts.get(source_id)
-        bench_rl=source_ctx.bench_rl_m if source_ctx else None
+        bench_rl=_tiom_bench_rl_from_location(db,source_id)
+        if bench_rl is None and source_ctx:
+            bench_rl=source_ctx.bench_rl_m
         requested_route='WITH_WB' if wb else 'WITHOUT_WB'
         lead_result=_tiom_resolve_lead(db,source_id,bench_rl,dest_id,requested_route,wb_linked=bool(wb))
         lead_rule=lead_result.get('rule')
