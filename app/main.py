@@ -77,7 +77,8 @@ async def lifespan(app):
             dash_test=webapp.dashboard_desk(db,admin_user,{"mode":"TODAY","shift":"ALL"})
             expected_activities={"STACKING","DRILL FACE","TWIN HOPPER CLEANING","QDS","DISPATCH"}
             activity_ids={x.get("id") for x in mis_test.get("activities",[])}
-            machine_ids={x.get("id") for x in mis_test.get("machines",[])}
+            machine_ids={x.get("id") for x in mis_test.get("deploymentMachines",[])}
+            trip_machines=mis_test.get("machines",[])
             required_machines={"DOZER D8-1","DOZER D8-2","DOZER D6-3","DOZER D6-4","GRADER-01","GRADER-02","01.HITACHI-210 (DRILL)","02.HITACHI-210 (DRILL)-2"}
             kpis=dash_test.get("kpis",{})
             production_source_ids={x.get("id") for x in mis_test.get("sourceLocations",[])}
@@ -87,6 +88,7 @@ async def lifespan(app):
             checks={
                 "activitiesVisible":expected_activities.issubset(activity_ids),
                 "machinesVisible":required_machines.issubset(machine_ids),
+                "tripMachinesLoadingOnly":all(x.get("group")=="LOADING" for x in trip_machines),
                 "leadRulesVisible":len(mis_test.get("leadRules",[])),
                 "leadDashboardKeys":all(x in kpis for x in ("leadResolvedTrips","leadMissingTrips","leadWithWbTrips","leadWithoutWbTrips","avgLeadKm","leadTonKm")),
                 "sevenDayCumulative":all("cumulativeTonnes" in x and "cumulativeLeadTonKm" in x for x in dash_test.get("sevenDay",[])),
