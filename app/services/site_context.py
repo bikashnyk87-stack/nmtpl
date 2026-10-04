@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 
 from app.site_models import Site, SiteShift
+from app.models import ShiftMaster
 
 
 @dataclass(frozen=True)
@@ -93,14 +94,35 @@ def seed_default_sites_and_shifts(db) -> None:
                     active=True,
                 ))
 
-    # TIOM shift boundaries are explicit and authoritative for the cloud pilot.
-    # Existing rows are corrected to the confirmed A/B/C schedule so overnight
-    # C-shift activity (00:00-05:59) remains on the previous operating date.
-    for shift, (start, end, seq) in shift_defaults["TIOM"].items():
-        row = db.get(SiteShift, {"site_id": "TIOM", "shift": shift})
-        if row:
-            row.start_time = start
-            row.end_time = end
-            row.scheduled_hours = 8
-            row.sequence_no = seq
-            row.active = True
+    # TIOM must not maintain a second shift master. The core ShiftMaster is
+    # authoritative for TIOM; mirror it into SiteShift only for multisite APIs.
+    tiom_core = [
+        row for row in db.scalars(
+            select(ShiftMaster)
+            .where(ShiftMaster.active.is_(True))
+            .order_by(ShiftMaster.start_time, ShiftMaster.shift)
+        )
+        if str(row.shift or "").upper() in {"A", "B", "C"}
+    ]
+    if tiom_core:
+        for seq, definition in enumerate(tiom_core, start=1):
+            shift = str(definition.shift).upper()
+            row = db.get(SiteShift, {"site_id": "TIOM", "shift": shift})
+            if not row:
+                row = SiteShift(
+                    site_id="TIOM",
+                    shift=shift,
+                    shift_name=f"Shift {shift}",
+                    start_time=definition.start_time,
+                    end_time=definition.end_time,
+                    scheduled_hours=definition.scheduled_hours,
+                    sequence_no=seq,
+                    active=True,
+                )
+                db.add(row)
+            else:
+                row.start_time = definition.start_time
+                row.end_time = definition.end_time
+                row.scheduled_hours = definition.scheduled_hours
+                row.sequence_no = seq
+                row.active = True
