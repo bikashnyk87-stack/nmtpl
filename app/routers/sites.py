@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import WebSession, WebUser, csrf, get_user, hash_password
 from app.db import get_db
-from app.models import Equipment, LoadTrip, Person, WbMovement
+from app.models import Equipment, LoadTrip, Location, Person, WbMovement
 from app.site_auth import accessible_sites, has_permission, require_permission, require_site
 from app.site_models import (
     EquipmentSiteAssignment,
