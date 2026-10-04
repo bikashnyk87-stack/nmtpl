@@ -2699,8 +2699,16 @@ def remove_tiom_mis_report(db,user,p):
 
 
 def tiom_mis_desk(db,user,p):
-    require(user,'PRODUCTION'); day,sh,_=_tiom_context(db,user,p or {})
+    require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p)
     factors=_ensure_tiom_trip_factors(db,user)
+
+    # Central Activity Master: make common HMR/deployment activities available
+    # without creating a separate TIOM-only activity list.
+    for activity in ('EXCAVATION','LOADING','REHANDLING','LEVELLING','DOZING','GRADING','DRILLING','CRUSHING','SCREENING','CLEANUP','SUPPORT','OTHER'):
+        if not db.get(ActivityMaster,activity):
+            db.add(ActivityMaster(activity=activity,vehicle_required=False,active=True))
+    db.flush()
+
     equipment=list(db.scalars(select(Equipment).where(Equipment.active).order_by(Equipment.machine_id)))
     persons=list(db.scalars(select(Person).where(Person.active).order_by(Person.name)))
     locations=list(db.scalars(select(Location).where(Location.active).order_by(Location.location_name)))
@@ -2711,30 +2719,84 @@ def tiom_mis_desk(db,user,p):
     lead_rules=list(db.scalars(select(TiomLeadDistance).where(TiomLeadDistance.active).order_by(
         TiomLeadDistance.source_location_id,TiomLeadDistance.destination_location_id,TiomLeadDistance.bench_rl_m,TiomLeadDistance.route_mode
     )))
-    reports=list(db.scalars(select(TiomMisReport).where(TiomMisReport.operating_date==day,TiomMisReport.shift==sh).order_by(TiomMisReport.entered_at.desc()).limit(100)))
+
+    report_from=_parse_ui_date_v2(p.get('reportFrom'),'report from date') if p.get('reportFrom') else day.replace(day=1)
+    report_to=_parse_ui_date_v2(p.get('reportTo'),'report to date') if p.get('reportTo') else day
+    if report_to < report_from:
+        raise HTTPException(422,'Report To date cannot be before From date.')
+    report_shift=str(p.get('reportShift') or 'ALL').upper()
+    valid_shifts={x.shift for x in db.scalars(select(ShiftMaster).where(ShiftMaster.active))}
+    if report_shift!='ALL' and report_shift not in valid_shifts:
+        raise HTTPException(422,'Choose a valid report shift.')
+
+    report_q=select(TiomMisReport).where(
+        TiomMisReport.operating_date>=report_from,
+        TiomMisReport.operating_date<=report_to
+    )
+    if report_shift!='ALL':
+        report_q=report_q.where(TiomMisReport.shift==report_shift)
+    reports=list(db.scalars(report_q.order_by(
+        TiomMisReport.operating_date.desc(),TiomMisReport.shift,TiomMisReport.entered_at.desc()
+    ).limit(500)))
+
     prev_kmr={}
-    for r in db.scalars(select(TiomMisReport).where(TiomMisReport.closing_kmr.is_not(None),TiomMisReport.operating_date<=day).order_by(TiomMisReport.operating_date.desc(),TiomMisReport.entered_at.desc())):
+    for r in db.scalars(select(TiomMisReport).where(
+        TiomMisReport.closing_kmr.is_not(None),TiomMisReport.operating_date<=day
+    ).order_by(TiomMisReport.operating_date.desc(),TiomMisReport.entered_at.desc())):
         prev_kmr.setdefault(r.vehicle_id,float(r.closing_kmr))
     prev_hmr={}
-    for m in db.scalars(select(SiteAssetMeter).where(SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.meter_type=='HMR',SiteAssetMeter.closing_reading.is_not(None),SiteAssetMeter.operating_date<=day).order_by(SiteAssetMeter.operating_date.desc(),SiteAssetMeter.entered_at.desc())):
+    for m in db.scalars(select(SiteAssetMeter).where(
+        SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.meter_type=='HMR',
+        SiteAssetMeter.closing_reading.is_not(None),SiteAssetMeter.operating_date<=day
+    ).order_by(SiteAssetMeter.operating_date.desc(),SiteAssetMeter.entered_at.desc())):
         prev_hmr.setdefault(m.asset_id,float(m.closing_reading))
+
+    trip_machines=[e for e in equipment if e.group=='LOADING']
+    deployment_machines=[e for e in equipment if e.group not in {'TRANSPORT','HSD_TANKER'}]
+    summary_today=_tiom_mis_productivity_summary(db,day,day,sh)
+    summary_range=_tiom_mis_productivity_summary(db,report_from,report_to,report_shift)
+
     return {'date':str(day),'shift':sh,
-        'vehicles':[{'id':e.machine_id,'label':_tiom_asset_label(e),'previousKmr':prev_kmr.get(e.machine_id)} for e in equipment if e.group=='TRANSPORT'],
-        'machines':[{'id':e.machine_id,'label':_tiom_asset_label(e),'group':e.group,'previousHmr':prev_hmr.get(e.machine_id)} for e in equipment if e.group!='TRANSPORT'],
+        'reportFrom':str(report_from),'reportTo':str(report_to),'reportShift':report_shift,
+        'vehicles':[{
+            'id':e.machine_id,'label':_tiom_asset_label(e),
+            'previousKmr':prev_kmr.get(e.machine_id),'previousHmr':prev_hmr.get(e.machine_id)
+        } for e in equipment if e.group=='TRANSPORT'],
+        'machines':[{
+            'id':e.machine_id,'label':_tiom_asset_label(e),'group':e.group,'type':e.type,
+            'previousHmr':prev_hmr.get(e.machine_id)
+        } for e in trip_machines],
+        'deploymentMachines':[{
+            'id':e.machine_id,'label':_tiom_asset_label(e),'group':e.group,'type':e.type,
+            'previousHmr':prev_hmr.get(e.machine_id)
+        } for e in deployment_machines],
         'activities':[{'id':x.activity,'label':x.activity,'vehicleRequired':x.vehicle_required} for x in activities],
-        'leadRules':[{'id':x.lead_id,'sourceLocationId':x.source_location_id,'benchRl':x.bench_rl_m,'destinationLocationId':x.destination_location_id,'routeMode':x.route_mode,'leadKm':float(x.lead_km),'materialScope':x.material_scope or ''} for x in lead_rules],
+        'leadRules':[{
+            'id':x.lead_id,'sourceLocationId':x.source_location_id,'benchRl':x.bench_rl_m,
+            'destinationLocationId':x.destination_location_id,'routeMode':x.route_mode,
+            'leadKm':float(x.lead_km),'materialScope':x.material_scope or ''
+        } for x in lead_rules],
         'operators':[{'id':x.employee_id,'label':f'{x.name} · {x.employee_id} · {x.role}'} for x in persons],
-        'locations':[{'id':x.location_id,'label':f'{x.location_name} · {x.location_id}'} for x in locations],
+        'locations':[{'id':x.location_id,'label':f'{x.location_name} · {x.location_id}','role':x.role or 'UNCLASSIFIED'} for x in locations],
         'sourceLocations':[{'id':x['id'],'label':f"{x['label']} · {x['id']}"} for x in source_locations],
         'destinationLocations':[{'id':x['id'],'label':f"{x['label']} · {x['id']}"} for x in destination_locations],
         'products':[{'id':x.product_id,'label':f'{x.name} · {x.product_id}'} for x in products],
         'factors':[{'id':x.factor_id,'materialCode':x.material_code,'factor':float(x.factor_mt_per_trip),'effectiveFrom':str(x.effective_from),'effectiveTo':str(x.effective_to) if x.effective_to else '','active':x.active,'notes':x.notes or ''} for x in factors],
         'deployments':_tiom_source_deployments(db,day,sh),
         'managementRecipients':_tiom_management_recipients(db),
-        'reports':[{'reportId':x.report_id,'vehicleId':x.vehicle_id,'operatorId':x.operator_id or '','status':x.status,'paperRef':x.paper_ref or '','openingKmr':float(x.opening_kmr) if x.opening_kmr is not None else None,'closingKmr':float(x.closing_kmr) if x.closing_kmr is not None else None,'enteredAt':x.entered_at.strftime('%d-%m %H:%M') if x.entered_at else ''} for x in reports],
-        'summary':_tiom_mis_shift_summary(db,day,sh)}
-
-
+        'reports':[{
+            'reportId':x.report_id,'date':str(x.operating_date),'shift':x.shift,
+            'vehicleId':x.vehicle_id,'operatorId':x.operator_id or '','status':x.status,
+            'paperRef':x.paper_ref or '',
+            'openingKmr':float(x.opening_kmr) if x.opening_kmr is not None else None,
+            'closingKmr':float(x.closing_kmr) if x.closing_kmr is not None else None,
+            'openingHmr':float(x.opening_hmr) if x.opening_hmr is not None else None,
+            'closingHmr':float(x.closing_hmr) if x.closing_hmr is not None else None,
+            'enteredAt':x.entered_at.strftime('%d-%m %H:%M') if x.entered_at else ''
+        } for x in reports],
+        'summary':summary_today,
+        'summaryToday':summary_today,
+        'summaryRange':summary_range}
 
 def get_tiom_wb_suggestions(db,user,p):
     """Confirmed WB movements available to prefill one driver/tripper report."""
