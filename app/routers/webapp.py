@@ -3394,48 +3394,105 @@ def save_tiom_hsd_issue_batch(db,user,p):
     return {'ok':True,'message':f'{len(saved)} HSD filling row(s) saved.','rows':saved}
 
 
-def _tiom_hsd_report(db,day):
-    month_start=day.replace(day=1); day_start=datetime.combine(day,dtime.min,TZ); day_end=day_start+timedelta(days=1); month_dt=datetime.combine(month_start,dtime.min,TZ)
+def _tiom_hsd_report(db,day,from_day=None,to_day=None):
+    from_day=from_day or day
+    to_day=to_day or day
+    if to_day < from_day:
+        raise HTTPException(422,'Report To date cannot be before From date.')
+    range_start=datetime.combine(from_day,dtime.min,TZ)
+    range_end=datetime.combine(to_day,dtime.min,TZ)+timedelta(days=1)
     eq={e.machine_id:e for e in db.scalars(select(Equipment).where(Equipment.active))}
-    issues=list(db.scalars(select(HsdIssue).where(HsdIssue.issued_at>=month_dt,HsdIssue.issued_at<day_end).order_by(HsdIssue.issued_at)))
-    details={x.issue_id:x for x in db.scalars(select(TiomHsdIssueDetail).where(TiomHsdIssueDetail.issue_id.in_([i.issue_id for i in issues]))) } if issues else {}
-    today=[i for i in issues if day_start<=aware(i.issued_at)<day_end]
+    issues=list(db.scalars(select(HsdIssue).where(
+        HsdIssue.issued_at>=range_start,HsdIssue.issued_at<range_end
+    ).order_by(HsdIssue.issued_at)))
+    details={x.issue_id:x for x in db.scalars(select(TiomHsdIssueDetail).where(
+        TiomHsdIssueDetail.issue_id.in_([i.issue_id for i in issues])
+    ))} if issues else {}
+
     categories={}
-    for i in today:
-        e=eq.get(i.machine_id); cat=_tiom_hsd_category(e) if e else 'OTHER EQUIPMENT FOR MINES'; key=(cat,i.machine_id); row=categories.setdefault(key,{'category':cat,'machineId':i.machine_id,'label':_tiom_asset_label(e) if e else i.machine_id,'meterType':i.meter_type or '','previous':None,'shifts':{}}); d=details.get(i.issue_id)
-        if d and row['previous'] is None and d.previous_meter_reading is not None: row['previous']=float(d.previous_meter_reading)
-        sh=row['shifts'].setdefault(i.shift,{'meter':None,'hsd':0.0,'usage':0.0,'efficiency':None,'unit':d.efficiency_unit if d else ('KMPL' if i.meter_type=='KMR' else 'HSD/HR')}); sh['meter']=float(i.meter_reading) if i.meter_reading is not None else sh['meter']; sh['hsd']+=float(i.litres); sh['usage']+=float(d.usage) if d and d.usage is not None else 0.0
-    # month-to-date equipment totals
-    mtd={}
+    totals_by_machine={}
     for i in issues:
-        d=details.get(i.issue_id); m=mtd.setdefault(i.machine_id,{'usage':0.0,'hsd':0.0,'meterType':i.meter_type or ''}); m['hsd']+=float(i.litres); m['usage']+=float(d.usage) if d and d.usage is not None else 0.0
+        e=eq.get(i.machine_id)
+        cat=_tiom_hsd_category(e) if e else 'OTHER EQUIPMENT FOR MINES'
+        key=(cat,i.machine_id)
+        row=categories.setdefault(key,{
+            'category':cat,'machineId':i.machine_id,
+            'label':_tiom_asset_label(e) if e else i.machine_id,
+            'meterType':i.meter_type or '','previous':None,'shifts':{}
+        })
+        d=details.get(i.issue_id)
+        if d and row['previous'] is None and d.previous_meter_reading is not None:
+            row['previous']=float(d.previous_meter_reading)
+        shrow=row['shifts'].setdefault(i.shift,{
+            'meter':None,'hsd':0.0,'usage':0.0,'efficiency':None,
+            'unit':d.efficiency_unit if d else ('KMPL' if i.meter_type=='KMR' else 'HSD/HR')
+        })
+        if i.meter_reading is not None:
+            shrow['meter']=float(i.meter_reading)
+        shrow['hsd']+=float(i.litres)
+        if d and d.usage is not None:
+            shrow['usage']+=float(d.usage)
+        mt=totals_by_machine.setdefault(i.machine_id,{'usage':0.0,'hsd':0.0,'meterType':i.meter_type or ''})
+        mt['hsd']+=float(i.litres)
+        if d and d.usage is not None:
+            mt['usage']+=float(d.usage)
+
     rows_out=[]
     for key,row in sorted(categories.items()):
         for sh,v in row['shifts'].items():
-            if v['usage']>0 and v['hsd']>0: v['efficiency']=(v['usage']/v['hsd']) if row['meterType']=='KMR' else (v['hsd']/v['usage'])
-        m=mtd.get(row['machineId'],{'usage':0,'hsd':0}); m_eff=(m['usage']/m['hsd']) if row['meterType']=='KMR' and m['hsd'] else ((m['hsd']/m['usage']) if row['meterType']!='KMR' and m['usage'] else None)
-        row['mtd']={'usage':m['usage'],'hsd':m['hsd'],'efficiency':m_eff,'unit':'KMPL' if row['meterType']=='KMR' else 'HSD/HR'}; rows_out.append(row)
-    receipts=list(db.scalars(select(HsdPurchaseLot).where(HsdPurchaseLot.received_at<day_end).order_by(HsdPurchaseLot.received_at)))
-    receipt_details={x.lot_id:x for x in db.scalars(select(TiomHsdReceiptDetail).where(TiomHsdReceiptDetail.lot_id.in_([r.lot_id for r in receipts]))) } if receipts else {}
-    opening_receipts=sum((Decimal(r.litres_received) for r in receipts if aware(r.received_at)<month_dt),Decimal('0')); opening_issues=sum((Decimal(i.litres) for i in db.scalars(select(HsdIssue).where(HsdIssue.issued_at<month_dt))),Decimal('0')); balance=opening_receipts-opening_issues
-    procurement=[]
-    cur=month_start
-    while cur<=day:
-        a=datetime.combine(cur,dtime.min,TZ); b=a+timedelta(days=1); day_receipts=[r for r in receipts if a<=aware(r.received_at)<b]; rec_qty=sum((Decimal(r.litres_received) for r in day_receipts),Decimal('0')); gross=sum((Decimal(r.amount) for r in day_receipts),Decimal('0')); net=sum((Decimal(receipt_details[r.lot_id].net_amount) if r.lot_id in receipt_details else Decimal(r.amount) for r in day_receipts),Decimal('0')); discount=gross-net; issued=sum((Decimal(i.litres) for i in issues if a<=aware(i.issued_at)<b),Decimal('0')); balance+=rec_qty-issued
-        refs=', '.join([r.invoice_no or '' for r in day_receipts if r.invoice_no]); procurement.append({'date':str(cur),'received':float(rec_qty),'grossAmount':float(gross),'discountAmount':float(discount),'netAmount':float(net),'issued':float(issued),'balance':float(balance),'billNo':refs})
-        cur+=timedelta(days=1)
-    total_today=sum((Decimal(i.litres) for i in today),Decimal('0')); light_today=sum((Decimal(i.litres) for i in today if eq.get(i.machine_id) and _tiom_hsd_category(eq[i.machine_id])=='LIGHT VEHICLES'),Decimal('0'))
-    return {'date':str(day),'rows':rows_out,'procurement':procurement,'totalHsd':float(total_today),'minesTotalHsd':float(total_today-light_today),'lightVehicleHsd':float(light_today)}
+            if v['usage']>0 and v['hsd']>0:
+                v['efficiency']=(v['usage']/v['hsd']) if row['meterType']=='KMR' else (v['hsd']/v['usage'])
+        m=totals_by_machine.get(row['machineId'],{'usage':0,'hsd':0})
+        m_eff=(m['usage']/m['hsd']) if row['meterType']=='KMR' and m['hsd'] else ((m['hsd']/m['usage']) if row['meterType']!='KMR' and m['usage'] else None)
+        row['mtd']={'usage':m['usage'],'hsd':m['hsd'],'efficiency':m_eff,'unit':'KMPL' if row['meterType']=='KMR' else 'HSD/HR'}
+        rows_out.append(row)
 
+    receipts=list(db.scalars(select(HsdPurchaseLot).where(
+        HsdPurchaseLot.received_at<range_end
+    ).order_by(HsdPurchaseLot.received_at)))
+    receipt_details={x.lot_id:x for x in db.scalars(select(TiomHsdReceiptDetail).where(
+        TiomHsdReceiptDetail.lot_id.in_([r.lot_id for r in receipts])
+    ))} if receipts else {}
+    opening_receipts=sum((Decimal(r.litres_received) for r in receipts if aware(r.received_at)<range_start),Decimal('0'))
+    opening_issues=sum((Decimal(i.litres) for i in db.scalars(select(HsdIssue).where(HsdIssue.issued_at<range_start))),Decimal('0'))
+    balance=opening_receipts-opening_issues
+    procurement=[]
+    cur=from_day
+    while cur<=to_day:
+        a=datetime.combine(cur,dtime.min,TZ); b=a+timedelta(days=1)
+        day_receipts=[r for r in receipts if a<=aware(r.received_at)<b]
+        rec_qty=sum((Decimal(r.litres_received) for r in day_receipts),Decimal('0'))
+        gross=sum((Decimal(r.amount) for r in day_receipts),Decimal('0'))
+        net=sum((Decimal(receipt_details[r.lot_id].net_amount) if r.lot_id in receipt_details else Decimal(r.amount) for r in day_receipts),Decimal('0'))
+        discount=gross-net
+        issued=sum((Decimal(i.litres) for i in issues if a<=aware(i.issued_at)<b),Decimal('0'))
+        balance+=rec_qty-issued
+        refs=', '.join([r.invoice_no or '' for r in day_receipts if r.invoice_no])
+        procurement.append({'date':str(cur),'received':float(rec_qty),'grossAmount':float(gross),'discountAmount':float(discount),'netAmount':float(net),'issued':float(issued),'balance':float(balance),'billNo':refs})
+        cur+=timedelta(days=1)
+
+    total=sum((Decimal(i.litres) for i in issues),Decimal('0'))
+    light=sum((Decimal(i.litres) for i in issues if eq.get(i.machine_id) and _tiom_hsd_category(eq[i.machine_id])=='LIGHT VEHICLES'),Decimal('0'))
+    return {'date':str(day),'fromDate':str(from_day),'toDate':str(to_day),'rows':rows_out,'procurement':procurement,
+            'totalHsd':float(total),'minesTotalHsd':float(total-light),'lightVehicleHsd':float(light)}
 
 def tiom_hsd_desk(db,user,p):
-    require(user,'HSD'); day,sh,_=_tiom_context(db,user,p or {}); tankers=list(db.scalars(select(HsdTanker).where(HsdTanker.active).order_by(HsdTanker.tanker_id))); equipment=list(db.scalars(select(Equipment).where(Equipment.active).order_by(Equipment.machine_id)))
+    require(user,'HSD'); p=p or {}; day,sh,_=_tiom_context(db,user,p)
+    report_from=_parse_ui_date_v2(p.get('reportFrom'),'report from date') if p.get('reportFrom') else day.replace(day=1)
+    report_to=_parse_ui_date_v2(p.get('reportTo'),'report to date') if p.get('reportTo') else day
+    if report_to < report_from: raise HTTPException(422,'Report To date cannot be before From date.')
+    tankers=list(db.scalars(select(HsdTanker).where(HsdTanker.active).order_by(HsdTanker.tanker_id)))
+    equipment=list(db.scalars(select(Equipment).where(Equipment.active).order_by(Equipment.machine_id)))
     stock={t.tanker_id:db.scalar(select(func.coalesce(func.sum(HsdPurchaseLot.litres_remaining),0)).where(HsdPurchaseLot.tanker_id==t.tanker_id)) for t in tankers}
-    # previous meter lookup for fast form prefill
     prev={}
     for e in equipment:
-        issue=db.scalar(select(HsdIssue).where(HsdIssue.machine_id==e.machine_id,HsdIssue.meter_reading.is_not(None)).order_by(HsdIssue.issued_at.desc()).limit(1)); prev[e.machine_id]=float(issue.meter_reading) if issue and issue.meter_reading is not None else None
-    return {'date':str(day),'shift':sh,'tankers':[{'id':t.tanker_id,'label':f'{t.tanker_id}'+(f' · {t.vehicle_no}' if t.vehicle_no else ''),'stock':float(stock[t.tanker_id] or 0)} for t in tankers],'equipment':[{'id':e.machine_id,'label':_tiom_asset_label(e),'category':_tiom_hsd_category(e),'meterType':_tiom_meter_type(e),'previousMeter':prev.get(e.machine_id)} for e in equipment],'managementRecipients':_tiom_management_recipients(db),'report':_tiom_hsd_report(db,day)}
+        issue=db.scalar(select(HsdIssue).where(HsdIssue.machine_id==e.machine_id,HsdIssue.meter_reading.is_not(None)).order_by(HsdIssue.issued_at.desc()).limit(1))
+        prev[e.machine_id]=float(issue.meter_reading) if issue and issue.meter_reading is not None else None
+    return {'date':str(day),'shift':sh,'reportFrom':str(report_from),'reportTo':str(report_to),
+            'tankers':[{'id':t.tanker_id,'label':f'{t.tanker_id}'+(f' · {t.vehicle_no}' if t.vehicle_no else ''),'stock':float(stock[t.tanker_id] or 0)} for t in tankers],
+            'equipment':[{'id':e.machine_id,'label':_tiom_asset_label(e),'category':_tiom_hsd_category(e),'meterType':_tiom_meter_type(e),'previousMeter':prev.get(e.machine_id)} for e in equipment],
+            'managementRecipients':_tiom_management_recipients(db),
+            'report':_tiom_hsd_report(db,day,report_from,report_to)}
 
 
 @router.post('/rpc')
