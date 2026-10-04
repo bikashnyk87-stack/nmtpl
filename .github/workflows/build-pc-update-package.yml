@@ -1,0 +1,304 @@
+name: Build PC Update Package
+
+on:
+  push:
+    branches: [pc-update-package-20261004]
+    paths: [".github/workflows/build-pc-update-package.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build update package
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT="NMTPL_PC_UPDATE_R5"
+          PAYLOAD="$ROOT/payload"
+          mkdir -p "$PAYLOAD"
+
+          files=(
+            "app/models.py"
+            "app/main.py"
+            "app/site_models.py"
+            "app/routers/webapp.py"
+            "app/routers/sites.py"
+            "app/services/tiom_erp.py"
+            "app/services/tiom_location_erp.py"
+            "app/services/tiom_reference_seed.py"
+            "app/services/site_context.py"
+            "app/services/wb_mapping.py"
+            "app/static/webapp.js"
+            "app/static/workspace.js"
+            "app/static/workspace.css"
+            "app/static/tiom_phase1.js"
+            "app/static/tiom_phase1.css"
+            "app/static/admin_master_ops.js"
+            "app/static/index.html"
+            "app/static/central.html"
+            "scripts/wb_gmail_worker.py"
+            "config/wb_gmail_config.json"
+            "tests/test_wb_gmail_shift_parity.py"
+          )
+
+          for f in "${files[@]}"; do
+            test -f "$f"
+            mkdir -p "$PAYLOAD/$(dirname "$f")"
+            cp "$f" "$PAYLOAD/$f"
+          done
+
+          cat > "$ROOT/INSTALL_UPDATE.bat" <<'BAT'
+          @echo off
+          setlocal
+          cd /d "%~dp0"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0INSTALL_UPDATE.ps1" %*
+          if errorlevel 1 (
+            echo.
+            echo UPDATE FAILED.
+            pause
+            exit /b 1
+          )
+          echo.
+          echo UPDATE COMPLETED.
+          pause
+          BAT
+
+          cat > "$ROOT/INSTALL_UPDATE.ps1" <<'PS1'
+          param([string]$ProjectRoot = "")
+          $ErrorActionPreference='Stop'
+          $PackageRoot=Split-Path -Parent $MyInvocation.MyCommand.Path
+          $PayloadRoot=Join-Path $PackageRoot 'payload'
+
+          function Step([string]$m){Write-Host ('[NMTPL] '+$m) -ForegroundColor Cyan}
+          function Admin {
+            $i=[Security.Principal.WindowsIdentity]::GetCurrent()
+            $p=New-Object Security.Principal.WindowsPrincipal($i)
+            if(-not $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)){
+              throw 'Run INSTALL_UPDATE.bat as Administrator.'
+            }
+          }
+          function ResolveRoot([string]$c){
+            $tries=@()
+            if($c){$tries+=$c}
+            $tries+=(Get-Location).Path
+            $tries+=(Split-Path -Parent $PackageRoot)
+            foreach($x in $tries){
+              if(-not $x){continue}
+              try{$f=(Resolve-Path -LiteralPath $x).Path}catch{continue}
+              if((Test-Path (Join-Path $f 'app\main.py')) -and (Test-Path (Join-Path $f 'run_server.bat'))){return $f}
+            }
+            $x=Read-Host 'Enter full path of NMTPL_Server_v0_1 folder'
+            $f=(Resolve-Path -LiteralPath $x).Path
+            if(-not (Test-Path (Join-Path $f 'app\main.py'))){throw 'app\main.py not found.'}
+            return $f
+          }
+          function StopNmtpl([string]$r){
+            foreach($t in @('NMTPL Server - Boot Startup','NMTPL WB Gmail - Boot Startup')){
+              if(Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue){Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue}
+            }
+            $e=[regex]::Escape($r)
+            Get-CimInstance Win32_Process | Where-Object {$_.Name -match '^python(w)?\.exe$' -and $_.CommandLine -and $_.CommandLine -match $e} |
+              ForEach-Object {Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue}
+          }
+          function StartNmtpl {
+            foreach($t in @('NMTPL Server - Boot Startup','NMTPL WB Gmail - Boot Startup')){
+              if(Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue){Start-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue}
+            }
+          }
+
+          Admin
+          $ProjectRoot=ResolveRoot $ProjectRoot
+          Step "Project: $ProjectRoot"
+          $stamp=Get-Date -Format 'yyyyMMdd_HHmmss'
+          $BackupRoot=Join-Path $ProjectRoot ("backups\PC_UPDATE_R5_"+$stamp)
+          New-Item -ItemType Directory -Path $BackupRoot -Force | Out-Null
+
+          Step 'Stopping NMTPL'
+          StopNmtpl $ProjectRoot
+
+          $payloadFiles=Get-ChildItem -LiteralPath $PayloadRoot -File -Recurse
+          foreach($src in $payloadFiles){
+            $rel=$src.FullName.Substring($PayloadRoot.Length).TrimStart('\','/')
+            $dst=Join-Path $ProjectRoot $rel
+            if(Test-Path -LiteralPath $dst){
+              $bak=Join-Path $BackupRoot $rel
+              New-Item -ItemType Directory -Path (Split-Path -Parent $bak) -Force | Out-Null
+              Copy-Item -LiteralPath $dst -Destination $bak -Force
+            }
+          }
+
+          $cfgPath=Join-Path $ProjectRoot 'config\wb_gmail_config.json'
+          $payloadCfg=Join-Path $PayloadRoot 'config\wb_gmail_config.json'
+          $localCfg=$null
+          if(Test-Path $cfgPath){try{$localCfg=Get-Content -Raw $cfgPath | ConvertFrom-Json}catch{}}
+
+          Step 'Installing ERP/WB/Lead/report updates'
+          foreach($src in $payloadFiles){
+            $rel=$src.FullName.Substring($PayloadRoot.Length).TrimStart('\','/')
+            if($rel -ieq 'config\wb_gmail_config.json'){continue}
+            $dst=Join-Path $ProjectRoot $rel
+            New-Item -ItemType Directory -Path (Split-Path -Parent $dst) -Force | Out-Null
+            Copy-Item -LiteralPath $src.FullName -Destination $dst -Force
+          }
+
+          if($localCfg){
+            $localCfg.enabled=$true
+            $localCfg.archive_success=$false
+            $localCfg.auto_confirm=$true
+            $localCfg.max_review_percent=0
+            $localCfg.weight_tolerance_kg=5.0
+            $localCfg.allowed_senders=@('@amns.in')
+            $localCfg | ConvertTo-Json -Depth 10 | Set-Content -LiteralPath $cfgPath -Encoding UTF8
+          } else {
+            Copy-Item -LiteralPath $payloadCfg -Destination $cfgPath -Force
+          }
+
+          Step 'Applying LAN access fix'
+          $bg=Join-Path $ProjectRoot 'scripts\start_server_background.ps1'
+          if(Test-Path $bg){
+            $x=Get-Content -Raw $bg
+            $x=$x.Replace("'--host', '127.0.0.1'","'--host', '0.0.0.0'")
+            $x=$x.Replace("'--forwarded-allow-ips=127.0.0.1'","'--forwarded-allow-ips=*'")
+            Set-Content -LiteralPath $bg -Value $x -Encoding UTF8
+          }
+
+          Get-NetFirewallRule -DisplayName 'NMTPL TIOM TCP 8000' -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
+          New-NetFirewallRule -DisplayName 'NMTPL TIOM TCP 8000' -Direction Inbound -Action Allow -Protocol TCP -LocalPort 8000 -Profile Any -RemoteAddress LocalSubnet | Out-Null
+
+          $py=Join-Path $ProjectRoot '.venv\Scripts\python.exe'
+          if(-not (Test-Path $py)){throw 'Project .venv Python missing. Run setup_python.bat.'}
+          Step 'Validating Python syntax'
+          & $py -m py_compile `
+            (Join-Path $ProjectRoot 'app\models.py') `
+            (Join-Path $ProjectRoot 'app\main.py') `
+            (Join-Path $ProjectRoot 'app\site_models.py') `
+            (Join-Path $ProjectRoot 'app\routers\webapp.py') `
+            (Join-Path $ProjectRoot 'app\routers\sites.py') `
+            (Join-Path $ProjectRoot 'app\services\tiom_location_erp.py') `
+            (Join-Path $ProjectRoot 'app\services\site_context.py') `
+            (Join-Path $ProjectRoot 'scripts\wb_gmail_worker.py')
+          if($LASTEXITCODE -ne 0){throw 'Syntax validation failed. Run rollback.'}
+
+          [ordered]@{
+            package='NMTPL_PC_UPDATE_R5'
+            source_commit='126a7c13c1fe523713874d56d5da9e20429880af'
+            installed_at=(Get-Date).ToString('o')
+            backup_root=$BackupRoot
+          } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $BackupRoot 'update-manifest.json') -Encoding UTF8
+
+          Step 'Restarting NMTPL'
+          StartNmtpl
+          Start-Sleep -Seconds 6
+
+          $ok=$false
+          try{$h=Invoke-RestMethod 'http://127.0.0.1:8000/health' -TimeoutSec 8 -UseBasicParsing;$ok=($h.ok -eq $true)}catch{}
+          $lan=Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+            Where-Object {$_.IPAddress -notmatch '^127\.' -and $_.PrefixOrigin -ne 'WellKnown'} |
+            Sort-Object InterfaceMetric | Select-Object -First 1 -ExpandProperty IPAddress
+          $out=@('NMTPL PC UPDATE R5',('Backup: '+$BackupRoot),('Local health: '+$(if($ok){'OK'}else{'CHECK REQUIRED'})))
+          if($lan){$out+=('LAN URL: http://'+$lan+':8000/tiom')}
+          $out | Set-Content -LiteralPath (Join-Path $ProjectRoot 'UPDATE_R5_RESULT.txt') -Encoding UTF8
+          $out | ForEach-Object {Write-Host $_}
+          PS1
+
+          cat > "$ROOT/ROLLBACK_LAST_UPDATE.bat" <<'BAT'
+          @echo off
+          cd /d "%~dp0"
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File "%~dp0ROLLBACK_LAST_UPDATE.ps1" %*
+          pause
+          BAT
+
+          cat > "$ROOT/ROLLBACK_LAST_UPDATE.ps1" <<'PS1'
+          param([string]$ProjectRoot = "")
+          $ErrorActionPreference='Stop'
+          if(-not $ProjectRoot){$ProjectRoot=Read-Host 'Enter full path of NMTPL_Server_v0_1 folder'}
+          $ProjectRoot=(Resolve-Path $ProjectRoot).Path
+          $latest=Get-ChildItem (Join-Path $ProjectRoot 'backups') -Directory -Filter 'PC_UPDATE_R5_*' -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+          if(-not $latest){throw 'No PC_UPDATE_R5 backup found.'}
+          foreach($t in @('NMTPL Server - Boot Startup','NMTPL WB Gmail - Boot Startup')){
+            if(Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue){Stop-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue}
+          }
+          Get-ChildItem $latest.FullName -File -Recurse | Where-Object {$_.Name -ne 'update-manifest.json'} | ForEach-Object {
+            $rel=$_.FullName.Substring($latest.FullName.Length).TrimStart('\','/')
+            $dst=Join-Path $ProjectRoot $rel
+            New-Item -ItemType Directory -Path (Split-Path -Parent $dst) -Force | Out-Null
+            Copy-Item $_.FullName $dst -Force
+          }
+          foreach($t in @('NMTPL Server - Boot Startup','NMTPL WB Gmail - Boot Startup')){
+            if(Get-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue){Start-ScheduledTask -TaskName $t -ErrorAction SilentlyContinue}
+          }
+          Write-Host ('Rollback restored: '+$latest.FullName) -ForegroundColor Green
+          PS1
+
+          cat > "$ROOT/README_FIRST.txt" <<'TXT'
+          NMTPL PC UPDATE R5
+          ===================
+
+          This is an overlay update for the existing NMTPL_Server_v0_1 PC installation.
+
+          INCLUDED
+          - LAN/background access fix for port 8000
+          - WB Gmail PC-parity fixes for overnight C shift, time-first shift routing and mixed-shift rows
+          - Central Equipment Master
+          - Central Location Master with SOURCE / DESTINATION / BOTH / UNCLASSIFIED
+          - WB auto-discovery/canonicalization of Source and Destination
+          - Lead KM / Ton-KM logic and dashboard
+          - Shift Deployment HMR for eligible equipment
+          - Driver Shift Report KMR + HMR
+          - Productivity Today + cumulative selected date range
+          - Date-range reporting for MIS, HSD and Shift Production
+
+          INSTALL
+          1. Extract this package.
+          2. Right-click INSTALL_UPDATE.bat -> Run as administrator.
+          3. If asked, enter the full NMTPL_Server_v0_1 folder path.
+          4. Open UPDATE_R5_RESULT.txt after installation.
+          5. Use the LAN URL shown there from another PC on the same network.
+
+          SAFETY
+          - Backs up each replaced file first.
+          - Does not replace .env, PostgreSQL data/dumps, Gmail OAuth tokens, credentials or logs.
+          - Preserves local WB mailbox/start-after settings when possible.
+          - ROLLBACK_LAST_UPDATE.bat restores the last backup.
+
+          Source commit: 126a7c13c1fe523713874d56d5da9e20429880af
+          TXT
+
+          printf '%s\n' \
+            'package=NMTPL_PC_UPDATE_R5' \
+            'source_commit=126a7c13c1fe523713874d56d5da9e20429880af' \
+            "payload_files=${#files[@]}" > "$ROOT/PACKAGE_MANIFEST.txt"
+
+      - name: Validate payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=NMTPL_PC_UPDATE_R5/payload
+          python -m py_compile \
+            "$R/app/models.py" "$R/app/main.py" "$R/app/site_models.py" \
+            "$R/app/routers/webapp.py" "$R/app/routers/sites.py" \
+            "$R/app/services/tiom_location_erp.py" "$R/app/services/site_context.py" \
+            "$R/scripts/wb_gmail_worker.py"
+          node --check "$R/app/static/webapp.js"
+          node --check "$R/app/static/workspace.js"
+          node --check "$R/app/static/tiom_phase1.js"
+          node --check "$R/app/static/admin_master_ops.js"
+          grep -q "Lead Distance Control" "$R/app/static/workspace.js"
+          grep -q "Opening HMR" "$R/app/static/tiom_phase1.js"
+          grep -q "Report From" "$R/app/static/tiom_phase1.js"
+          grep -q "NMTPL_WB_TIME_FIRST_SHIFT_ROUTING_V4" "$R/scripts/wb_gmail_worker.py"
+          grep -q "role: Mapped" "$R/app/models.py"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v4
+        with:
+          name: NMTPL_PC_UPDATE_R5
+          path: NMTPL_PC_UPDATE_R5
+          if-no-files-found: error
+          retention-days: 7
