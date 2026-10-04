@@ -196,8 +196,8 @@ loadDashboard=function(){
 };
 const masterConfig={
   PERSON:{key:'persons',label:'People',fields:['id','name','role','department','rotationTeam','active']},
-  EQUIPMENT:{key:'equipment',label:'Equipment',fields:['id','vehicleNo','type','group','ownership','active']},
-  LOCATION:{key:'locations',label:'Locations',fields:['id','name','type','active']},
+  EQUIPMENT:{key:'equipment',label:'Equipment',fields:['id','doorNo','vehicleNo','type','group','makeModel','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg','ownership','active']},
+  LOCATION:{key:'locations',label:'Locations',fields:['id','name','role','type','active']},
   LOCATION_ALIAS:{key:'locationAliases',label:'Location aliases',fields:['id','locationId','direction','active']},
   WBHEADER:{key:'wbHeaders',label:'WB Header Mapping',fields:['field','header','occurrence','priority','required','active']},
   PRODUCT:{key:'products',label:'Products',fields:['id','name','active']},
@@ -206,7 +206,8 @@ const masterConfig={
 };
 const fieldLabels={
   id:'Record ID / Alias',name:'Name',role:'Role',department:'Department',rotationTeam:'Rotation team',active:'Status',
-  vehicleNo:'Vehicle number',type:'Type',group:'Equipment group',ownership:'Ownership',
+  doorNo:'Door number',vehicleNo:'Vehicle / registration number',type:'Type',group:'Equipment group',makeModel:'Make / model',ownership:'Ownership',
+  bucketCum:'Bucket capacity (cum)',ratedPayloadT:'Rated payload (t)',ratedOutputTph:'Rated output (t/hr)',standingTareKg:'Standing tare (kg)',
   vehicleRequired:'Vehicle required',capacity:'Capacity (litres)',locationId:'Canonical location',
   direction:'Alias use',field:'Standard WB field',header:'Excel header alias',occurrence:'Header occurrence',
   priority:'Priority',required:'Required header'
@@ -214,11 +215,13 @@ const fieldLabels={
 const categoryDefaults={
   'PERSON.role':['DRIVER','EXCAVATOR OPERATOR','LOADER OPERATOR','SUPERVISOR','HELPER'],
   'PERSON.department':['OPERATIONS','MAINTENANCE','ADMINISTRATION'],
-  'EQUIPMENT.type':['Tipper','Dumper','Excavator','Loader','Crusher','Screen','Dozer','Tanker'],
+  'EQUIPMENT.type':['Tipper','Dumper','Excavator','Loader','Crusher','Screen','Dozer','Grader','Drill','Tanker','Support'],
+  'EQUIPMENT.group':['LOADING','TRANSPORT','PROCESSING','EARTHMOVING','DRILLING','SUPPORT','HSD_TANKER','OTHER'],
   'EQUIPMENT.ownership':['OWN','HIRED'],
+  'LOCATION.role':['SOURCE','DESTINATION','BOTH','UNCLASSIFIED'],
   'LOCATION.type':['PIT','QUARRY','LOADING_POINT','ROM_PAD','CRUSHER','SCREEN','STACK','STOCKYARD','WASTE_DUMP','SIDING','WEIGHBRIDGE','WORKSHOP','OTHER']
 };
-const categoryLimits={'PERSON.role':80,'PERSON.department':80,'EQUIPMENT.type':60,'EQUIPMENT.ownership':30,'LOCATION.type':60};
+const categoryLimits={'PERSON.role':80,'PERSON.department':80,'EQUIPMENT.type':60,'EQUIPMENT.group':30,'EQUIPMENT.ownership':30,'LOCATION.role':20,'LOCATION.type':60};
 const wbCanonicalFields=[
   ['move','Movement number'],['date','Movement date'],['shift','Shift'],['vehicle','Vehicle'],
   ['matcode','Material code'],['matname','Material name'],
@@ -237,7 +240,7 @@ renderMasters=function(){
       <label>Status<select id="master_status" onchange="masterPage=0;renderMasterRows()"><option value="ALL">All records</option><option value="true">Active</option><option value="false">Inactive</option></select></label>
       ${S.boot.user.isManagement?'<button class="btn primary" onclick="editMaster(-1)">+ Add record</button>':''}
     </div>
-    <div class="panel note"><b>Location setup:</b> use PIT / QUARRY / LOADING_POINT for sources; CRUSHER / SCREEN / STACK / STOCKYARD / WASTE_DUMP for process/destination points. A location may appear in both source and destination flows. Use Location aliases when WB names/codes differ from field-entry names.</div>
+    <div class="panel note"><b>ERP master rule:</b> one Equipment Master is used everywhere. One Location Master holds Source / Destination / Both role plus the physical type. New WB locations are auto-created as WB_AUTO and can be reviewed here. Location aliases are only alternate WB spellings/codes, not duplicate locations.</div>
     <div id="master_body"><div class="loading">Loading masters…</div></div>`);
   loadMasters();
 };
@@ -267,7 +270,7 @@ function renderMasterRows(){
 function fieldOptions(t,f,current){
   if(f==='active')return [['true','Active'],['false','Inactive']];
   if(f==='vehicleRequired'||f==='required')return [['true','Yes'],['false','No']];
-  if(f==='group')return ['LOADING','TRANSPORT','PROCESSING','HSD_TANKER','OTHER'].map(x=>[x,x.replaceAll('_',' ')]);
+  if(f==='group')return ['LOADING','TRANSPORT','PROCESSING','EARTHMOVING','DRILLING','SUPPORT','HSD_TANKER','OTHER'].map(x=>[x,x.replaceAll('_',' ')]);
   if(f==='direction')return [['ANY','Any / both'],['SOURCE','Source only'],['DESTINATION','Destination only']];
   if(f==='locationId'){
     const rows=(S.mastersDesk.locations||[]).filter(x=>x.active);
@@ -298,8 +301,8 @@ function editMaster(index){
     let control;
     if(choices){
       control=`<select id="mf_${f}" ${['role','group','type','locationId','field'].includes(f)?'required':''}>${choices.map(([v,l])=>`<option value="${esc(v)}" ${String(row[f]??'')===String(v)?'selected':''}>${esc(l)}</option>`).join('')}</select>`;
-    }else if(['occurrence','priority','capacity'].includes(f)){
-      const min=f==='capacity'?'0.01':'1',step=f==='capacity'?'0.01':'1';
+    }else if(['occurrence','priority','capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg'].includes(f)){
+      const decimal=['capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg'].includes(f),min=decimal?'0':'1',step=decimal?'0.01':'1';
       control=`<input id="mf_${f}" value="${esc(row[f]??'')}" type="number" min="${min}" step="${step}" ${f==='capacity'?'required':''}>`;
     }else{
       const max=f==='header'?120:(f==='name'?(t==='LOCATION'?160:120):(f==='id'?(lengths[t]||80):80));
