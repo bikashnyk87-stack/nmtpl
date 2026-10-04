@@ -2412,18 +2412,37 @@ def _tiom_route_key(source_id, destination_id, route_mode):
 
 
 def _ensure_tiom_routes_from_leads(db):
-    """Backfill Route Master from existing approved Lead Master without changing lead history."""
+    """Backfill one Route Master row for each Source/Destination/WB path.
+
+    Lead Master can contain many Bench RL rows for the same route. Keep an
+    in-memory key set so repeated Bench RL entries never add duplicate pending
+    TiomRouteMaster objects before SQLAlchemy flushes the session.
+    """
+    existing_routes=list(db.scalars(select(TiomRouteMaster)))
+    known={
+        (
+            str(r.source_location_id or ''),
+            str(r.destination_location_id or ''),
+            str(r.route_mode or '').upper(),
+        )
+        for r in existing_routes
+    }
     created=0
-    for lead in db.scalars(select(TiomLeadDistance).where(TiomLeadDistance.active.is_(True))):
+    for lead in db.scalars(
+        select(TiomLeadDistance)
+        .where(TiomLeadDistance.active.is_(True))
+        .order_by(
+            TiomLeadDistance.source_location_id,
+            TiomLeadDistance.destination_location_id,
+            TiomLeadDistance.route_mode,
+            TiomLeadDistance.bench_rl_m,
+        )
+    ):
         mode=_tiom_route_mode(lead.route_mode)
         if not mode:
             continue
-        existing=db.scalar(select(TiomRouteMaster).where(
-            TiomRouteMaster.source_location_id==lead.source_location_id,
-            TiomRouteMaster.destination_location_id==lead.destination_location_id,
-            TiomRouteMaster.route_mode==mode,
-        ))
-        if existing:
+        key=(str(lead.source_location_id or ''),str(lead.destination_location_id or ''),mode)
+        if key in known:
             continue
         src=db.get(Location,lead.source_location_id); dst=db.get(Location,lead.destination_location_id)
         route_id=_tiom_route_key(lead.source_location_id,lead.destination_location_id,mode)
@@ -2437,6 +2456,7 @@ def _ensure_tiom_routes_from_leads(db):
             via_text='Production Weigh Bridge' if mode=='WITH_WB' else 'Direct / Without Production Weigh Bridge',
             active=True,entered_by='SYSTEM',entered_at=now_local()
         ))
+        known.add(key)
         created+=1
     if created:
         db.flush()
