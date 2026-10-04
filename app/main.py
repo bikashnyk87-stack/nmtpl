@@ -18,6 +18,7 @@ from app.maintenance_models import create_maintenance_tables
 from app.services.site_context import seed_default_sites_and_shifts
 from app.services.cloud_sync import init_sync_source
 from app.services.tiom_reference_seed import seed_tiom_temp_reference_data
+from app.services.tiom_location_erp import ensure_location_master_schema, ensure_location_master_roles
 
 @asynccontextmanager
 async def lifespan(app):
@@ -25,6 +26,9 @@ async def lifespan(app):
     # all FK targets (persons/equipment/locations/products/etc.) exist before
     # multisite and maintenance extension tables are created.
     Base.metadata.create_all(engine, checkfirst=True)
+    # Older PC/temp databases predate Location.role. Add it before any ORM query
+    # so Source/Destination/Both lives in the central Location Master.
+    ensure_location_master_schema(engine)
     create_multisite_tables(engine)
     create_maintenance_tables(engine)
     init_sync_source(engine)
@@ -33,6 +37,7 @@ async def lifespan(app):
     # Never auto-promote when multiple accounts exist.
     with SessionLocal() as db:
         ensure_wb_header_mapping(db)
+        ensure_location_master_roles(db)
         seed_default_sites_and_shifts(db)
         if os.getenv("TIOM_TEMP_REFERENCE_SEED", "").strip().lower() in {"1","true","yes","on"}:
             seed_counts=seed_tiom_temp_reference_data(db)
