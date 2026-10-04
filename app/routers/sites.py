@@ -87,9 +87,9 @@ MASTER_TEMPLATES = {
         "sample": ["L001", "L-01", "", "LOADER", "LOADER", "SDLG", "3.5", "", "OWN", "2026-09-30", "TRUE"],
     },
     "LOCATION": {
-        "headers": ["Code", "Location Name", "Location Type", "Distance KM", "Latitude", "Longitude", "Active"],
+        "headers": ["Code", "Location Name", "Role", "Location Type", "Distance KM", "Latitude", "Longitude", "Active"],
         "required": {"Code", "Location Name"},
-        "sample": ["RLS", "RLS Siding", "UNLOADING", "7.5", "", "", "TRUE"],
+        "sample": ["RLS", "RLS Siding", "DESTINATION", "UNLOADING", "7.5", "", "", "TRUE"],
     },
     "MATERIAL": {
         "headers": ["Code", "Material Name", "Material Group", "Default Unit", "Billable Unit", "Active"],
@@ -524,13 +524,34 @@ def confirm_master_import(site_id: str, batch_id: str, request: Request, db: Ses
             created += int(is_new); updated += int(not is_new)
 
         elif batch.master_type == "LOCATION":
-            code = str(item["Code"]).strip().upper(); key = f"{site_id}:{code}"
-            row = db.get(SiteLocation, key); is_new = row is None
-            if is_new:
-                row = SiteLocation(site_location_id=key, site_id=site_id, code=code, name=str(item["Location Name"]).strip(), active=_bool(item.get("Active"), True), import_batch_id=batch_id); db.add(row)
+            code = str(item["Code"]).strip().upper()
+            role = str(item.get("Role") or "UNCLASSIFIED").strip().upper()
+            if role not in {"UNCLASSIFIED", "SOURCE", "DESTINATION", "BOTH"}:
+                raise HTTPException(422, f"Invalid Location Role for {code}: {role}")
+            if site_id == "TIOM":
+                row = db.get(Location, code); is_new = row is None
+                if is_new:
+                    row = Location(
+                        location_id=code,
+                        location_name=str(item["Location Name"]).strip(),
+                        location_type=_clean(item.get("Location Type")),
+                        role=role,
+                        active=_bool(item.get("Active"), True),
+                    )
+                    db.add(row)
+                else:
+                    row.location_name = str(item["Location Name"]).strip()
+                    row.location_type = _clean(item.get("Location Type"))
+                    row.role = role
+                    row.active = _bool(item.get("Active"), row.active)
             else:
-                row.name = str(item["Location Name"]).strip(); row.active = _bool(item.get("Active"), row.active); row.import_batch_id=batch_id
-            row.location_type=_clean(item.get("Location Type")); row.distance_km=Decimal(str(item["Distance KM"])) if item.get("Distance KM") not in (None, "") else None; row.latitude=Decimal(str(item["Latitude"])) if item.get("Latitude") not in (None, "") else None; row.longitude=Decimal(str(item["Longitude"])) if item.get("Longitude") not in (None, "") else None
+                key = f"{site_id}:{code}"
+                row = db.get(SiteLocation, key); is_new = row is None
+                if is_new:
+                    row = SiteLocation(site_location_id=key, site_id=site_id, code=code, name=str(item["Location Name"]).strip(), active=_bool(item.get("Active"), True), import_batch_id=batch_id); db.add(row)
+                else:
+                    row.name = str(item["Location Name"]).strip(); row.active = _bool(item.get("Active"), row.active); row.import_batch_id=batch_id
+                row.location_type=_clean(item.get("Location Type")); row.distance_km=Decimal(str(item["Distance KM"])) if item.get("Distance KM") not in (None, "") else None; row.latitude=Decimal(str(item["Latitude"])) if item.get("Latitude") not in (None, "") else None; row.longitude=Decimal(str(item["Longitude"])) if item.get("Longitude") not in (None, "") else None
             created += int(is_new); updated += int(not is_new)
 
         elif batch.master_type == "MATERIAL":
@@ -649,6 +670,41 @@ def _single_master_save(db: Session, user, site_id: str, key: str, item: dict):
         name = str(item.get("name") or "").strip()
         if not code or not name:
             raise HTTPException(422, "Location code and name are required.")
+        role = str(item.get("role") or "UNCLASSIFIED").upper().strip()
+        if role not in {"UNCLASSIFIED", "SOURCE", "DESTINATION", "BOTH"}:
+            raise HTTPException(422, "Location role must be SOURCE, DESTINATION, BOTH or UNCLASSIFIED.")
+
+        if site_id == "TIOM":
+            row = db.get(Location, code)
+            created = row is None
+            before = None if created else {
+                "name": row.location_name, "role": row.role,
+                "locationType": row.location_type, "active": row.active,
+            }
+            if row is None:
+                row = Location(
+                    location_id=code,
+                    location_name=name,
+                    location_type=_clean(item.get("locationType")),
+                    role=role,
+                    active=_bool(item.get("active"), True),
+                )
+                db.add(row)
+            else:
+                row.location_name = name
+                row.location_type = _clean(item.get("locationType"))
+                row.role = role
+                row.active = _bool(item.get("active"), row.active)
+            after = {
+                "recordId": code, "code": code, "name": row.location_name,
+                "role": row.role or "UNCLASSIFIED",
+                "locationType": row.location_type,
+                "distanceKm": None, "latitude": None, "longitude": None,
+                "active": row.active,
+            }
+            _audit(db, user, site_id, "MASTER_SINGLE_UPSERT", "location", code, before=before, after=after)
+            return created, after
+
         record_id = f"{site_id}:{code}"
         row = db.get(SiteLocation, record_id)
         created = row is None
@@ -662,7 +718,7 @@ def _single_master_save(db: Session, user, site_id: str, key: str, item: dict):
         row.latitude = _num(item.get("latitude"), "Latitude")
         row.longitude = _num(item.get("longitude"), "Longitude")
         row.active = _bool(item.get("active"), row.active)
-        after = {"recordId": record_id, "code": code, "name": row.name, "locationType": row.location_type, "distanceKm": row.distance_km, "latitude": row.latitude, "longitude": row.longitude, "active": row.active}
+        after = {"recordId": record_id, "code": code, "name": row.name, "role": "UNCLASSIFIED", "locationType": row.location_type, "distanceKm": row.distance_km, "latitude": row.latitude, "longitude": row.longitude, "active": row.active}
         _audit(db, user, site_id, "MASTER_SINGLE_UPSERT", "site_location", record_id, before=before, after=after)
         return created, after
 
@@ -719,11 +775,27 @@ def list_master_records(site_id: str, master_type: str, request: Request, active
         return [{"machineId": e.machine_id, "vehicleNo": e.vehicle_no, "doorNo": e.door_no, "type": e.type, "group": e.group, "makeModel": e.make_model, "bucketCum": e.bucket_cum, "ratedPayloadT": e.rated_payload_t, "ownership": e.ownership, "party": a.party, "effectiveFrom": a.effective_from, "active": bool(e.active and a.active)} for e, a in rows]
 
     if key == "LOCATION":
+        if site_id == "TIOM":
+            stmt = select(Location)
+            if active_only:
+                stmt = stmt.where(Location.active.is_(True))
+            rows = db.scalars(stmt.order_by(Location.location_id).limit(limit)).all()
+            return [{
+                "recordId": x.location_id,
+                "code": x.location_id,
+                "name": x.location_name,
+                "role": (x.role or "UNCLASSIFIED"),
+                "locationType": x.location_type,
+                "distanceKm": None,
+                "latitude": None,
+                "longitude": None,
+                "active": x.active,
+            } for x in rows]
         stmt = select(SiteLocation).where(SiteLocation.site_id == site_id)
         if active_only:
             stmt = stmt.where(SiteLocation.active.is_(True))
         rows = db.scalars(stmt.order_by(SiteLocation.code).limit(limit)).all()
-        return [{"recordId": x.site_location_id, "code": x.code, "name": x.name, "locationType": x.location_type, "distanceKm": x.distance_km, "latitude": x.latitude, "longitude": x.longitude, "active": x.active} for x in rows]
+        return [{"recordId": x.site_location_id, "code": x.code, "name": x.name, "role": "UNCLASSIFIED", "locationType": x.location_type, "distanceKm": x.distance_km, "latitude": x.latitude, "longitude": x.longitude, "active": x.active} for x in rows]
 
     stmt = select(SiteMaterial).where(SiteMaterial.site_id == site_id)
     if active_only:
