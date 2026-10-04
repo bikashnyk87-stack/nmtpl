@@ -67,3 +67,11 @@
   .tiom-tabs button{white-space:nowrap;min-height:44px}
   .tiom-entry-table input[type=number]{font-variant-numeric:tabular-nums}
 }
+
+
+/* ERP productivity comparison: today vs cumulative range */
+.productivity-toolbar{display:flex;align-items:end;gap:6px;flex-wrap:wrap;margin:4px 0 6px!important;padding:5px 6px!important;background:#f5f8fa;border:1px solid #dce5ea;border-radius:5px}
+.productivity-toolbar label{font-size:8px!important;display:grid;gap:2px}.productivity-toolbar input,.productivity-toolbar select{height:25px!important;min-height:25px!important;font-size:8.5px!important}
+.prod-period-title{display:flex;justify-content:space-between;align-items:center;margin:6px 0 3px;padding:4px 7px;background:#e9f2f6;border-left:3px solid #41697e;font-size:8.5px}
+.prod-period-title.cumulative{background:#eef3e9;border-left-color:#5d7655}.prod-period-title span{font-size:7.5px;color:#536b78}
+.productivity-compare thead th{position:sticky;top:0;z-index:2}.productivity-card>div{min-width:0}.productivity-card small{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
