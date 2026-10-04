@@ -33,7 +33,10 @@ from app.models import (
 )
 from app.services.reconcile import auto_reconcile
 from app.services.time_context import TZ, now_local
-from app.services.wb_mapping import find_wb_sheet, row_value, build_location_resolver, expected_movement_date
+from app.services.wb_mapping import (
+    find_wb_sheet, row_value, build_location_resolver, ensure_wb_header_mapping,
+    expected_movement_date, operating_date_from_movement,
+)
 from app.services.tiom_location_erp import canonicalize_wb_rows
 
 CONFIG_PATH = ROOT / "config" / "wb_gmail_config.json"
@@ -264,28 +267,77 @@ def col(headers, *names):
     return None
 
 
-def infer_file_context(ws, header_row, idx):
-    dates, shifts = set(), set()
+def infer_file_context(ws, header_row, idx, db):
+    """Resolve operating date + shift using the proven PC-server C-shift rules."""
+    shifts = set()
+    rows_for_context = []
     for row in ws.iter_rows(min_row=header_row + 1, values_only=True):
         if not any(v not in (None, "") for v in row):
             continue
-        vehicle = row[idx["vehicle"]] if idx["vehicle"] is not None and idx["vehicle"] < len(row) else None
+        vehicle = row_value(row, idx, "vehicle")
         if not str(vehicle or "").strip():
             continue
-        if idx["date"] is not None and idx["date"] < len(row):
-            d = date_value(row[idx["date"]])
-            if d:
-                dates.add(d)
-        if idx["shift"] is not None and idx["shift"] < len(row):
-            raw = str(row[idx["shift"]] or "").strip().upper()
-            if raw[:1] in {"A", "B", "C"}:
-                shifts.add(raw[:1])
-    if len(dates) != 1:
-        raise ValueError(f"Expected exactly one Movement Date in the workbook; found {sorted(map(str, dates)) or 'none'}.")
-    if len(shifts) != 1:
-        raise ValueError(f"Expected exactly one Shift Code A/B/C in the workbook; found {sorted(shifts) or 'none'}.")
-    return next(iter(dates)), next(iter(shifts))
+        raw_shift = str(row_value(row, idx, "shift") or "").strip().upper()[:1]
+        if raw_shift in {"A", "B", "C"}:
+            shifts.add(raw_shift)
+        rows_for_context.append(row)
 
+    if len(shifts) != 1:
+        raise ValueError(
+            f"Expected exactly one Shift Code A/B/C in the workbook; "
+            f"found {sorted(shifts) or 'none'}."
+        )
+    shift = next(iter(shifts))
+    definition = db.get(ShiftMaster, shift)
+    if not definition or not definition.active:
+        raise ValueError(f"Shift {shift} is not active in Shift Master.")
+
+    operating_dates = set()
+    operating_date_counts = {}
+    raw_dates = set()
+    bad_rows = 0
+    for row in rows_for_context:
+        movement_day = date_value(row_value(row, idx, "date"))
+        clock = clock_value(row_value(row, idx, "time"))
+        if movement_day is not None:
+            raw_dates.add(movement_day)
+        op_day = operating_date_from_movement(movement_day, clock, definition)
+        if op_day:
+            operating_dates.add(op_day)
+            operating_date_counts[op_day] = operating_date_counts.get(op_day, 0) + 1
+        else:
+            bad_rows += 1
+
+    # AMNS can use one operating date for the full overnight C shift.
+    if (
+        shift == "C"
+        and len(operating_dates) != 1
+        and len(raw_dates) == 1
+        and bad_rows == 0
+    ):
+        operating_dates = set(raw_dates)
+
+    # Or use calendar dates with a tiny isolated anomaly. Preserve the PC >=95% guard.
+    if (
+        shift == "C"
+        and len(operating_dates) != 1
+        and operating_date_counts
+        and bad_rows == 0
+    ):
+        dominant_day, dominant_count = max(
+            operating_date_counts.items(), key=lambda item: item[1]
+        )
+        total_resolved = sum(operating_date_counts.values())
+        if total_resolved and (dominant_count / total_resolved) >= 0.95:
+            operating_dates = {dominant_day}
+
+    if len(operating_dates) != 1:
+        raise ValueError(
+            "Could not resolve one operating date from Movement Date + WB time. "
+            f"Resolved dates: {sorted(map(str, operating_dates)) or 'none'}; "
+            f"invalid rows: {bad_rows}."
+        )
+    return next(iter(operating_dates)), shift
 
 def audit(db, action, entity, entity_id, detail):
     db.add(AuditLog(
@@ -317,7 +369,7 @@ def quarantine_bytes(content, filename, reason):
     return target
 
 
-def ingest_xlsx(content, filename, cfg, message_id):
+def _ingest_single_shift_xlsx(content, filename, cfg, message_id):
     max_bytes = int(float(cfg.get("max_file_mb", 15)) * 1024 * 1024)
     if len(content) > max_bytes:
         raise ValueError(f"Attachment exceeds {cfg['max_file_mb']} MB.")
@@ -327,33 +379,42 @@ def ingest_xlsx(content, filename, cfg, message_id):
     except Exception as exc:
         raise ValueError("Unable to read XLSX file.") from exc
     with SessionLocal() as db:
+        ensure_wb_header_mapping(db)
         # Use the same DB-backed WB header mapping/sheet detection as the
         # working manual/base-server WB upload. This supports aliases,
         # duplicate headers and WB data living on a non-active worksheet.
         ws, header_row, idx, header_diag = find_wb_sheet(wb, db)
-        operating_date, shift = infer_file_context(ws, header_row, idx)
+        operating_date, shift = infer_file_context(ws, header_row, idx, db)
 
         definition = db.get(ShiftMaster, shift)
         if not definition or not definition.active:
             raise ValueError(f"Shift {shift} is not active in Shift Master.")
 
-        duplicate = db.scalar(select(WbImportBatch).where(
+        existing_same = list(db.scalars(select(WbImportBatch).where(
             WbImportBatch.operating_date == operating_date,
             WbImportBatch.shift == shift,
             WbImportBatch.file_hash == digest,
-        ))
-        if duplicate:
+            WbImportBatch.status.in_(["PREVIEW", "CONFIRMED"]),
+        )))
+        confirmed_same = next(
+            (batch for batch in existing_same if batch.status == "CONFIRMED"),
+            None,
+        )
+        if confirmed_same:
             archive = archive_bytes(content, filename, operating_date, shift, digest)
             return {
                 "outcome": "DUPLICATE",
-                "batch_id": duplicate.batch_id,
+                "batch_id": confirmed_same.batch_id,
                 "date": operating_date.isoformat(),
                 "shift": shift,
-                "valid": duplicate.valid_rows,
-                "review": duplicate.review_rows,
+                "valid": confirmed_same.valid_rows,
+                "review": confirmed_same.review_rows,
                 "archive": str(archive),
-                "message": "Exact WB file already exists in SQL; no rows were inserted.",
+                "message": "Exact WB file is already confirmed in SQL; no rows were inserted.",
             }
+        for old_preview in existing_same:
+            if old_preview.status == "PREVIEW":
+                old_preview.status = "REPLACED"
 
         eq = list(db.scalars(select(Equipment)))
         vehicle_map = {norm_vehicle(e.machine_id): e.machine_id for e in eq}
@@ -379,6 +440,7 @@ def ingest_xlsx(content, filename, cfg, message_id):
         total_net = Decimal("0")
         unmapped_vehicles = set()
         tolerance = Decimal(str(cfg.get("weight_tolerance_kg", 5)))
+        new_wb_rows = []
 
         for rno, row in enumerate(ws.iter_rows(min_row=header_row + 1, values_only=True), header_row + 1):
             if not any(v not in (None, "") for v in row):
@@ -406,7 +468,19 @@ def ingest_xlsx(content, filename, cfg, message_id):
                 issues.append("Invalid or out-of-shift GW Created Time")
             else:
                 expected_day = expected_movement_date(operating_date, clock, definition)
-                if row_day and expected_day and row_day != expected_day:
+                midnight_date_exception = (
+                    shift == "C"
+                    and clock is not None
+                    and definition.end_time <= definition.start_time
+                    and clock < definition.end_time
+                    and row_day == operating_date
+                )
+                if (
+                    row_day
+                    and expected_day
+                    and row_day != expected_day
+                    and not midnight_date_exception
+                ):
                     issues.append(
                         f"Movement Date {row_day} != expected calendar date {expected_day} "
                         f"for operating date {operating_date} / Shift {shift}"
@@ -564,6 +638,450 @@ def ingest_xlsx(content, filename, cfg, message_id):
         }
 
 
+
+# NMTPL_WB_TIME_FIRST_SHIFT_ROUTING_V4
+def _mixed_shift_row_value(row, idx, key):
+    i = idx.get(key)
+    return row[i] if i is not None and i < len(row) else None
+
+
+def _mixed_shift_code(row, idx):
+    raw = str(_mixed_shift_row_value(row, idx, "shift") or "").strip().upper()
+    return raw[:1] if raw[:1] in {"A", "B", "C"} else ""
+
+
+def _mixed_shift_make_subset(ws, header_row, selected_rows):
+    from openpyxl import Workbook
+    out = Workbook()
+    dst = out.active
+    dst.title = ws.title or "Sheet1"
+    for row in ws.iter_rows(min_row=1, max_row=header_row, values_only=True):
+        dst.append(list(row))
+    for _, row in selected_rows:
+        dst.append(list(row))
+    buf = BytesIO()
+    out.save(buf)
+    return buf.getvalue()
+
+
+def _mixed_shift_existing_movement(db, operating_date, shift, movement_no):
+    if operating_date is None or not shift or not movement_no:
+        return None
+    return db.scalar(
+        select(WbMovement)
+        .join(WbImportBatch, WbMovement.batch_id == WbImportBatch.batch_id)
+        .where(
+            WbMovement.operating_date == operating_date,
+            WbMovement.shift == shift,
+            WbMovement.movement_no == movement_no,
+            WbImportBatch.status == "CONFIRMED",
+        )
+    )
+
+
+def _mixed_shift_vehicle_map(db):
+    eq = list(db.scalars(select(Equipment)))
+    vehicle_map = {norm_vehicle(e.machine_id): e.machine_id for e in eq}
+    vehicle_map.update({
+        norm_vehicle(e.vehicle_no): e.machine_id
+        for e in eq if getattr(e, "vehicle_no", None)
+    })
+    for alias in db.scalars(select(VehicleAlias).where(VehicleAlias.active)):
+        vehicle_map[norm_vehicle(alias.alias)] = alias.machine_id
+    return vehicle_map
+
+
+def _mixed_shift_append_missing_rows(rows, idx, filename, message_id, cfg):
+    from collections import defaultdict
+    grouped = defaultdict(list)
+    for rno, row, target_shift in rows:
+        if target_shift in {"A", "B", "C"}:
+            grouped[target_shift].append((rno, row))
+
+    summary = {
+        "detected": sum(len(v) for v in grouped.values()),
+        "duplicates": 0,
+        "added_valid": 0,
+        "added_review": 0,
+        "errors": [],
+        "by_shift": {},
+    }
+
+    for target_shift, shift_rows in sorted(grouped.items()):
+        shift_summary = {
+            "detected": len(shift_rows),
+            "duplicates": 0,
+            "added_valid": 0,
+            "added_review": 0,
+        }
+        try:
+            with SessionLocal() as db:
+                definition = db.get(ShiftMaster, target_shift)
+                if not definition or not definition.active:
+                    raise ValueError(f"Shift {target_shift} is not active in Shift Master.")
+
+                vehicle_map = _mixed_shift_vehicle_map(db)
+                location_resolver = build_location_resolver(db)
+                tolerance = Decimal(str(cfg.get("weight_tolerance_kg", 5)))
+                prepared = []
+
+                for rno, row in shift_rows:
+                    move = str(_mixed_shift_row_value(row, idx, "move") or rno).strip()
+                    vehicle_raw = str(_mixed_shift_row_value(row, idx, "vehicle") or "").strip()
+                    row_day = date_value(_mixed_shift_row_value(row, idx, "date"))
+                    clock = clock_value(_mixed_shift_row_value(row, idx, "time"))
+                    op_day = operating_date_from_movement(row_day, clock, definition)
+
+                    if _mixed_shift_existing_movement(
+                        db, op_day, target_shift, move
+                    ) is not None:
+                        shift_summary["duplicates"] += 1
+                        summary["duplicates"] += 1
+                        continue
+
+                    issues = []
+                    warnings = []
+                    if op_day is None:
+                        issues.append("Movement Date missing/invalid")
+
+                    weigh_at = wb_weigh_at(op_day, definition, clock) if op_day else None
+                    if not weigh_at:
+                        issues.append(f"GW Created Time does not belong to Shift {target_shift}")
+
+                    tare = decimal_value(_mixed_shift_row_value(row, idx, "tare"))
+                    gross = decimal_value(_mixed_shift_row_value(row, idx, "gross"))
+                    net = decimal_value(_mixed_shift_row_value(row, idx, "net"))
+                    tare = tare if tare is not None else Decimal("0")
+                    if gross is None and net is not None:
+                        gross = tare + net
+                    if net is None and gross is not None and gross >= tare:
+                        net = gross - tare
+                    gross = gross if gross is not None else Decimal("0")
+                    if gross <= 0 or net is None or net <= 0 or gross < tare:
+                        issues.append("Invalid tare/gross/net weight")
+                    elif abs((gross - tare) - net) > tolerance:
+                        issues.append(
+                            f"Gross-Tare differs from Net by more than {tolerance} kg"
+                        )
+
+                    source_code_raw = str(
+                        _mixed_shift_row_value(row, idx, "source_code") or ""
+                    ).strip()
+                    source_name_raw = str(
+                        _mixed_shift_row_value(row, idx, "source_name") or ""
+                    ).strip()
+                    dest_code_raw = str(
+                        _mixed_shift_row_value(row, idx, "dest_code") or ""
+                    ).strip()
+                    dest_name_raw = str(
+                        _mixed_shift_row_value(row, idx, "dest_name") or ""
+                    ).strip()
+                    source = location_resolver.resolve(
+                        source_code_raw, source_name_raw, "SOURCE"
+                    )
+                    dest = location_resolver.resolve(
+                        dest_code_raw, dest_name_raw, "DESTINATION"
+                    )
+                    if not source:
+                        issues.append("Source location missing")
+                    if not dest:
+                        issues.append("Destination location missing")
+
+                    vehicle_id = vehicle_map.get(norm_vehicle(vehicle_raw))
+                    if not vehicle_id:
+                        warnings.append("Vehicle not mapped to equipment master")
+
+                    prepared.append({
+                        "rno": rno,
+                        "row": row,
+                        "move": move,
+                        "vehicle_raw": vehicle_raw,
+                        "vehicle_id": vehicle_id,
+                        "operating_date": op_day,
+                        "weigh_at": weigh_at,
+                        "tare": tare,
+                        "gross": gross,
+                        "net": net or Decimal("0"),
+                        "source_raw": source_code_raw or source_name_raw or None,
+                        "dest_raw": dest_code_raw or dest_name_raw or None,
+                        "status": "REVIEW" if issues else "VALID",
+                        "issue": "; ".join(issues + warnings) or None,
+                    })
+
+                by_date = defaultdict(list)
+                for item in prepared:
+                    by_date[item["operating_date"]].append(item)
+
+                for op_day, items in by_date.items():
+                    if op_day is None:
+                        shift_summary["added_review"] += len(items)
+                        summary["added_review"] += len(items)
+                        summary["errors"].append(
+                            f"{target_shift}: {len(items)} row(s) have no valid operating date"
+                        )
+                        continue
+
+                    target_batch = db.scalar(
+                        select(WbImportBatch)
+                        .where(
+                            WbImportBatch.operating_date == op_day,
+                            WbImportBatch.shift == target_shift,
+                            WbImportBatch.status == "CONFIRMED",
+                        )
+                        .order_by(WbImportBatch.confirmed_at.desc())
+                    )
+
+                    if target_batch is None:
+                        valid_count = sum(1 for x in items if x["status"] == "VALID")
+                        review_count = sum(1 for x in items if x["status"] == "REVIEW")
+                        batch_status = (
+                            "CONFIRMED"
+                            if valid_count > 0 and review_count == 0
+                            else "PREVIEW"
+                        )
+                        supplemental_hash = hashlib.sha256(
+                            (
+                                f"{message_id}|{filename}|{op_day}|{target_shift}|"
+                                + "|".join(x["move"] for x in items)
+                            ).encode("utf-8")
+                        ).hexdigest()
+                        target_batch = WbImportBatch(
+                            batch_id=str(uuid4()),
+                            operating_date=op_day,
+                            shift=target_shift,
+                            file_name=f"{filename} [ROUTED-{target_shift}]",
+                            file_hash=supplemental_hash,
+                            status=batch_status,
+                            valid_rows=0,
+                            review_rows=0,
+                        )
+                        if batch_status == "CONFIRMED":
+                            target_batch.confirmed_at = now_local()
+                        db.add(target_batch)
+                        db.flush()
+
+                    new_rows = []
+                    for item in items:
+                        if _mixed_shift_existing_movement(
+                            db, op_day, target_shift, item["move"]
+                        ) is not None:
+                            shift_summary["duplicates"] += 1
+                            summary["duplicates"] += 1
+                            continue
+
+                        movement = WbMovement(
+                            movement_key=(
+                                f"{target_batch.batch_id}:ROUTED:"
+                                f"{item['move']}:{item['rno']}"
+                            ),
+                            batch_id=target_batch.batch_id,
+                            operating_date=op_day,
+                            shift=target_shift,
+                            movement_no=item["move"],
+                            vehicle_raw=item["vehicle_raw"],
+                            vehicle_id=item["vehicle_id"],
+                            material_code=str(
+                                _mixed_shift_row_value(item["row"], idx, "matcode") or ""
+                            ).strip() or None,
+                            material_name=str(
+                                _mixed_shift_row_value(item["row"], idx, "matname") or ""
+                            ).strip() or None,
+                            source_raw=item["source_raw"],
+                            destination_raw=item["dest_raw"],
+                            tare_kg=item["tare"],
+                            gross_kg=item["gross"],
+                            net_kg=item["net"],
+                            weigh_at=item["weigh_at"] or datetime.combine(
+                                op_day, definition.start_time, TZ
+                            ),
+                            row_status=item["status"],
+                            issue=item["issue"],
+                        )
+                        db.add(movement)
+                        new_rows.append(movement)
+
+                        if item["status"] == "VALID":
+                            target_batch.valid_rows = int(target_batch.valid_rows or 0) + 1
+                            shift_summary["added_valid"] += 1
+                            summary["added_valid"] += 1
+                        else:
+                            target_batch.review_rows = int(target_batch.review_rows or 0) + 1
+                            shift_summary["added_review"] += 1
+                            summary["added_review"] += 1
+
+                        audit(
+                            db,
+                            "WB_MIXED_SHIFT_ROUTE",
+                            "wb_movement",
+                            item["move"],
+                            {
+                                "gmail_message_id": message_id,
+                                "source_file": filename,
+                                "target_date": op_day,
+                                "target_shift": target_shift,
+                                "source_row": item["rno"],
+                                "status": item["status"],
+                                "issue": item["issue"],
+                            },
+                        )
+
+                    db.flush()
+                    if new_rows:
+                        canonicalize_wb_rows(db, new_rows)
+                    if target_batch.status == "CONFIRMED":
+                        try:
+                            auto_reconcile(db, op_day, target_shift)
+                        except Exception:
+                            logger.exception(
+                                "Mixed-shift reconciliation failed: date=%s shift=%s",
+                                op_day, target_shift,
+                            )
+                db.commit()
+        except Exception as exc:
+            logger.exception("Mixed-shift routing failed for target shift %s", target_shift)
+            summary["errors"].append(
+                f"{target_shift}: {type(exc).__name__}: {exc}"
+            )
+        summary["by_shift"][target_shift] = shift_summary
+    return summary
+
+
+def ingest_xlsx(content, filename, cfg, message_id):
+    """Time-first WB Gmail ingestion restored from the working PC server."""
+    from collections import Counter
+
+    try:
+        wb = load_workbook(BytesIO(content), data_only=True, read_only=True)
+    except Exception:
+        return _ingest_single_shift_xlsx(content, filename, cfg, message_id)
+
+    with SessionLocal() as db:
+        ensure_wb_header_mapping(db)
+        ws, header_row, idx, _ = find_wb_sheet(wb, db)
+        definitions = {
+            str(d.shift).strip().upper(): d
+            for d in db.scalars(select(ShiftMaster).where(ShiftMaster.active))
+            if str(d.shift or "").strip().upper() in {"A", "B", "C"}
+        }
+
+    def clock_belongs(definition, clock):
+        if clock is None or definition is None:
+            return False
+        start, end = definition.start_time, definition.end_time
+        if end > start:
+            return start <= clock < end
+        return clock >= start or clock < end
+
+    def shift_from_clock(clock):
+        matches = [
+            code for code, definition in definitions.items()
+            if clock_belongs(definition, clock)
+        ]
+        return matches[0] if len(matches) == 1 else ""
+
+    rows = []
+    raw_counts = Counter()
+    resolved_counts = Counter()
+    corrections = []
+    shift_index = idx.get("shift")
+
+    for rno, row in enumerate(
+        ws.iter_rows(min_row=header_row + 1, values_only=True),
+        header_row + 1,
+    ):
+        vehicle = str(_mixed_shift_row_value(row, idx, "vehicle") or "").strip()
+        if not vehicle:
+            continue
+        raw_code = _mixed_shift_code(row, idx)
+        if raw_code:
+            raw_counts[raw_code] += 1
+        clock = clock_value(_mixed_shift_row_value(row, idx, "time"))
+        effective_code = shift_from_clock(clock) or raw_code
+
+        row_list = list(row)
+        if effective_code and shift_index is not None:
+            old_code = str(row_list[shift_index] or "").strip().upper()[:1]
+            if old_code != effective_code:
+                row_list[shift_index] = effective_code
+                corrections.append({
+                    "row": rno,
+                    "movement": str(_mixed_shift_row_value(row, idx, "move") or rno).strip(),
+                    "vehicle": vehicle,
+                    "raw_shift": raw_code or old_code or "?",
+                    "time": str(clock) if clock is not None else "",
+                    "corrected_shift": effective_code,
+                })
+
+        corrected_row = tuple(row_list)
+        rows.append((rno, corrected_row, effective_code))
+        if effective_code:
+            resolved_counts[effective_code] += 1
+
+    if not rows or not resolved_counts:
+        return _ingest_single_shift_xlsx(content, filename, cfg, message_id)
+
+    if len(resolved_counts) == 1:
+        if not corrections:
+            return _ingest_single_shift_xlsx(content, filename, cfg, message_id)
+        only_shift = next(iter(resolved_counts))
+        normalized_bytes = _mixed_shift_make_subset(
+            ws, header_row, [(rno, row) for rno, row, _ in rows]
+        )
+        result = _ingest_single_shift_xlsx(
+            normalized_bytes,
+            f"{filename} [TIME-NORMALIZED-{only_shift}]",
+            cfg,
+            message_id,
+        )
+        result["shift_code_corrections"] = corrections
+        result["raw_shift_counts"] = dict(raw_counts)
+        result["resolved_shift_counts"] = dict(resolved_counts)
+        result["message"] = (
+            str(result.get("message", "")).rstrip()
+            + f" Shift-code normalization: {len(corrections)} row(s) corrected by GW Created Time."
+        )
+        return result
+
+    primary_shift, _ = resolved_counts.most_common(1)[0]
+    primary_rows = [
+        (rno, row) for rno, row, code in rows
+        if code == primary_shift or not code
+    ]
+    other_rows = [
+        (rno, row, code) for rno, row, code in rows
+        if code and code != primary_shift
+    ]
+    primary_bytes = _mixed_shift_make_subset(ws, header_row, primary_rows)
+    result = _ingest_single_shift_xlsx(
+        primary_bytes,
+        f"{filename} [TIME-PRIMARY-{primary_shift}]",
+        cfg,
+        message_id,
+    )
+    routed = _mixed_shift_append_missing_rows(
+        other_rows, idx, filename, message_id, cfg
+    )
+    result["mixed_shift"] = {
+        "raw_counts": dict(raw_counts),
+        "resolved_counts": dict(resolved_counts),
+        "primary_shift": primary_shift,
+        "other_rows": len(other_rows),
+        "shift_code_corrections": corrections,
+        "routed": routed,
+    }
+    result["review"] = int(result.get("review", 0)) + int(
+        routed.get("added_review", 0)
+    ) + len(routed.get("errors", []))
+    result["message"] = (
+        str(result.get("message", "")).rstrip()
+        + f" Time-first routing: {len(corrections)} Shift Code correction(s); "
+        + f"{len(other_rows)} row(s) genuinely belonged to other shift(s); "
+        + f"{routed.get('duplicates', 0)} already existed and were ignored; "
+        + f"{routed.get('added_valid', 0)} added to their correct shift; "
+        + f"{routed.get('added_review', 0)} routed for review."
+    )
+    return result
+
 def apply_labels(service, message_id, add_ids, remove_ids=None):
     service.users().messages().modify(
         userId="me",
@@ -610,26 +1128,30 @@ def process_message(service, message, cfg, labels):
     add = []
     remove = []
 
+    processed_id = labels[cfg["processed_label"]]
+    duplicate_id = labels[cfg["duplicate_label"]]
+    error_id = labels[cfg["error_label"]]
+    review_required_id = labels[cfg["review_required_label"]]
+    review_rows_id = labels[cfg["review_rows_label"]]
+
     if "ERROR" in outcomes:
-        add.append(labels[cfg["error_label"]])
+        add.append(error_id)
+        remove.extend([processed_id, duplicate_id, review_required_id, review_rows_id])
     elif "REVIEW_REQUIRED" in outcomes:
-        add.append(labels[cfg["review_required_label"]])
+        add.append(review_required_id)
+        remove.extend([error_id, processed_id, duplicate_id, review_rows_id])
     elif outcomes == {"DUPLICATE"}:
-        add.append(labels[cfg["duplicate_label"]])
-        remove.extend([
-            labels[cfg["error_label"]],
-            labels[cfg["review_required_label"]],
-        ])
+        add.append(duplicate_id)
+        remove.extend([error_id, processed_id, review_required_id, review_rows_id])
         if cfg.get("archive_success", True):
             remove.extend(["INBOX", "UNREAD"])
     else:
-        add.append(labels[cfg["processed_label"]])
-        remove.extend([
-            labels[cfg["error_label"]],
-            labels[cfg["review_required_label"]],
-        ])
+        add.append(processed_id)
+        remove.extend([error_id, duplicate_id, review_required_id])
         if any(int(r.get("review", 0)) > 0 for r in results):
-            add.append(labels[cfg["review_rows_label"]])
+            add.append(review_rows_id)
+        else:
+            remove.append(review_rows_id)
         if cfg.get("archive_success", True):
             remove.extend(["INBOX", "UNREAD"])
 
