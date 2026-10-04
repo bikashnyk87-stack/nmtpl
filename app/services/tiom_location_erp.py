@@ -50,15 +50,15 @@ def ensure_location_master_roles(db: Session) -> None:
                 loc.role = merged
                 changed = True
 
-    # Existing aliases also contain trustworthy SOURCE / DESTINATION evidence.
+    # Direction-specific aliases are evidence. ANY is only an alias-matching
+    # rule and must not classify the canonical Location as BOTH.
     for alias in db.scalars(select(LocationAlias).where(LocationAlias.active.is_(True))):
         loc = locations.get(alias.location_id)
         if not loc:
             continue
         direction = str(alias.direction or "").upper()
-        incoming = "BOTH" if direction == "ANY" else direction
-        if incoming in {"SOURCE", "DESTINATION", "BOTH"}:
-            merged = _merge_role(loc.role, incoming)
+        if direction in {"SOURCE", "DESTINATION"}:
+            merged = _merge_role(loc.role, direction)
             if loc.role != merged:
                 loc.role = merged
                 changed = True
