@@ -36,7 +36,11 @@ class Location(Base):
     __tablename__ = "locations"
     location_id: Mapped[str] = mapped_column(String(80), primary_key=True)
     location_name: Mapped[str] = mapped_column(String(160), nullable=False)
+    # Physical/operational type (PIT, DUMP, CRUSHER, STACK, etc.).
     location_type: Mapped[str | None] = mapped_column(String(60))
+    # ERP usage role. One central Location Master is authoritative for whether
+    # a location can be used as Source, Destination, both, or is unclassified.
+    role: Mapped[str | None] = mapped_column(String(20), index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
 
 class Product(Base):
