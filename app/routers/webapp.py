@@ -3210,8 +3210,48 @@ def _tiom_shift_report_data(db, day, sh, include_draft=True):
             'remarks':report.remarks or '' if report else '','baselineDate':str(base_date),'lines':lines,
             'warnings':bundle['warnings'],'wbBatchId':bundle['wbBatchId'],'wbRows':bundle['wbRows']}
 
+def _tiom_shift_range_report(db, from_day, to_day, report_shift='ALL'):
+    if to_day < from_day:
+        raise HTTPException(422,'Report To date cannot be before From date.')
+    report_shift=str(report_shift or 'ALL').upper()
+    active_shifts=[x.shift for x in db.scalars(select(ShiftMaster).where(ShiftMaster.active).order_by(ShiftMaster.start_time))]
+    shifts=active_shifts if report_shift=='ALL' else [report_shift]
+    totals={code:Decimal('0') for _,code,_,_ in TIOM_SHIFT_REPORT_LINES}
+    sources={code:{} for _,code,_,_ in TIOM_SHIFT_REPORT_LINES}
+    warnings=[]; wb_rows=0; periods=0
+    cur=from_day
+    while cur<=to_day:
+        for sh in shifts:
+            bundle=_tiom_shift_ftd_bundle(db,cur,sh,False)
+            periods+=1; wb_rows+=int(bundle.get('wbRows') or 0)
+            for code,val in (bundle.get('values') or {}).items():
+                if code in totals: totals[code]+=Decimal(str(val or 0))
+            for code,parts in (bundle.get('sources') or {}).items():
+                for src,val in (parts or {}).items():
+                    sources.setdefault(code,{})[src]=sources.setdefault(code,{}).get(src,Decimal('0'))+Decimal(str(val or 0))
+            warnings.extend(bundle.get('warnings') or [])
+        cur+=timedelta(days=1)
+    lines=[]
+    for sec,code,label,derived in TIOM_SHIFT_REPORT_LINES:
+        parts=sources.get(code,{})
+        source='+'.join(k for k in ['WB','MIS','MANUAL','CALC'] if parts.get(k)) or '—'
+        lines.append({'section':sec,'code':code,'label':label,'derived':derived,'qty':float(totals.get(code,0)),
+                      'source':source,'sourceBreakdown':{k:float(v) for k,v in parts.items()}})
+    return {'fromDate':str(from_day),'toDate':str(to_day),'shift':report_shift,'periods':periods,'wbRows':wb_rows,
+            'lines':lines,'warnings':sorted(set(warnings))}
+
+
 def get_tiom_shift_production_desk(db,user,p):
-    require(user,'PRODUCTION'); day,sh,_=_tiom_context(db,user,p); _ensure_tiom_trip_factors(db,user)
+    require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p); _ensure_tiom_trip_factors(db,user)
+    report_from=_parse_ui_date_v2(p.get('reportFrom'),'report from date') if p.get('reportFrom') else day.replace(day=1)
+    report_to=_parse_ui_date_v2(p.get('reportTo'),'report to date') if p.get('reportTo') else day
+    report_shift=str(p.get('reportShift') or 'ALL').upper()
+    active_shifts={x.shift for x in db.scalars(select(ShiftMaster).where(ShiftMaster.active))}
+    if report_shift!='ALL' and report_shift not in active_shifts:
+        raise HTTPException(422,'Choose a valid report shift.')
+    if report_to < report_from:
+        raise HTTPException(422,'Report To date cannot be before From date.')
+
     report=db.scalar(select(TiomShiftProductionReport).where(TiomShiftProductionReport.operating_date==day,TiomShiftProductionReport.shift==sh))
     movements=[]
     if report:
@@ -3230,9 +3270,12 @@ def get_tiom_shift_production_desk(db,user,p):
                         'autoSource':'+'.join(k for k in ('WB','MIS') if parts.get(k))})
     base,_=_tiom_baseline_map(db,day)
     baseline_rows=[{'code':code,'label':label,'value':float(base.get(code,0))} for _,code,label,_ in TIOM_SHIFT_REPORT_LINES]
-    return {'date':str(day),'shift':sh,'reportId':report.report_id if report else '','status':report.status if report else 'NEW',
+    return {'date':str(day),'shift':sh,'reportFrom':str(report_from),'reportTo':str(report_to),'reportShift':report_shift,
+            'reportId':report.report_id if report else '','status':report.status if report else 'NEW',
             'remarks':report.remarks or '' if report else '','movements':movements,'movementOptions':options,'locations':locations,
-            'report':_tiom_shift_report_data(db,day,sh,True),'baselineRows':baseline_rows,'managementRecipients':_tiom_management_recipients(db)}
+            'report':_tiom_shift_report_data(db,day,sh,True),
+            'rangeReport':_tiom_shift_range_report(db,report_from,report_to,report_shift),
+            'baselineRows':baseline_rows,'managementRecipients':_tiom_management_recipients(db)}
 
 
 def save_tiom_shift_production(db,user,p,submit=False):
