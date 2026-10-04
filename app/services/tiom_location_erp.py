@@ -101,7 +101,7 @@ def upsert_location_role(db: Session, location_id: str, role: str, entered_by: s
 
 
 def location_options(db: Session, role: str) -> list[dict]:
-    ensure_location_master_roles(db)
+    # Roles are migrated at startup/WB canonicalization. Normal screens only read the central master.
     role = str(role or "").strip().upper()
     if role not in {"SOURCE", "DESTINATION"}:
         raise ValueError("Location role must be SOURCE or DESTINATION.")

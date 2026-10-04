@@ -625,6 +625,93 @@ class TiomSourceDeployment(Base):
     )
 
 
+class TiomSourceContext(Base):
+    """One face/bench context per TIOM source and shift.
+
+    Bench RL is captured once here and inherited by all trips from the source;
+    it is never repeated on every driver/MIS trip row.
+    """
+    __tablename__ = "tiom_source_context"
+
+    context_id: Mapped[str] = mapped_column(String(90), primary_key=True)
+    operating_date: Mapped[date] = mapped_column(Date, index=True)
+    shift: Mapped[str] = mapped_column(String(20), index=True)
+    source_location_id: Mapped[str] = mapped_column(ForeignKey("locations.location_id"), index=True)
+    bench_rl_m: Mapped[int] = mapped_column(Integer, index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    notes: Mapped[str | None] = mapped_column(String(300))
+    entered_by: Mapped[str] = mapped_column(String(60))
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint("operating_date", "shift", "source_location_id", name="uq_tiom_source_context"),
+        Index("ix_tiom_source_context_lookup", "operating_date", "shift", "source_location_id", "active"),
+    )
+
+
+class TiomRouteMaster(Base):
+    """Approved haul route. Lead varies by Bench RL and lives in Lead Master."""
+    __tablename__ = "tiom_route_master"
+
+    route_id: Mapped[str] = mapped_column(String(180), primary_key=True)
+    route_name: Mapped[str] = mapped_column(String(180), nullable=False)
+    source_location_id: Mapped[str] = mapped_column(ForeignKey("locations.location_id"), index=True)
+    destination_location_id: Mapped[str] = mapped_column(ForeignKey("locations.location_id"), index=True)
+    route_mode: Mapped[str] = mapped_column(String(20), index=True)  # WITH_WB / WITHOUT_WB
+    material_scope: Mapped[str | None] = mapped_column(String(30), index=True)
+    via_text: Mapped[str | None] = mapped_column(String(180))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    entered_by: Mapped[str] = mapped_column(String(60), default="SYSTEM")
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint("source_location_id", "destination_location_id", "route_mode", name="uq_tiom_route_master"),
+        Index("ix_tiom_route_lookup", "source_location_id", "destination_location_id", "route_mode", "active"),
+    )
+
+
+class TiomDrillSet(Base):
+    """One operational drill set = drill machine + compressor, each with its own HMR."""
+    __tablename__ = "tiom_drill_set"
+
+    drill_set_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    drill_set_name: Mapped[str] = mapped_column(String(180), nullable=False)
+    drill_machine_id: Mapped[str] = mapped_column(ForeignKey("equipment.machine_id"), index=True)
+    compressor_machine_id: Mapped[str] = mapped_column(ForeignKey("equipment.machine_id"), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    notes: Mapped[str | None] = mapped_column(String(300))
+    entered_by: Mapped[str] = mapped_column(String(60), default="SYSTEM")
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint("drill_machine_id", name="uq_tiom_drill_set_drill"),
+        UniqueConstraint("compressor_machine_id", name="uq_tiom_drill_set_compressor"),
+    )
+
+
+class TiomDrillingShift(Base):
+    """Shift drilling production matching the September drilling workbook structure."""
+    __tablename__ = "tiom_drilling_shift"
+
+    drilling_id: Mapped[str] = mapped_column(String(90), primary_key=True)
+    operating_date: Mapped[date] = mapped_column(Date, index=True)
+    shift: Mapped[str] = mapped_column(String(20), index=True)
+    drill_set_id: Mapped[str] = mapped_column(ForeignKey("tiom_drill_set.drill_set_id"), index=True)
+    source_location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.location_id"), index=True)
+    holes: Mapped[int] = mapped_column(Integer, default=0)
+    rom_ob_meterage: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("0"))
+    bhj_bhq_meterage: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("0"))
+    drill_open_hmr: Mapped[Decimal | None] = mapped_column(Numeric(16, 3))
+    drill_close_hmr: Mapped[Decimal | None] = mapped_column(Numeric(16, 3))
+    compressor_open_hmr: Mapped[Decimal | None] = mapped_column(Numeric(16, 3))
+    compressor_close_hmr: Mapped[Decimal | None] = mapped_column(Numeric(16, 3))
+    breakdown_hours: Mapped[Decimal | None] = mapped_column(Numeric(10, 2))
+    remarks: Mapped[str | None] = mapped_column(String(500))
+    entered_by: Mapped[str] = mapped_column(String(60))
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    __table_args__ = (
+        UniqueConstraint("operating_date", "shift", "drill_set_id", name="uq_tiom_drilling_shift"),
+        Index("ix_tiom_drilling_report", "operating_date", "shift", "drill_set_id"),
+    )
+
+
 class TiomShiftProductionReport(Base):
     """One TIOM management shift-production document per operating date/shift."""
     __tablename__ = "tiom_shift_production_report"
@@ -891,6 +978,10 @@ MULTISITE_TABLES = [
     SiteDataQualityIssue,
     SiteSatelliteObservation,
     TiomSourceDeployment,
+    TiomSourceContext,
+    TiomRouteMaster,
+    TiomDrillSet,
+    TiomDrillingShift,
     TiomShiftProductionReport,
     TiomShiftProductionMovement,
     TiomShiftReportBaseline,

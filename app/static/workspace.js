@@ -186,6 +186,7 @@ loadDashboard=function(){
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>Loader Productivity</h3><span>Exact WB matches</span></div>${loaderTable}<h3 class="subhead">Excavators</h3>${excTable}</section><section class="panel v2-panel"><div class="v2-title"><h3>Vehicle Productivity</h3><span>WB production + field cycle + HSD</span></div>${vehicleTable}</section></div>
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>Machine vs Material Matrix</h3><span>Trips / tonnes</span></div>${dashHeatmap(d)}</section><section class="panel v2-panel"><div class="v2-title"><h3>Route Analysis</h3><span>Top routes by WB tonnes</span></div>${dashBars((d.routes||[]).map(x=>({label:x.source+' → '+x.destination,tonnes:x.tonnes})),'label','tonnes',' t',10)}<details><summary>Route table</summary>${routeTable}</details></section></div>
       <section class="panel v2-panel"><div class="v2-title"><h3>Lead Distance Control</h3><span>Approved lead master · submitted MIS rows · unresolved routes excluded from Ton-KM</span></div><div class="mini-summary">${dashMini('Avg Lead',dashFmt(k.avgLeadKm,3,' km'),'Qty-weighted')}${dashMini('Lead Work',dashFmt(k.leadTonKm,1,' t-km'),'Operational Ton-KM')}${dashMini('With WB',dashFmt(k.leadWithWbTrips,0),'Lead trips')}${dashMini('Without WB',dashFmt(k.leadWithoutWbTrips,0),'Lead trips')}${dashMini('Lead Missing',dashFmt(k.leadMissingTrips,0),'Needs master mapping',Number(k.leadMissingTrips)>0?'warning':'good')}</div>${leadTable}</section>
+      <section class="panel v2-panel"><div class="v2-title"><h3>Drilling Summary</h3><span>Drill + compressor HMR · holes · meterage · HSD</span></div><div class="mini-summary">${dashMini('Holes',dashFmt(k.drillHoles,0),'Selected period')}${dashMini('Meterage',dashFmt(k.drillMeterage,1,' m'),'ROM/OB + BHJ/BHQ')}${dashMini('Meter / Hr',dashFmt(k.drillMeterPerHour,2,' m/hr'),'Drill running hour')}${dashMini('HSD',dashFmt(k.drillHsdLitres,1,' L'),'Drill + compressor')}${dashMini('Breakdown',dashFmt(k.drillBreakdownHours,1,' hr'),'Recorded BD')}</div>${table(['Drill Set','Drill Hrs','Comp Hrs','Holes','Total m','m/Hr','HSD L','L/m','BD Hr'],(d.drilling?.rows||[]).map(x=>[esc(x.label||x.drillSetId||'—'),dashFmt(x.drillHours,2),dashFmt(x.compressorHours,2),dashFmt(x.holes,0),dashFmt(x.totalMeterage,1),dashFmt(x.meterPerHour,2),dashFmt(x.hsdLitres,1),dashFmt(x.litrePerMeter,3),dashFmt(x.breakdownHours,1)]))}</section>
       <section class="panel v2-panel"><div class="v2-title"><h3>Material Flow</h3><span>Recorded/derived movement stages</span></div>${dashFlow(d.materialFlow)}</section>
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>Fuel Dashboard</h3><span>Fuel issued · efficiency</span></div><div class="mini-summary">${dashMini('Fuel Issued',num(k.hsdLitres,1)+' L')}${dashMini('Fuel Consumed','—','Not captured')}${dashMini('Fuel / Ton',num(k.hsdPerTonne,2)+' L/t')}${dashMini('Fuel / Trip',num(k.fuelPerTrip,2)+' L')}</div>${dashBars(d.fuelByEquipment,'machine','litres',' L',12)}<details><summary>Fuel detail</summary>${fuelTable}</details></section><section class="panel v2-panel"><div class="v2-title"><h3>Shift Comparison</h3><span>A / B / C</span></div>${shiftTable}${dashBars((d.shiftComparison||[]).map(x=>({label:'Shift '+x.shift,tonnes:x.tonnes})),'label','tonnes',' t',6)}</section></div>
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>7-Day Trend</h3><span>Production + trips</span></div>${dashLine((d.sevenDay||[]).map(x=>({label:String(x.date).slice(5),tonnes:x.tonnes,trips:x.trips})),[{key:'tonnes',label:'Production',unit:' t',d:0},{key:'trips',label:'Trips',unit:'',d:0}])}<div class="fuel-trend">Fuel: ${(d.sevenDay||[]).map(x=>`${esc(String(x.date).slice(5))} ${num(x.fuel,0)}L`).join(' · ')}</div></section><section class="panel v2-panel"><div class="v2-title"><h3>Monthly Summary</h3><span>MTD through ${esc(d.toDate)}</span></div><div class="monthly-grid">${monthlyCards.map(x=>dashMini(x[0],x[1])).join('')}</div></section></div>
@@ -202,7 +203,10 @@ const masterConfig={
   WBHEADER:{key:'wbHeaders',label:'WB Header Mapping',fields:['field','header','occurrence','priority','required','active']},
   PRODUCT:{key:'products',label:'Products',fields:['id','name','active']},
   ACTIVITY:{key:'activities',label:'Activities',fields:['id','vehicleRequired','active']},
-  TANKER:{key:'tankers',label:'HSD tankers',fields:['id','vehicleNo','capacity','active']}
+  TANKER:{key:'tankers',label:'HSD tankers',fields:['id','vehicleNo','capacity','active']},
+  ROUTE:{key:'routes',label:'Route Master',fields:['id','name','sourceLocationId','destinationLocationId','routeMode','materialScope','via','leadEntries','active']},
+  LEAD_DISTANCE:{key:'leadDistances',label:'Lead Master',fields:['id','routeId','benchRl','leadKm','materialScope','active']},
+  DRILL_SET:{key:'drillSets',label:'Drill Sets',fields:['id','name','drillMachineId','compressorMachineId','notes','active']}
 };
 const fieldLabels={
   id:'Record ID / Alias',name:'Name',role:'Role',department:'Department',rotationTeam:'Rotation team',active:'Status',
@@ -210,7 +214,9 @@ const fieldLabels={
   bucketCum:'Bucket capacity (cum)',ratedPayloadT:'Rated payload (t)',ratedOutputTph:'Rated output (t/hr)',standingTareKg:'Standing tare (kg)',
   vehicleRequired:'Vehicle required',capacity:'Capacity (litres)',locationId:'Canonical location',
   direction:'Alias use',field:'Standard WB field',header:'Excel header alias',occurrence:'Header occurrence',
-  priority:'Priority',required:'Required header'
+  priority:'Priority',required:'Required header',sourceLocationId:'Source location',destinationLocationId:'Destination location',
+  routeMode:'Route type',materialScope:'Material scope',via:'Via / route note',leadEntries:'Lead entries',routeId:'Route',
+  benchRl:'Bench RL (m)',leadKm:'Lead KM',drillMachineId:'Drill machine',compressorMachineId:'Compressor',notes:'Notes'
 };
 const categoryDefaults={
   'PERSON.role':['DRIVER','EXCAVATOR OPERATOR','LOADER OPERATOR','SUPERVISOR','HELPER'],
@@ -233,14 +239,14 @@ let masterPage=0, masterEditing=null;
 
 renderMasters=function(){
   masterPage=0;masterEditing=null;
-  html('app',`<div class="page-heading"><div><div class="eyebrow">CONFIGURATION</div><h1>Masters</h1><p class="note">Maintain people, equipment, mine locations, WB aliases and header mappings in one place.</p></div><button class="btn secondary" onclick="loadMasters()">Refresh</button></div>
+  html('app',`<div class="page-heading"><div><div class="eyebrow">CONFIGURATION</div><h1>Masters</h1><p class="note">Maintain people, equipment, locations, routes, leads, Drill Sets and WB mappings in one ERP master area.</p></div><button class="btn secondary" onclick="loadMasters()">Refresh</button></div>
     <div class="panel master-toolbar">
       <label>Master<select id="master_type" onchange="masterPage=0;masterEditing=null;renderMasterTable()">${Object.entries(masterConfig).map(([k,c])=>`<option value="${k}">${c.label}</option>`).join('')}</select></label>
       <label class="search-label">Search<input id="master_search" type="search" placeholder="Search any field…" oninput="masterPage=0;renderMasterRows()"></label>
       <label>Status<select id="master_status" onchange="masterPage=0;renderMasterRows()"><option value="ALL">All records</option><option value="true">Active</option><option value="false">Inactive</option></select></label>
       ${S.boot.user.isManagement?'<button class="btn primary" onclick="editMaster(-1)">+ Add record</button>':''}
     </div>
-    <div class="panel note"><b>ERP master rule:</b> one Equipment Master is used everywhere. One Location Master holds Source / Destination / Both role plus the physical type. New WB locations are auto-created as WB_AUTO and can be reviewed here. Location aliases are only alternate WB spellings/codes, not duplicate locations.</div>
+    <div class="panel note"><b>ERP master rule:</b> one Equipment Master and one Location Master are used everywhere. Route Master defines Source → Destination + WB path; Lead Master stores the approved Bench RL → Lead KM. Drill Sets pair Drill + Compressor without duplicating HMR transactions.</div>
     <div id="master_body"><div class="loading">Loading masters…</div></div>`);
   loadMasters();
 };
@@ -272,11 +278,28 @@ function fieldOptions(t,f,current){
   if(f==='vehicleRequired'||f==='required')return [['true','Yes'],['false','No']];
   if(f==='group')return ['LOADING','TRANSPORT','PROCESSING','EARTHMOVING','DRILLING','SUPPORT','HSD_TANKER','OTHER'].map(x=>[x,x.replaceAll('_',' ')]);
   if(f==='direction')return [['ANY','Any / both'],['SOURCE','Source only'],['DESTINATION','Destination only']];
-  if(f==='locationId'){
-    const rows=(S.mastersDesk.locations||[]).filter(x=>x.active);
+  if(f==='locationId'||f==='sourceLocationId'||f==='destinationLocationId'){
+    let rows=(S.mastersDesk.locations||[]).filter(x=>x.active);
+    if(f==='sourceLocationId')rows=rows.filter(x=>['SOURCE','BOTH'].includes(String(x.role||'').toUpperCase()));
+    if(f==='destinationLocationId')rows=rows.filter(x=>['DESTINATION','BOTH'].includes(String(x.role||'').toUpperCase()));
     const opts=rows.map(x=>[x.id,x.id+' — '+x.name]);
     if(current&&!opts.some(x=>x[0]===current))opts.push([current,current+' (existing)']);
     return [['','Select location…'],...opts];
+  }
+  if(f==='routeMode')return [['WITH_WB','With Production WB'],['WITHOUT_WB','Without Production WB']];
+  if(f==='routeId'){
+    const rows=(S.mastersDesk.routes||[]).filter(x=>x.active);
+    const opts=rows.map(x=>[x.id,(x.name||x.id)+' · '+(x.routeMode==='WITH_WB'?'With WB':'Without WB')]);
+    if(current&&!opts.some(x=>x[0]===current))opts.push([current,current+' (existing)']);
+    return [['','Select route…'],...opts];
+  }
+  if(f==='drillMachineId'||f==='compressorMachineId'){
+    let rows=(S.mastersDesk.equipment||[]).filter(x=>x.active);
+    if(f==='drillMachineId')rows=rows.filter(x=>String(x.group||'').toUpperCase()==='DRILLING'||String(x.type||'').toUpperCase().includes('DRILL'));
+    else rows=rows.filter(x=>String(x.type||'').toUpperCase().includes('COMPRESS')||['DRILLING','SUPPORT'].includes(String(x.group||'').toUpperCase()));
+    const opts=rows.map(x=>[x.id,(x.id+' — '+(x.type||'')+(x.makeModel?' · '+x.makeModel:''))]);
+    if(current&&!opts.some(x=>x[0]===current))opts.push([current,current+' (existing)']);
+    return [['','Select equipment…'],...opts];
   }
   if(f==='field')return [['','Select standard field…'],...wbCanonicalFields];
   if(f==='rotationTeam'){
@@ -295,18 +318,18 @@ function editMaster(index){
   const t=val('master_type'),cfg=masterConfig[t];
   const row=index<0?{active:true,vehicleRequired:false,required:false,occurrence:1,priority:100,direction:'ANY'}:S.mastersDesk[cfg.key][index];
   masterEditing=index<0?null:row.id;
-  const lengths={PERSON:40,EQUIPMENT:50,LOCATION:80,LOCATION_ALIAS:180,PRODUCT:50,ACTIVITY:60,TANKER:50,WBHEADER:120};
+  const lengths={PERSON:40,EQUIPMENT:50,LOCATION:80,LOCATION_ALIAS:180,PRODUCT:50,ACTIVITY:60,TANKER:50,WBHEADER:120,ROUTE:180,LEAD_DISTANCE:180,DRILL_SET:70};
   const fields=cfg.fields.map(f=>{
     const choices=fieldOptions(t,f,row[f]),category=t+'.'+f,add=category in categoryDefaults||f==='rotationTeam';
     let control;
     if(choices){
-      control=`<select id="mf_${f}" ${['role','group','type','locationId','field'].includes(f)?'required':''}>${choices.map(([v,l])=>`<option value="${esc(v)}" ${String(row[f]??'')===String(v)?'selected':''}>${esc(l)}</option>`).join('')}</select>`;
-    }else if(['occurrence','priority','capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg'].includes(f)){
-      const decimal=['capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg'].includes(f),min=decimal?'0':'1',step=decimal?'0.01':'1';
-      control=`<input id="mf_${f}" value="${esc(row[f]??'')}" type="number" min="${min}" step="${step}" ${f==='capacity'?'required':''}>`;
+      control=`<select id="mf_${f}" ${['role','group','type','locationId','field','sourceLocationId','destinationLocationId','routeMode','routeId','drillMachineId','compressorMachineId'].includes(f)?'required':''}>${choices.map(([v,l])=>`<option value="${esc(v)}" ${String(row[f]??'')===String(v)?'selected':''}>${esc(l)}</option>`).join('')}</select>`;
+    }else if(['occurrence','priority','capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg','benchRl','leadKm','leadEntries'].includes(f)){
+      const decimal=['capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg','leadKm'].includes(f),min=['leadKm','capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg'].includes(f)?'0':'1',step=decimal?'0.001':'1';
+      control=`<input id="mf_${f}" value="${esc(row[f]??'')}" type="number" min="${min}" step="${step}" ${f==='leadEntries'?'readonly':''} ${['capacity','benchRl','leadKm'].includes(f)?'required':''}>`;
     }else{
       const max=f==='header'?120:(f==='name'?(t==='LOCATION'?160:120):(f==='id'?(lengths[t]||80):80));
-      const required=['id','name','header'].includes(f)&&!(t==='WBHEADER'&&f==='id');
+      const required=['id','name','header'].includes(f)&&!(t==='WBHEADER'&&f==='id')&&!(t==='LEAD_DISTANCE'&&f==='id');
       control=`<input id="mf_${f}" value="${esc(row[f]??'')}" ${f==='id'&&index>=0?'readonly':''} ${required?'required':''} maxlength="${max}">`;
     }
     return `<div class="master-field"><label for="mf_${f}">${fieldLabels[f]}</label><div class="field-control">${control}${add?`<button type="button" class="add-option" title="Add ${fieldLabels[f]} option" aria-label="Add ${fieldLabels[f]} option" onclick="openOption('${f}')">+</button>`:''}</div></div>`;
@@ -316,7 +339,13 @@ function editMaster(index){
     ?'Map every site Excel heading to one standard field. For duplicate headings, set occurrence 1 for the first column and 2 for the second.'
     :t==='LOCATION_ALIAS'
       ?'Use this when the WB code/name is different from the canonical Location ID used by field entry.'
-      :(index<0?'Use a unique ID. Dropdown additions are saved for everyone.':'Record ID is fixed to preserve history. Set status to Inactive to retire a record.');
+      :t==='ROUTE'
+        ?'Route Master defines Source → Destination and whether the approved path uses Production WB. Lead values are maintained separately by Bench RL.'
+        :t==='LEAD_DISTANCE'
+          ?'Lead Master stores one approved Lead KM for an exact Route + Bench RL. Record ID is generated automatically when creating a new lead.'
+          :t==='DRILL_SET'
+            ?'One operational Drill Set pairs one drill machine with one compressor. Their HMR readings remain separate in the drilling shift report.'
+            :(index<0?'Use a unique ID. Dropdown additions are saved for everyone.':'Record ID is fixed to preserve history. Set status to Inactive to retire a record.');
   const el=document.getElementById('master_editor');el.hidden=false;
   el.innerHTML=`<div class="sectionbar"><h3>${esc(label)}</h3><button type="button" class="btn secondary small" onclick="closeMasterEditor()">Cancel</button></div><form id="master_form"><div class="master-form">${fields}</div><div class="editor-footer"><span class="note">${esc(note)}</span><button class="btn primary" type="submit">${index<0?'Create record':'Save changes'}</button></div></form>`;
   document.getElementById('master_form').onsubmit=e=>{e.preventDefault();saveMasterUi();};
