@@ -650,6 +650,27 @@ def _mixed_shift_code(row, idx):
     return raw[:1] if raw[:1] in {"A", "B", "C"} else ""
 
 
+def _mixed_shift_operating_date(row_day, target_shift, clock, definition):
+    if row_day is None:
+        return None
+
+    helper = globals().get("operating_date_from_movement")
+    if callable(helper):
+        try:
+            resolved = helper(row_day, clock, definition)
+            if resolved is not None:
+                return resolved
+        except Exception:
+            pass
+
+    if target_shift != "C" or clock is None:
+        return row_day
+
+    if definition.end_time <= definition.start_time and clock < definition.end_time:
+        return row_day - timedelta(days=1)
+    return row_day
+
+
 def _mixed_shift_make_subset(ws, header_row, selected_rows):
     from openpyxl import Workbook
     out = Workbook()
@@ -694,8 +715,9 @@ def _mixed_shift_vehicle_map(db):
 def _mixed_shift_append_missing_rows(rows, idx, filename, message_id, cfg):
     from collections import defaultdict
     grouped = defaultdict(list)
-    for rno, row, target_shift in rows:
-        if target_shift in {"A", "B", "C"}:
+    for rno, row in rows:
+        target_shift = _mixed_shift_code(row, idx)
+        if target_shift:
             grouped[target_shift].append((rno, row))
 
     summary = {
@@ -730,7 +752,9 @@ def _mixed_shift_append_missing_rows(rows, idx, filename, message_id, cfg):
                     vehicle_raw = str(_mixed_shift_row_value(row, idx, "vehicle") or "").strip()
                     row_day = date_value(_mixed_shift_row_value(row, idx, "date"))
                     clock = clock_value(_mixed_shift_row_value(row, idx, "time"))
-                    op_day = operating_date_from_movement(row_day, clock, definition)
+                    op_day = _mixed_shift_operating_date(
+                        row_day, target_shift, clock, definition
+                    )
 
                     if _mixed_shift_existing_movement(
                         db, op_day, target_shift, move
@@ -957,12 +981,15 @@ def ingest_xlsx(content, filename, cfg, message_id):
 
     with SessionLocal() as db:
         ensure_wb_header_mapping(db)
-        ws, header_row, idx, _ = find_wb_sheet(wb, db)
+        ws, header_row, idx, header_diag = find_wb_sheet(wb, db)
         definitions = {
             str(d.shift).strip().upper(): d
             for d in db.scalars(select(ShiftMaster).where(ShiftMaster.active))
             if str(d.shift or "").strip().upper() in {"A", "B", "C"}
         }
+
+    if not definitions:
+        raise ValueError("No active A/B/C shifts are configured in Shift Master.")
 
     def clock_belongs(definition, clock):
         if clock is None or definition is None:
@@ -996,7 +1023,8 @@ def ingest_xlsx(content, filename, cfg, message_id):
         if raw_code:
             raw_counts[raw_code] += 1
         clock = clock_value(_mixed_shift_row_value(row, idx, "time"))
-        effective_code = shift_from_clock(clock) or raw_code
+        time_code = shift_from_clock(clock)
+        effective_code = time_code or raw_code
 
         row_list = list(row)
         if effective_code and shift_index is not None:
@@ -1017,13 +1045,26 @@ def ingest_xlsx(content, filename, cfg, message_id):
         if effective_code:
             resolved_counts[effective_code] += 1
 
-    if not rows or not resolved_counts:
+    if not rows:
         return _ingest_single_shift_xlsx(content, filename, cfg, message_id)
 
-    if len(resolved_counts) == 1:
-        if not corrections:
-            return _ingest_single_shift_xlsx(content, filename, cfg, message_id)
-        only_shift = next(iter(resolved_counts))
+    if corrections:
+        logger.warning(
+            "WB Shift Code corrected by GW time: file=%s corrections=%s raw_counts=%s resolved_counts=%s",
+            filename, len(corrections), dict(raw_counts), dict(resolved_counts),
+        )
+        for item in corrections[:25]:
+            logger.info(
+                "WB shift correction: file=%s row=%s movement=%s vehicle=%s raw=%s time=%s corrected=%s",
+                filename, item["row"], item["movement"], item["vehicle"],
+                item["raw_shift"], item["time"], item["corrected_shift"],
+            )
+
+    if len(resolved_counts) <= 1 and not corrections:
+        return _ingest_single_shift_xlsx(content, filename, cfg, message_id)
+
+    if len(resolved_counts) <= 1:
+        only_shift = next(iter(resolved_counts), "")
         normalized_bytes = _mixed_shift_make_subset(
             ws, header_row, [(rno, row) for rno, row, _ in rows]
         )
@@ -1042,13 +1083,17 @@ def ingest_xlsx(content, filename, cfg, message_id):
         )
         return result
 
-    primary_shift, _ = resolved_counts.most_common(1)[0]
+    primary_shift, primary_count = resolved_counts.most_common(1)[0]
+    logger.warning(
+        "Time-derived multi-shift workbook accepted: file=%s raw_counts=%s resolved_counts=%s primary=%s rows=%s",
+        filename, dict(raw_counts), dict(resolved_counts), primary_shift, primary_count,
+    )
     primary_rows = [
         (rno, row) for rno, row, code in rows
         if code == primary_shift or not code
     ]
     other_rows = [
-        (rno, row, code) for rno, row, code in rows
+        (rno, row) for rno, row, code in rows
         if code and code != primary_shift
     ]
     primary_bytes = _mixed_shift_make_subset(ws, header_row, primary_rows)
@@ -1069,17 +1114,19 @@ def ingest_xlsx(content, filename, cfg, message_id):
         "shift_code_corrections": corrections,
         "routed": routed,
     }
-    result["review"] = int(result.get("review", 0)) + int(
-        routed.get("added_review", 0)
-    ) + len(routed.get("errors", []))
-    result["message"] = (
-        str(result.get("message", "")).rstrip()
-        + f" Time-first routing: {len(corrections)} Shift Code correction(s); "
-        + f"{len(other_rows)} row(s) genuinely belonged to other shift(s); "
-        + f"{routed.get('duplicates', 0)} already existed and were ignored; "
-        + f"{routed.get('added_valid', 0)} added to their correct shift; "
-        + f"{routed.get('added_review', 0)} routed for review."
+    routed_review = int(routed.get("added_review", 0)) + len(routed.get("errors", []))
+    result["review"] = int(result.get("review", 0)) + routed_review
+    extra = (
+        f" Time-first routing: {len(corrections)} Shift Code correction(s); "
+        f"{len(other_rows)} row(s) genuinely belonged to other shift(s); "
+        f"{routed.get('duplicates', 0)} already existed and were ignored; "
+        f"{routed.get('added_valid', 0)} added to their correct shift; "
+        f"{routed.get('added_review', 0)} routed for review"
     )
+    if routed.get("errors"):
+        extra += f"; {len(routed['errors'])} routing error(s)"
+    extra += "."
+    result["message"] = str(result.get("message", "")).rstrip() + extra
     return result
 
 def apply_labels(service, message_id, add_ids, remove_ids=None):
