@@ -1941,6 +1941,7 @@ async def wb_upload(request: Request, operatingDate: str = Form(...), shift: str
 
     batch=WbImportBatch(batch_id=str(uuid4()),operating_date=day,shift=sh,file_name=file.filename or 'WB.xlsx',file_hash=digest,status='PREVIEW',valid_rows=0,review_rows=0)
     db.add(batch); db.flush(); valid=review=0
+    new_wb_rows=[]
     for rno,row in enumerate(ws.iter_rows(min_row=header_row+1,values_only=True),header_row+1):
         if not any(v not in (None,'') for v in row): continue
         issues=[]; move=str(row_value(row,idx,'move') or rno).strip(); vehicle_raw=str(row_value(row,idx,'vehicle') or '').strip()
