@@ -2554,7 +2554,7 @@ def save_tiom_source_deployments(db,user,p):
         if not machine_id: raise HTTPException(422,f'Deployment row {idx}: select equipment / machine.')
         source=active_resource(db,Location,source_id)
         machine=active_resource(db,Equipment,machine_id)
-        if machine.group=='TRANSPORT': raise HTTPException(422,f'Deployment row {idx}: tipper/dumper transport belongs in the vehicle field, not Equipment / Machine.')
+        if machine.group in {'TRANSPORT','HSD_TANKER'}: raise HTTPException(422,f'Deployment row {idx}: choose working HMR equipment; transport/tanker equipment belongs in its own operational entry.')
         activity=short(str(item.get('activity') or '').strip().upper())[:40]
         if not activity: raise HTTPException(422,f'Deployment row {idx}: activity is required.')
         active_resource(db,ActivityMaster,activity)
@@ -2850,9 +2850,16 @@ def get_tiom_mis_report(db,user,p):
             'factor':float(d.factor_mt_per_trip) if d and d.factor_mt_per_trip is not None else None,'qtyMt':float(d.calculated_qty_mt) if d and d.calculated_qty_mt is not None else None,'remarks':r.remarks or '',
             'benchRl':lead.bench_rl_m if lead else None,'routeMode':lead.route_mode if lead else '','leadKm':float(lead.lead_km) if lead and lead.lead_km is not None else None,'leadStatus':lead.lead_status if lead else 'NOT_CAPTURED',
             'wbMovementKey':rec.wb_movement_key if rec and rec.wb_movement_key else '', 'wbMovementNo':wb.movement_no if wb else '', 'quantitySource':'WB' if wb else 'TRIP_FACTOR'})
-    return {'reportId':report.report_id,'date':str(report.operating_date),'shift':report.shift,'vehicleId':report.vehicle_id,'operatorId':report.operator_id or '','openingKmr':float(report.opening_kmr) if report.opening_kmr is not None else None,'closingKmr':float(report.closing_kmr) if report.closing_kmr is not None else None,'paperRef':report.paper_ref or '','notes':report.notes or '','status':report.status,
+    hmr_run=(report.closing_hmr-report.opening_hmr) if report.opening_hmr is not None and report.closing_hmr is not None and report.closing_hmr>=report.opening_hmr else None
+    return {'reportId':report.report_id,'date':str(report.operating_date),'shift':report.shift,'vehicleId':report.vehicle_id,'operatorId':report.operator_id or '',
+        'openingKmr':float(report.opening_kmr) if report.opening_kmr is not None else None,
+        'closingKmr':float(report.closing_kmr) if report.closing_kmr is not None else None,
+        'openingHmr':float(report.opening_hmr) if report.opening_hmr is not None else None,
+        'closingHmr':float(report.closing_hmr) if report.closing_hmr is not None else None,
+        'hmrRun':float(hmr_run) if hmr_run is not None else None,
+        'paperRef':report.paper_ref or '','notes':report.notes or '','status':report.status,
         'rows':trip_rows,
-        'meters':[], 'hmrSource':'SHIFT_DEPLOYMENT'}
+        'meters':[], 'hmrSource':'CENTRAL_SITE_ASSET_METER'}
 
 def save_tiom_mis_report(db,user,p,submit=False):
     require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p); open_shift(db,day,sh); _ensure_tiom_trip_factors(db,user)
@@ -2873,7 +2880,41 @@ def save_tiom_mis_report(db,user,p,submit=False):
         try:return Decimal(str(v))
         except:raise HTTPException(422,f'Enter valid {label}.')
     report.opening_kmr=dec(p.get('openingKmr'),'opening KMR'); report.closing_kmr=dec(p.get('closingKmr'),'closing KMR')
-    if report.opening_kmr is not None and report.closing_kmr is not None and report.closing_kmr < report.opening_kmr: raise HTTPException(422,'Closing KMR cannot be below opening KMR.')
+    if report.opening_kmr is not None and report.closing_kmr is not None and report.closing_kmr < report.opening_kmr:
+        raise HTTPException(422,'Closing KMR cannot be below opening KMR.')
+    report.opening_hmr=dec(p.get('openingHmr'),'opening HMR'); report.closing_hmr=dec(p.get('closingHmr'),'closing HMR')
+    if report.opening_hmr is not None and report.closing_hmr is not None and report.closing_hmr < report.opening_hmr:
+        raise HTTPException(422,'Closing HMR cannot be below opening HMR.')
+
+    # Driver HMR uses the same central shift-level meter ledger as Shift Deployment.
+    if report.opening_hmr is not None or report.closing_hmr is not None:
+        marker=f'[DRIVER_REPORT:{report.report_id}]'
+        meter=db.scalar(select(SiteAssetMeter).where(
+            SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,SiteAssetMeter.shift==sh,
+            SiteAssetMeter.asset_id==vehicle.machine_id,SiteAssetMeter.meter_type=='HMR'
+        ))
+        if meter:
+            existing_marker=str(meter.remarks or '')
+            same_report=marker in existing_marker
+            incoming=(report.opening_hmr,report.closing_hmr)
+            existing=(Decimal(meter.opening_reading) if meter.opening_reading is not None else None,
+                      Decimal(meter.closing_reading) if meter.closing_reading is not None else None)
+            if not same_report and any(x is not None for x in existing) and existing!=incoming:
+                raise HTTPException(409,f'{vehicle.machine_id}: HMR already exists for {day} Shift {sh}. Use the existing central reading or correct the original source.')
+        else:
+            meter=SiteAssetMeter(
+                reading_id=str(uuid4()),site_id='TIOM',operating_date=day,shift=sh,
+                asset_id=vehicle.machine_id,meter_type='HMR',entered_by=user.login_id,entered_at=now_local()
+            )
+            db.add(meter)
+        meter.opening_reading=report.opening_hmr
+        meter.closing_reading=report.closing_hmr
+        meter.usage=(report.closing_hmr-report.opening_hmr) if report.opening_hmr is not None and report.closing_hmr is not None else None
+        meter.source_type='TIOM_DRIVER_REPORT'
+        meter.remarks=marker
+        meter.entered_by=user.login_id
+        meter.entered_at=now_local()
+
     report.paper_ref=short(str(p.get('paperRef') or '')); report.notes=short(str(p.get('notes') or ''))
     old_rows=list(db.scalars(select(TiomMisTripRow).where(TiomMisTripRow.report_id==report.report_id)))
     if old_rows:
