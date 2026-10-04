@@ -1,6 +1,6 @@
 {
   "enabled": true,
-  "authorized_mailbox": "",
+  "authorized_mailbox": "mistiom@nmtpl.com",
   "poll_seconds": 180,
   "max_messages_per_poll": 25,
   "gmail_query": "has:attachment filename:xlsx",
@@ -13,9 +13,9 @@
   "error_label": "NMTPL_WB_ERROR",
   "review_required_label": "NMTPL_WB_REVIEW_REQUIRED",
   "review_rows_label": "NMTPL_WB_REVIEW_ROWS",
-  "archive_success": true,
+  "archive_success": false,
   "auto_confirm": true,
-  "max_review_percent": 5,
+  "max_review_percent": 0,
   "weight_tolerance_kg": 5,
   "max_file_mb": 15,
   "start_after_utc": "2026-09-22T12:13:09Z"
