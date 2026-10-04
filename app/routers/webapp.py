@@ -35,7 +35,7 @@ from app.services.wb_mapping import (
 )
 from app.services.attendance_automation import auto_close_shift
 from app.services.tiom_erp import authoritative_wb as tiom_authoritative_wb, vehicle_matches as tiom_wb_vehicle_matches, movement_payload as tiom_wb_payload, wb_report_contributions as tiom_wb_report_contributions
-from app.services.tiom_location_erp import canonicalize_wb_rows, location_options
+from app.services.tiom_location_erp import canonicalize_wb_rows, location_options, ensure_location_master_roles
 from app.site_models import (
     TiomSourceDeployment, TiomMisReport, TiomMisTripRow, TiomMisTripDetail, TiomTripFactor,
     TiomHsdReceiptDetail, TiomHsdIssueDetail, SiteAssetMeter,
@@ -1398,12 +1398,22 @@ def save_hsd_issue(db,user,p):
 def masters_desk(db,user):
     require(user,'MASTERS')
     ensure_wb_header_mapping(db)
+    ensure_location_master_roles(db)
     return {
         'options':[{'category':r.category,'value':r.value} for r in db.scalars(select(MasterOption).order_by(MasterOption.value))],
         'rotationTeams':[{'id':r.team_id,'name':r.team_name} for r in db.scalars(select(ShiftRotation).where(ShiftRotation.active))],
         'persons':[{'id':r.employee_id,'name':r.name,'role':r.role,'department':r.department or '','rotationTeam':r.rotation_team or '','active':r.active} for r in db.scalars(select(Person).order_by(Person.employee_id))],
-        'equipment':[{'id':r.machine_id,'vehicleNo':r.vehicle_no or '','type':r.type,'group':r.group,'ownership':r.ownership or '','active':r.active} for r in db.scalars(select(Equipment).order_by(Equipment.machine_id))],
-        'locations':[{'id':r.location_id,'name':r.location_name,'type':r.location_type or '','active':r.active} for r in db.scalars(select(Location).order_by(Location.location_id))],
+        'equipment':[{
+            'id':r.machine_id,'doorNo':r.door_no or '','vehicleNo':r.vehicle_no or '',
+            'type':r.type,'group':r.group,'makeModel':r.make_model or '',
+            'bucketCum':r.bucket_cum,'ratedPayloadT':r.rated_payload_t,
+            'ratedOutputTph':r.rated_output_tph,'standingTareKg':r.standing_tare_kg,
+            'ownership':r.ownership or '','active':r.active
+        } for r in db.scalars(select(Equipment).order_by(Equipment.machine_id))],
+        'locations':[{
+            'id':r.location_id,'name':r.location_name,'role':r.role or 'UNCLASSIFIED',
+            'type':r.location_type or '','active':r.active
+        } for r in db.scalars(select(Location).order_by(Location.location_id))],
         'locationAliases':[{'id':r.alias,'locationId':r.location_id,'direction':r.direction or 'ANY','active':r.active} for r in db.scalars(select(LocationAlias).order_by(LocationAlias.alias))],
         'wbHeaders':[{'id':str(r.id),'field':r.canonical_field,'header':r.header_alias,'occurrence':r.occurrence,'priority':r.priority,'required':r.required,'active':r.active} for r in db.scalars(select(WbHeaderAlias).order_by(WbHeaderAlias.canonical_field,WbHeaderAlias.priority,WbHeaderAlias.id))],
         'products':[{'id':r.product_id,'name':r.name,'active':r.active} for r in db.scalars(select(Product).order_by(Product.product_id))],
@@ -1421,6 +1431,11 @@ def save_master_record(db,user,p):
 
     def flag(v):
         return v if isinstance(v,bool) else str(v).lower() in {'true','1','yes','y','active'}
+
+    def number(v,label):
+        if v in (None,''): return None
+        try: return float(v)
+        except Exception: raise HTTPException(422,f'Enter valid {label}.')
 
     # Alias masters are deliberately additive and use existing SQL tables.
     if table == 'LOCATION_ALIAS':
@@ -1473,8 +1488,8 @@ def save_master_record(db,user,p):
         return {'ok':True,'message':f'WB header mapping {field} ← {header} saved.'}
 
     limits = {'PERSON': {'id':40,'name':120,'role':80,'department':80,'rotationTeam':30},
-              'EQUIPMENT': {'id':50,'vehicleNo':50,'type':60,'group':30,'ownership':30},
-              'LOCATION': {'id':80,'name':160,'type':60}, 'PRODUCT': {'id':50,'name':120},
+              'EQUIPMENT': {'id':50,'doorNo':50,'vehicleNo':50,'type':60,'group':30,'makeModel':120,'ownership':30},
+              'LOCATION': {'id':80,'name':160,'role':20,'type':60}, 'PRODUCT': {'id':50,'name':120},
               'ACTIVITY': {'id':60}, 'TANKER': {'id':50,'vehicleNo':50}}
     for field, limit in limits.get(table, {}).items():
         value = r.get(field, '')
@@ -1506,15 +1521,31 @@ def save_master_record(db,user,p):
         key=short(r.get('id','')).strip()
         if not key: raise HTTPException(422,'Machine ID required.')
         obj=db.get(Equipment,key) or Equipment(machine_id=key,type='',group='OTHER')
-        obj.vehicle_no=short(r.get('vehicleNo','')) or None; obj.type=short(r.get('type','')).strip(); obj.group=short(r.get('group','')).upper()
-        obj.ownership=short(r.get('ownership','')) or None; obj.active=flag(r.get('active',True))
-        if not obj.type or obj.group not in {'LOADING','TRANSPORT','PROCESSING','HSD_TANKER','OTHER'}:
-            raise HTTPException(422,'Enter type and valid group.')
+        obj.door_no=short(r.get('doorNo','')) or None
+        obj.vehicle_no=short(r.get('vehicleNo','')) or None
+        obj.type=short(r.get('type','')).strip()
+        obj.group=short(r.get('group','')).upper()
+        obj.make_model=short(r.get('makeModel','')) or None
+        obj.bucket_cum=number(r.get('bucketCum'),'bucket capacity')
+        obj.rated_payload_t=number(r.get('ratedPayloadT'),'rated payload')
+        obj.rated_output_tph=number(r.get('ratedOutputTph'),'rated output')
+        obj.standing_tare_kg=number(r.get('standingTareKg'),'standing tare')
+        obj.ownership=short(r.get('ownership','')) or None
+        obj.active=flag(r.get('active',True))
+        valid_groups={'LOADING','TRANSPORT','PROCESSING','HSD_TANKER','EARTHMOVING','DRILLING','SUPPORT','OTHER'}
+        if not obj.type or obj.group not in valid_groups:
+            raise HTTPException(422,'Enter type and a valid centralized equipment group.')
     elif table=='LOCATION':
         key=short(r.get('id','')).strip()
         if not key: raise HTTPException(422,'Location ID required.')
         obj=db.get(Location,key) or Location(location_id=key,location_name='')
-        obj.location_name=short(r.get('name','')).strip(); obj.location_type=short(r.get('type','')) or None; obj.active=flag(r.get('active',True))
+        obj.location_name=short(r.get('name','')).strip()
+        role=short(r.get('role','UNCLASSIFIED')).strip().upper() or 'UNCLASSIFIED'
+        if role not in {'SOURCE','DESTINATION','BOTH','UNCLASSIFIED'}:
+            raise HTTPException(422,'Location role must be SOURCE, DESTINATION, BOTH or UNCLASSIFIED.')
+        obj.role=role
+        obj.location_type=short(r.get('type','')) or None
+        obj.active=flag(r.get('active',True))
         if not obj.location_name: raise HTTPException(422,'Location name required.')
     elif table=='PRODUCT':
         key=short(r.get('id','')).strip()
