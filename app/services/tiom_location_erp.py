@@ -141,14 +141,39 @@ def _ensure_alias(db: Session, raw: str, location_id: str, direction: str) -> No
     raw = str(raw or "").strip()
     if not raw:
         return
-    alias = db.get(LocationAlias, raw)
-    if not alias:
-        db.add(LocationAlias(alias=raw, location_id=location_id, direction=direction, active=True))
+
+    # Session.get() cannot see a newly-added alias until it has been flushed.
+    # A WB batch can legitimately use the same raw location as both SOURCE and
+    # DESTINATION, so check pending objects first to avoid two inserts with the
+    # same primary-key alias in one transaction.
+    alias = next(
+        (
+            row for row in db.new
+            if isinstance(row, LocationAlias) and row.alias == raw
+        ),
+        None,
+    )
+    if alias is None:
+        alias = db.get(LocationAlias, raw)
+
+    if alias is None:
+        db.add(LocationAlias(
+            alias=raw,
+            location_id=location_id,
+            direction=direction,
+            active=True,
+        ))
         return
+
+    # One alias maps to one canonical Location. If the same canonical location
+    # is observed in both directions, make the alias direction-neutral. The
+    # central Location.role holds SOURCE / DESTINATION / BOTH.
     if alias.location_id != location_id:
         return
+
     old = str(alias.direction or "ANY").upper()
-    if old != direction and old != "ANY":
+    incoming = str(direction or "ANY").upper()
+    if old != incoming and old != "ANY":
         alias.direction = "ANY"
     alias.active = True
 
