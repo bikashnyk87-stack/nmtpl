@@ -40,7 +40,7 @@ from app.site_models import (
     TiomSourceDeployment, TiomMisReport, TiomMisTripRow, TiomMisTripDetail, TiomTripFactor,
     TiomHsdReceiptDetail, TiomHsdIssueDetail, SiteAssetMeter,
     TiomShiftProductionReport, TiomShiftProductionMovement, TiomShiftReportBaseline, TiomMisReconciliation,
-    TiomLeadDistance, TiomMisTripLead, TiomLocationRole, TiomWbCanonical
+    TiomLeadDistance, TiomMisTripLead, TiomWbCanonical
 )
 
 router = APIRouter(prefix='/api/web', tags=['webapp'])
