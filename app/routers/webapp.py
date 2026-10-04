@@ -2379,41 +2379,127 @@ def _tiom_report_rows(db, report_id):
     return rows_,details
 
 
-def _tiom_mis_shift_summary(db,day,sh):
-    reports=list(db.scalars(select(TiomMisReport).where(
-        TiomMisReport.operating_date==day,TiomMisReport.shift==sh,TiomMisReport.status=='SUBMITTED'
-    )))
+def _tiom_mis_productivity_summary(db,from_day,to_day,shift='ALL'):
+    """ERP productivity view for a selected date range.
+
+    Trips/tonnes come from submitted MIS rows. HMR/working hours come from the
+    central SiteAssetMeter table, so deployment-only equipment is also visible.
+    """
+    if to_day < from_day:
+        raise HTTPException(422,'To date cannot be before From date.')
+    shift=str(shift or 'ALL').upper()
+    report_q=select(TiomMisReport).where(
+        TiomMisReport.operating_date>=from_day,
+        TiomMisReport.operating_date<=to_day,
+        TiomMisReport.status=='SUBMITTED'
+    )
+    if shift!='ALL':
+        report_q=report_q.where(TiomMisReport.shift==shift)
+    reports=list(db.scalars(report_q))
     report_ids=[r.report_id for r in reports]
     rows_=list(db.scalars(select(TiomMisTripRow).where(TiomMisTripRow.report_id.in_(report_ids)))) if report_ids else []
     details={x.row_id:x for x in db.scalars(select(TiomMisTripDetail).where(TiomMisTripDetail.row_id.in_([r.row_id for r in rows_]))) } if rows_ else {}
     eq={x.machine_id:x for x in db.scalars(select(Equipment).where(Equipment.active))}
     products={x.product_id:x for x in db.scalars(select(Product))}
-    meters={x.asset_id:x for x in db.scalars(select(SiteAssetMeter).where(
-        SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,SiteAssetMeter.shift==sh,SiteAssetMeter.meter_type=='HMR'
-    ))}
+
+    meter_q=select(SiteAssetMeter).where(
+        SiteAssetMeter.site_id=='TIOM',
+        SiteAssetMeter.operating_date>=from_day,
+        SiteAssetMeter.operating_date<=to_day,
+        SiteAssetMeter.meter_type=='HMR'
+    )
+    if shift!='ALL':
+        meter_q=meter_q.where(SiteAssetMeter.shift==shift)
+    meter_rows=list(db.scalars(meter_q.order_by(
+        SiteAssetMeter.operating_date,SiteAssetMeter.shift,SiteAssetMeter.entered_at
+    )))
+    meters_by_machine={}
+    for m in meter_rows:
+        meters_by_machine.setdefault(m.asset_id,[]).append(m)
+
     agg={}
     for r in rows_:
         d=details.get(r.row_id)
         if not d or not d.machine_id: continue
-        a=agg.setdefault(d.machine_id,{'machineId':d.machine_id,'romTrips':0,'romQty':Decimal('0'),'obTrips':0,'obQty':Decimal('0'),'otherTrips':0,'otherQty':Decimal('0')})
+        a=agg.setdefault(d.machine_id,{
+            'machineId':d.machine_id,'romTrips':0,'romQty':Decimal('0'),
+            'obTrips':0,'obQty':Decimal('0'),'otherTrips':0,'otherQty':Decimal('0')
+        })
         prod=products.get(d.material_id) if d.material_id else None
         txt=(' '.join([str(d.material_id or ''),str(prod.name if prod else r.material_raw or '')])).upper()
         q=Decimal(d.calculated_qty_mt or 0)
-        if re.search(r'(^|[^A-Z0-9])OB([^A-Z0-9]|$)',txt): a['obTrips']+=1; a['obQty']+=q
-        elif 'ROM' in txt: a['romTrips']+=1; a['romQty']+=q
-        else: a['otherTrips']+=1; a['otherQty']+=q
+        if re.search(r'(^|[^A-Z0-9])OB([^A-Z0-9]|$)',txt):
+            a['obTrips']+=1; a['obQty']+=q
+        elif 'ROM' in txt:
+            a['romTrips']+=1; a['romQty']+=q
+        else:
+            a['otherTrips']+=1; a['otherQty']+=q
+
+    # HMR-only equipment must still appear, even with zero trips.
+    for mid in meters_by_machine:
+        agg.setdefault(mid,{
+            'machineId':mid,'romTrips':0,'romQty':Decimal('0'),
+            'obTrips':0,'obQty':Decimal('0'),'otherTrips':0,'otherQty':Decimal('0')
+        })
+
     out=[]
     for mid,a in sorted(agg.items()):
-        m=meters.get(mid); opening=Decimal(m.opening_reading) if m and m.opening_reading is not None else None; closing=Decimal(m.closing_reading) if m and m.closing_reading is not None else None
-        hrs=(closing-opening) if opening is not None and closing is not None else None
-        total_qty=a['romQty']+a['obQty']+a['otherQty']; total_trips=a['romTrips']+a['obTrips']+a['otherTrips']
-        productivity=(total_qty/hrs) if hrs and hrs>0 else None
-        e=eq.get(mid)
-        out.append({**a,'label':_tiom_asset_label(e) if e else mid,'openingHmr':float(opening) if opening is not None else None,'closingHmr':float(closing) if closing is not None else None,'hrsRun':float(hrs) if hrs is not None else None,'totalTrips':total_trips,'totalQty':float(total_qty),'romQty':float(a['romQty']),'obQty':float(a['obQty']),'otherQty':float(a['otherQty']),'productivity':float(productivity) if productivity is not None else None})
-    totals={'hrsRun':sum((Decimal(str(x['hrsRun'])) for x in out if x['hrsRun'] is not None),Decimal('0')),'romTrips':sum(x['romTrips'] for x in out),'romQty':sum((Decimal(str(x['romQty'])) for x in out),Decimal('0')),'obTrips':sum(x['obTrips'] for x in out),'obQty':sum((Decimal(str(x['obQty'])) for x in out),Decimal('0')),'totalTrips':sum(x['totalTrips'] for x in out),'totalQty':sum((Decimal(str(x['totalQty'])) for x in out),Decimal('0'))}
-    totals['productivity']=(totals['totalQty']/totals['hrsRun']) if totals['hrsRun']>0 else None
-    return {'rows':out,'totals':{k:(float(v) if isinstance(v,Decimal) else v) for k,v in totals.items()}}
+        meter_list=meters_by_machine.get(mid,[])
+        opening=None; closing=None; hrs=Decimal('0'); shifts_worked=set(); days_worked=set()
+        for m in meter_list:
+            if opening is None and m.opening_reading is not None:
+                opening=Decimal(m.opening_reading)
+            if m.closing_reading is not None:
+                closing=Decimal(m.closing_reading)
+            usage=Decimal(m.usage) if m.usage is not None else None
+            if usage is None and m.opening_reading is not None and m.closing_reading is not None and m.closing_reading>=m.opening_reading:
+                usage=Decimal(m.closing_reading)-Decimal(m.opening_reading)
+            if usage is not None and usage>=0:
+                hrs+=usage
+            shifts_worked.add((m.operating_date,m.shift))
+            days_worked.add(m.operating_date)
 
+        total_qty=a['romQty']+a['obQty']+a['otherQty']
+        total_trips=a['romTrips']+a['obTrips']+a['otherTrips']
+        productivity=(total_qty/hrs) if hrs>0 and total_qty>0 else None
+        e=eq.get(mid)
+        out.append({
+            **a,
+            'label':_tiom_asset_label(e) if e else mid,
+            'type':e.type if e else '',
+            'group':e.group if e else '',
+            'openingHmr':float(opening) if opening is not None else None,
+            'closingHmr':float(closing) if closing is not None else None,
+            'hrsRun':float(hrs),
+            'shiftsWorked':len(shifts_worked),
+            'daysWorked':len(days_worked),
+            'totalTrips':total_trips,
+            'totalQty':float(total_qty),
+            'romQty':float(a['romQty']),
+            'obQty':float(a['obQty']),
+            'otherQty':float(a['otherQty']),
+            'productivity':float(productivity) if productivity is not None else None
+        })
+
+    totals={
+        'hrsRun':sum((Decimal(str(x['hrsRun'])) for x in out),Decimal('0')),
+        'romTrips':sum(x['romTrips'] for x in out),
+        'romQty':sum((Decimal(str(x['romQty'])) for x in out),Decimal('0')),
+        'obTrips':sum(x['obTrips'] for x in out),
+        'obQty':sum((Decimal(str(x['obQty'])) for x in out),Decimal('0')),
+        'totalTrips':sum(x['totalTrips'] for x in out),
+        'totalQty':sum((Decimal(str(x['totalQty'])) for x in out),Decimal('0'))
+    }
+    totals['productivity']=(totals['totalQty']/totals['hrsRun']) if totals['hrsRun']>0 else None
+    return {
+        'fromDate':str(from_day),'toDate':str(to_day),'shift':shift,
+        'rows':out,
+        'totals':{k:(float(v) if isinstance(v,Decimal) else v) for k,v in totals.items()}
+    }
+
+
+def _tiom_mis_shift_summary(db,day,sh):
+    return _tiom_mis_productivity_summary(db,day,day,sh)
 
 def _tiom_source_deployments(db, day, sh):
     locations={x.location_id:x for x in db.scalars(select(Location))}
