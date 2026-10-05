@@ -13,11 +13,11 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db import get_db
 from app.auth import get_user, require, csrf
-from app.models import Equipment, Location
-from app.site_models import SiteTrip, SiteLocation, SiteMaterial
+from app.models import Equipment, Location, Product, LoadTrip, LoadWbMatch, WbMovement
 from app.volvo_models import VolvoVehicle, VolvoMapping, VolvoAudit, VolvoSync, VolvoReport, VolvoLocationZone
 from app.services.volvo_store import latest_reports
 from app.services.volvo_client import timestamp
+from app.services.tiom_erp import authoritative_wb, vehicle_matches
 
 router = APIRouter(prefix='/api/volvo', tags=['Volvo'])
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -918,144 +918,206 @@ def vehicle_route(
         point['location_name'] = wrapper.get('location_name')
 
     mapping = db.get(VolvoMapping, vin)
+    equipment = db.get(Equipment, mapping.machine_id) if mapping and mapping.machine_id else None
     authoritative_trips = []
+    authoritative_mode = None
+
+    def build_trip_from_window(
+        trip_id, operating_date, trip_shift, start_at, end_at,
+        source_name=None, destination_name=None, material_name=None,
+        quantity_mt=None, driver_id=None, loading_equipment_id=None,
+        trip_seq=None, source_type=None, boundary_reason='tiom_load_trip',
+    ):
+        if start_at is None or end_at is None or end_at < start_at:
+            return None
+        window_start = start_at - timedelta(minutes=3)
+        window_end = end_at + timedelta(minutes=3)
+        indexes = [
+            i for i, p in enumerate(points)
+            if p.get('reported_at') and window_start <= p['reported_at'] <= window_end
+        ]
+        if not indexes:
+            return None
+        start_idx, end_idx = indexes[0], indexes[-1]
+        segment = points[start_idx:end_idx + 1]
+        distance_km = 0.0
+        stop_total = 0.0
+        moving_seconds = 0.0
+        for j in range(1, len(segment)):
+            distance_km += _haversine_km(segment[j - 1], segment[j])
+            sec = float(segment[j].get('segment_seconds') or 0.0)
+            stationary = (
+                (segment[j].get('speed_kmh') is not None and float(segment[j]['speed_kmh']) <= 1.0)
+                and float(segment[j].get('segment_km') or 0.0) <= 0.05
+            )
+            if stationary:
+                stop_total += sec
+            else:
+                moving_seconds += sec
+        duration_seconds = max(0.0, (end_at - start_at).total_seconds())
+        first_fuel = next((p.get('fuel_total_l') for p in segment if p.get('fuel_total_l') is not None), None)
+        last_fuel = next((p.get('fuel_total_l') for p in reversed(segment) if p.get('fuel_total_l') is not None), None)
+        fuel_l = max(0.0, last_fuel - first_fuel) if first_fuel is not None and last_fuel is not None else None
+        trip_cum = 0.0
+        previous = None
+        for p in segment:
+            if previous is not None:
+                trip_cum += _haversine_km(previous, p)
+            p['trip_id'] = str(trip_id)
+            p['trip_cumulative_km'] = round(trip_cum, 3)
+            previous = p
+        return {
+            'trip_id': str(trip_id),
+            'trip_seq': trip_seq,
+            'operating_date': operating_date,
+            'shift': trip_shift,
+            'start_at': start_at,
+            'end_at': end_at,
+            'duration_seconds': round(duration_seconds, 1),
+            'moving_seconds': round(moving_seconds, 1),
+            'stop_seconds': round(stop_total, 1),
+            'distance_km': round(distance_km, 2),
+            'fuel_l': round(fuel_l, 2) if fuel_l is not None else None,
+            'avg_speed_kmh': round(distance_km / (duration_seconds / 3600.0), 1) if duration_seconds > 0 else None,
+            'point_count': len(segment),
+            'source_name': source_name,
+            'destination_name': destination_name,
+            'material_name': material_name,
+            'quantity_mt': quantity_mt,
+            'driver_id': driver_id,
+            'loading_equipment_id': loading_equipment_id,
+            'start_index': start_idx,
+            'end_index': end_idx,
+            'boundary_reason': boundary_reason,
+            'provisional': False,
+            'source_type': source_type,
+        }
+
+    # 1) Current TIOM operational source: load_trip.
     if mapping and mapping.machine_id:
-        trip_stmt = (
-            select(SiteTrip)
+        load_stmt = (
+            select(LoadTrip)
             .where(
-                SiteTrip.site_id == 'TIOM',
-                SiteTrip.vehicle_id == mapping.machine_id,
-                SiteTrip.operating_date >= from_date,
-                SiteTrip.operating_date <= to_date,
-                SiteTrip.status != 'VOID',
+                LoadTrip.vehicle_id == mapping.machine_id,
+                LoadTrip.operating_date >= from_date,
+                LoadTrip.operating_date <= to_date,
+                LoadTrip.status != 'VOID',
             )
             .order_by(
-                SiteTrip.operating_date,
-                SiteTrip.loading_start_at,
-                SiteTrip.event_at,
-                SiteTrip.trip_seq,
-                SiteTrip.trip_id,
+                LoadTrip.operating_date,
+                LoadTrip.loading_start_at,
+                LoadTrip.trip_seq,
+                LoadTrip.trip_id,
             )
         )
         if shift != 'ALL':
-            trip_stmt = trip_stmt.where(SiteTrip.shift == shift)
-        tiom_trip_rows = db.scalars(trip_stmt).all()
+            load_stmt = load_stmt.where(LoadTrip.shift == shift)
+        load_rows = db.scalars(load_stmt).all()
 
         location_ids = {
-            x for t in tiom_trip_rows
+            x for t in load_rows
             for x in (t.source_location_id, t.destination_location_id)
             if x
         }
-        material_ids = {t.material_id for t in tiom_trip_rows if t.material_id}
+        material_ids = {t.material_id for t in load_rows if t.material_id}
         location_map = {
-            row.site_location_id: row
-            for row in db.scalars(
-                select(SiteLocation).where(
-                    SiteLocation.site_id == 'TIOM',
-                    SiteLocation.site_location_id.in_(location_ids),
-                )
-            ).all()
+            row.location_id: row
+            for row in db.scalars(select(Location).where(Location.location_id.in_(location_ids))).all()
         } if location_ids else {}
         material_map = {
-            row.site_material_id: row
-            for row in db.scalars(
-                select(SiteMaterial).where(
-                    SiteMaterial.site_id == 'TIOM',
-                    SiteMaterial.site_material_id.in_(material_ids),
-                )
-            ).all()
+            row.product_id: row
+            for row in db.scalars(select(Product).where(Product.product_id.in_(material_ids))).all()
         } if material_ids else {}
 
-        # Build precise GPS windows from TIOM trip timestamps.
-        for idx, trip_row in enumerate(tiom_trip_rows):
-            start_at = (
-                trip_row.loading_end_at
-                or trip_row.loading_start_at
-                or trip_row.event_at
-            )
-            next_start = None
-            if idx + 1 < len(tiom_trip_rows):
-                nxt = tiom_trip_rows[idx + 1]
-                next_start = nxt.loading_end_at or nxt.loading_start_at or nxt.event_at
-            end_at = (
-                trip_row.unloading_end_at
-                or trip_row.unloading_start_at
-                or next_start
-            )
-            if start_at is None:
-                continue
-            if end_at is None:
-                end_at = points[-1].get('reported_at') if points else start_at
-            if end_at and end_at < start_at:
-                continue
-
-            # Small tolerance captures nearest Volvo samples around field timestamps.
-            window_start = start_at - timedelta(minutes=3)
-            window_end = end_at + timedelta(minutes=3)
-            indexes = [
-                i for i, p in enumerate(points)
-                if p.get('reported_at') and window_start <= p['reported_at'] <= window_end
-            ]
-            if not indexes:
-                continue
-            start_idx, end_idx = indexes[0], indexes[-1]
-            segment = points[start_idx:end_idx + 1]
-            distance_km = 0.0
-            stop_total = 0.0
-            moving_seconds = 0.0
-            for j in range(1, len(segment)):
-                distance_km += _haversine_km(segment[j - 1], segment[j])
-                sec = float(segment[j].get('segment_seconds') or 0.0)
-                stationary = (
-                    (segment[j].get('speed_kmh') is not None and float(segment[j]['speed_kmh']) <= 1.0)
-                    and float(segment[j].get('segment_km') or 0.0) <= 0.05
+        match_map = {}
+        if load_rows:
+            trip_ids = [t.trip_id for t in load_rows]
+            for match in db.scalars(
+                select(LoadWbMatch).where(
+                    LoadWbMatch.trip_id.in_(trip_ids),
+                    LoadWbMatch.status.in_(['MATCHED', 'LIKELY_MATCH']),
                 )
-                if stationary:
-                    stop_total += sec
-                else:
-                    moving_seconds += sec
-            duration_seconds = max(0.0, (end_at - start_at).total_seconds()) if end_at else 0.0
-            first_fuel = next((p.get('fuel_total_l') for p in segment if p.get('fuel_total_l') is not None), None)
-            last_fuel = next((p.get('fuel_total_l') for p in reversed(segment) if p.get('fuel_total_l') is not None), None)
-            fuel_l = max(0.0, last_fuel - first_fuel) if first_fuel is not None and last_fuel is not None else None
+            ).all():
+                movement = db.get(WbMovement, match.movement_key)
+                if movement:
+                    match_map[match.trip_id] = movement
+
+        for idx, trip_row in enumerate(load_rows):
+            next_start = load_rows[idx + 1].loading_start_at if idx + 1 < len(load_rows) else None
+            start_at = trip_row.loading_end_at or trip_row.loading_start_at
+            matched_wb = match_map.get(trip_row.trip_id)
+            end_at = trip_row.unload_at or (matched_wb.weigh_at if matched_wb else None) or next_start
+            if end_at is None and points:
+                end_at = points[-1].get('reported_at')
             source = location_map.get(trip_row.source_location_id)
             destination = location_map.get(trip_row.destination_location_id)
             material = material_map.get(trip_row.material_id)
-            trip_id = str(trip_row.trip_id)
-            trip_cum = 0.0
-            previous = None
-            for p in segment:
-                if previous is not None:
-                    trip_cum += _haversine_km(previous, p)
-                p['trip_id'] = trip_id
-                p['trip_cumulative_km'] = round(trip_cum, 3)
-                previous = p
-            authoritative_trips.append({
-                'trip_id': trip_id,
-                'trip_seq': trip_row.trip_seq,
-                'operating_date': trip_row.operating_date,
-                'shift': trip_row.shift,
-                'start_at': start_at,
-                'end_at': end_at,
-                'duration_seconds': round(duration_seconds, 1),
-                'moving_seconds': round(moving_seconds, 1),
-                'stop_seconds': round(stop_total, 1),
-                'distance_km': round(distance_km, 2),
-                'fuel_l': round(fuel_l, 2) if fuel_l is not None else None,
-                'avg_speed_kmh': round(distance_km / (duration_seconds / 3600.0), 1) if duration_seconds > 0 else None,
-                'point_count': len(segment),
-                'source_name': source.name if source else trip_row.source_location_id,
-                'destination_name': destination.name if destination else trip_row.destination_location_id,
-                'material_name': material.name if material else trip_row.material_id,
-                'quantity_mt': float(trip_row.quantity_mt) if trip_row.quantity_mt is not None else None,
-                'driver_id': trip_row.driver_id,
-                'loading_equipment_id': trip_row.loading_equipment_id,
-                'start_index': start_idx,
-                'end_index': end_idx,
-                'boundary_reason': 'tiom_trip',
-                'provisional': False,
-                'source_type': trip_row.source_type,
-            })
+            quantity_mt = float(matched_wb.net_kg) / 1000.0 if matched_wb and matched_wb.net_kg is not None else None
+            built = build_trip_from_window(
+                trip_row.trip_id,
+                trip_row.operating_date,
+                trip_row.shift,
+                start_at,
+                end_at,
+                source.name if source else trip_row.source_location_id,
+                destination.name if destination else trip_row.destination_location_id,
+                material.name if material else (matched_wb.material_name if matched_wb else trip_row.material_id),
+                quantity_mt,
+                trip_row.vehicle_driver_id,
+                trip_row.machine_id,
+                trip_row.trip_seq,
+                'LOAD_TRIP',
+                'tiom_load_trip',
+            )
+            if built:
+                authoritative_trips.append(built)
+
+        if authoritative_trips:
+            authoritative_mode = 'LOAD_TRIP'
+
+    # 2) WB fallback: latest confirmed WB batch per date/shift.
+    # Use this when field load_trip capture is absent/incomplete.
+    if not authoritative_trips and equipment:
+        wb_rows = []
+        day = from_date
+        while day <= to_date:
+            shifts = [shift] if shift != 'ALL' else ['A', 'B', 'C']
+            for shift_code in shifts:
+                _, rows = authoritative_wb(db, day, shift_code)
+                for movement in rows:
+                    if vehicle_matches(movement, equipment):
+                        wb_rows.append(movement)
+            day += timedelta(days=1)
+        wb_rows.sort(key=lambda x: x.weigh_at)
+
+        for idx, movement in enumerate(wb_rows):
+            previous = wb_rows[idx - 1] if idx > 0 else None
+            if previous and previous.operating_date == movement.operating_date and previous.shift == movement.shift:
+                start_at = previous.weigh_at
+            else:
+                start_at = movement.weigh_at - timedelta(minutes=30)
+            end_at = movement.weigh_at
+            built = build_trip_from_window(
+                f"WB-{movement.movement_no or idx + 1}",
+                movement.operating_date,
+                movement.shift,
+                start_at,
+                end_at,
+                movement.source_raw,
+                movement.destination_raw,
+                movement.material_name or movement.material_code,
+                float(movement.net_kg) / 1000.0 if movement.net_kg is not None else None,
+                None,
+                None,
+                idx + 1,
+                'WB',
+                'wb_movement',
+            )
+            if built:
+                authoritative_trips.append(built)
+
+        if authoritative_trips:
+            authoritative_mode = 'WB_TRIP'
 
     # Split the session into provisional mine movement legs only when authoritative
     # TIOM trip rows are unavailable for this mapped vehicle/date range.
@@ -1065,7 +1127,7 @@ def vehicle_route(
     # are hard boundaries, with stops/gaps/turnarounds as additional boundaries.
     if authoritative_trips:
         trips = authoritative_trips
-        segmentation_mode = 'TIOM_TRIP'
+        segmentation_mode = authoritative_mode or 'LOAD_TRIP'
     else:
         segmentation_mode = 'GPS_PROVISIONAL'
         trips = []
@@ -1273,10 +1335,13 @@ def vehicle_route(
         'segmentation_mode': segmentation_mode,
         'points': points,
         'precision_note': (
-            'Trip boundaries come from TIOM site_trip records (vehicle/date/shift/loading/unloading/source/destination). Volvo GPS is used only to draw and measure the path inside each TIOM trip window.'
-            if segmentation_mode == 'TIOM_TRIP'
+            'Trip boundaries come from TIOM load_trip records and matched WB movements. Volvo GPS is used only to draw and measure the path inside each operational trip window.'
+            if segmentation_mode == 'LOAD_TRIP'
             else
-            'No matching TIOM site_trip records were found for this mapped vehicle/date range. These rows are provisional GPS movement legs split by operating day/shift, stops, telemetry gaps and major turnarounds.'
+            'Trip count/source/destination come from the latest confirmed TIOM WB movements for this truck. GPS windows are approximated between consecutive WB events because no matching field load_trip rows were available.'
+            if segmentation_mode == 'WB_TRIP'
+            else
+            'No matching TIOM load_trip or confirmed WB movements were found for this mapped vehicle/date range. These rows are provisional GPS movement legs.'
         ),
     }
 
