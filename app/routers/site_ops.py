@@ -262,8 +262,20 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
     destination = str(payload.get("destinationLocationId") or '').strip() or None
     material = str(payload.get("materialId") or '').strip() or None
     gp_no = str(payload.get("gpNo") or '').strip() or None
-    if vehicle and not db.get(Equipment, vehicle): raise HTTPException(422, "Choose a valid vehicle")
-    if loader and not db.get(Equipment, loader): raise HTTPException(422, "Choose a valid loader/excavator")
+    def assigned_equipment(machine_id, label):
+        if not machine_id:
+            return None
+        eq=db.get(Equipment,machine_id)
+        assignment=db.scalar(select(EquipmentSiteAssignment).where(
+            EquipmentSiteAssignment.site_id==site_id,
+            EquipmentSiteAssignment.machine_id==machine_id,
+            EquipmentSiteAssignment.active.is_(True),
+        ).order_by(EquipmentSiteAssignment.effective_from.desc(),EquipmentSiteAssignment.id.desc()).limit(1))
+        if not eq or not eq.active or not assignment:
+            raise HTTPException(422, f"Choose a valid active {label} assigned to {site_id}")
+        return eq
+    if vehicle: assigned_equipment(vehicle,"vehicle")
+    if loader: assigned_equipment(loader,"loader/excavator")
     for loc in (source, destination):
         if loc:
             x = db.get(SiteLocation, loc)
