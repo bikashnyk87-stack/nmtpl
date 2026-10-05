@@ -53,6 +53,7 @@ from app.site_models import (
     TiomMisReconciliation,
 )
 from app.services.site_context import resolve_site_context
+from app.maintenance_models import MaintenanceBreakdown
 from app.site_schemas import (
     SiteAssetAttendanceIn,
     SiteAssetMeterIn,
@@ -1226,23 +1227,39 @@ def operations_dashboard(
         })
         day+=timedelta(days=1)
 
-    fleet_status={}
-    for status,count in db.execute(select(
-        SiteAssetAttendance.status,func.count()
-    ).where(
-        SiteAssetAttendance.site_id==site_id,
-        SiteAssetAttendance.operating_date==today,
-    ).group_by(SiteAssetAttendance.status)):
-        fleet_status[str(status or "UNKNOWN").upper()]=int(count or 0)
-    assigned_assets=db.scalar(select(func.count(func.distinct(EquipmentSiteAssignment.machine_id))).where(
+    # Fleet status is derived from ERP activity; no separate attendance/status entry.
+    assigned_ids=set(db.scalars(select(EquipmentSiteAssignment.machine_id).where(
         EquipmentSiteAssignment.site_id==site_id,
         EquipmentSiteAssignment.active.is_(True),
         EquipmentSiteAssignment.effective_from<=today,
         or_(EquipmentSiteAssignment.effective_to.is_(None),EquipmentSiteAssignment.effective_to>=today),
-    )) or 0
-    recorded_assets=sum(fleet_status.values())
-    if assigned_assets>recorded_assets:
-        fleet_status["NOT_UPDATED"]=int(assigned_assets-recorded_assets)
+    )))
+    trip_asset_ids=set()
+    for vehicle_id,loader_id in db.execute(select(
+        SiteTrip.vehicle_id,SiteTrip.loading_equipment_id
+    ).where(*today_filters)):
+        if vehicle_id: trip_asset_ids.add(vehicle_id)
+        if loader_id: trip_asset_ids.add(loader_id)
+    meter_asset_ids=set(db.scalars(select(SiteAssetMeter.asset_id).where(
+        SiteAssetMeter.site_id==site_id,
+        SiteAssetMeter.operating_date==today,
+        SiteAssetMeter.usage.is_not(None),
+        SiteAssetMeter.usage>0,
+    )))
+    bd_ids=set(db.scalars(select(MaintenanceBreakdown.asset_id).where(
+        MaintenanceBreakdown.site_id==site_id,
+        MaintenanceBreakdown.status.in_(["OPEN","IN_PROGRESS","UNDER_REPAIR"]),
+    )))
+    active_ids=(trip_asset_ids|meter_asset_ids)&assigned_ids
+    breakdown_ids=bd_ids&assigned_ids
+    active_ids-=breakdown_ids
+    no_activity_ids=assigned_ids-active_ids-breakdown_ids
+    fleet_status={
+        "ACTIVE_USED":len(active_ids),
+        "BREAKDOWN":len(breakdown_ids),
+        "NO_ACTIVITY":len(no_activity_ids),
+    }
+    assigned_assets=len(assigned_ids)
 
     meter_usage={}
     for typ,usage in db.execute(select(
