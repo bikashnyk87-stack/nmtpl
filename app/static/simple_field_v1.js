@@ -6,9 +6,8 @@ const baseRender = render;
 const baseRenderWB = typeof renderWB12==='function'?renderWB12:(typeof renderWB==='function'?renderWB:null);
 const baseRenderHSD = typeof renderHsdV12==='function'?renderHsdV12:(typeof renderHSD==='function'?renderHSD:null);
 const SIMPLE={
-  TIOM:{daily:['PRODUCTION','WB','HSD','MECHANICAL'],review:['MIS','RECONCILIATION','REPORTS']},
-  SOCP:{daily:['TRIP','WB','HSD'],review:['RECONCILIATION','REPORTS']},
-  KOCP:{daily:['TRIP','OB','HSD','HMR_KMR'],review:['RECONCILIATION','MCL_FACTOR','MCL_SURVEY','BILLING','REPORTS']}
+  SOCP:{daily:['TRIP','WB','HSD'],review:['RECONCILIATION','DATA_QUALITY'],control:['FLEET','LOADER','DRIVER','GP_DESTINATION','REPORTS','MASTERS','MAP','SATELLITE','AUDIT']},
+  KOCP:{daily:['TRIP','OB','HSD','HMR_KMR'],review:['RECONCILIATION','MCL_FACTOR','MCL_SURVEY','BILLING','DATA_QUALITY'],control:['FLEET','LOADER','EXCAVATOR','REPORTS','MASTERS','MAP','SATELLITE','AUDIT']}
 };
 const MGMT=['FLEET','LOADER','EXCAVATOR','DRIVER','GP_DESTINATION','GPS','DATA_QUALITY','MAP','SATELLITE','MASTERS','AUDIT'];
 const label={PRODUCTION:'Production Entry',TRIP:'Trip Entry',OB:'OB Entry',WB:'Weighbridge',HSD:'Fuel / HSD',MECHANICAL:'Mechanical',HMR_KMR:'Machine Meter',MIS:'Paper Report Review',RECONCILIATION:'Check & Match',REPORTS:'Reports',MCL_FACTOR:'MCL Quantity Rules',MCL_SURVEY:'MCL Certified Quantity',BILLING:'Billing Check'};
@@ -47,30 +46,48 @@ function bindLookups(root=document){root.querySelectorAll('.lookup:not([data-bou
 document.addEventListener('click',e=>{document.querySelectorAll('.lookup.open').forEach(w=>{if(!w.contains(e.target))w.classList.remove('open')})});
 function simplePageHead(title,desc){return pageHead(title,desc)+`<div class="context-strip"><span class="context-pill live">${siteId}</span><span class="context-pill">Date ${state.ctx.operatingDate}</span><span class="context-pill">Shift ${simpleShift()}</span></div>`}
 function setSimpleNav(){
-  const cfg=SIMPLE[siteId]||{daily:[],review:[]};
+  const cfg=SIMPLE[siteId]||{daily:[],review:[],control:[]};
   const available=new Set(state.ctx?.modules||[]);
-  const mods=['DASHBOARD',...cfg.daily].filter((m,i,a)=>a.indexOf(m)===i && (m==='DASHBOARD'||available.has(m)));
-  if(available.has('REPORTS')) mods.push('REPORTS');
+  const groups=[
+    ['OPERATIONS',['DASHBOARD',...cfg.daily]],
+    ['REVIEW',cfg.review||[]],
+    ['CONTROL',cfg.control||[]],
+  ];
   const n=$('sideNav');
-  n.innerHTML=mods.map(m=>{
-    const x=META[m]||['--',m,''];
-    const text=m==='DASHBOARD'?'Today':(label[m]||x[1]);
-    return `<button class="field-nav-btn ${state.module===m?'active':''}" data-module="${m}"><span>${x[0]}</span><b>${esc(text)}</b></button>`;
+  n.innerHTML=groups.map(([title,mods])=>{
+    const rows=[...new Set(mods)].filter(m=>m==='DASHBOARD'||available.has(m));
+    if(!rows.length)return '';
+    return `<div class="field-nav-section">${title}</div>`+rows.map(m=>{
+      const x=META[m]||['--',m,''];
+      const text=m==='DASHBOARD'?'Dashboard':(label[m]||x[1]);
+      return `<button class="field-nav-btn ${state.module===m?'active':''}" data-module="${m}"><span>${x[0]}</span><b>${esc(text)}</b></button>`;
+    }).join('');
   }).join('');
-  n.querySelectorAll('[data-module]').forEach(b=>b.onclick=()=>{if(b.dataset.module==='MECHANICAL'){location.href=siteId==='TIOM'?'/tiom':`/site/${siteId}`;return}state.module=b.dataset.module;simpleRender()});
+  n.querySelectorAll('[data-module]').forEach(b=>b.onclick=()=>{state.module=b.dataset.module;simpleRender()});
 }
 setNav=setSimpleNav;window.setNav=setSimpleNav;
 function taskCards(mods){return `<div class="task-cards">${mods.filter(authorised).map(m=>{const x=META[m]||['--',m,''];const action=m==='MECHANICAL'?(siteId==='TIOM'?`location.href='/tiom'`:`location.href='/site/${siteId}'`):`setModule('${m}')`;return `<button class="task-card" onclick="${action}"><span class="task-icon">${x[0]}</span><div><b>${esc(label[m]||x[1])}</b><small>${esc(x[2])}</small></div><strong>Open →</strong></button>`}).join('')}</div>`}
 function renderSimpleDashboard(){
-  const cfg=SIMPLE[siteId]||{daily:[]};
+  const cfg=SIMPLE[siteId]||{daily:[],review:[],control:[]};
+  const d=state.dash||{};
   const draftCount=cfg.daily.filter(m=>localStorage.getItem(draftKey(m))).length;
-  const siteTitle=siteId==='TIOM'?'TIOM Daily Production':siteId==='SOCP'?'SOCP Daily Entry':'KOCP Daily Entry';
-  return `<div class="field-home simple-home">
-    ${pageHead(siteTitle,'Choose the work you need. Only routine field actions are shown here.')}
+  const siteTitle=siteId==='SOCP'?'SOCP Operations Dashboard':'KOCP Operations Dashboard';
+  const siteDesc=siteId==='SOCP'?'Trips, weighbridge, fuel and daily operating controls.':'Coal, OB, MCL quantity controls, fuel and equipment operations.';
+  const reviewCards=(cfg.review||[]).filter(authorised);
+  const controlCards=(cfg.control||[]).filter(m=>authorised(m)&&['REPORTS','MASTERS','FLEET','DATA_QUALITY'].includes(m));
+  return `<div class="field-home simple-home software-home">
+    ${pageHead(siteTitle,siteDesc)}
     <div class="simple-daybar"><div><small>OPERATING DATE</small><b>${esc(state.ctx.operatingDate)}</b></div><div><small>CURRENT SHIFT</small><b>${esc(simpleShift())}</b></div><div><small>DRAFTS ON THIS PC</small><b>${draftCount}</b></div></div>
-    <div class="simple-start-title"><h2>What do you want to enter?</h2><p>Select one option. Complete the form and save.</p></div>
-    ${taskCards(cfg.daily)}
-    <div class="simple-help-box"><b>Field rule</b><span>Search and select the machine/vehicle/location by name or number. You do not need to remember database IDs.</span></div>
+    <div class="simple-kpis software-kpis">
+      <div><small>TRIPS TODAY</small><b>${fmt(d.trips||0)}</b></div>
+      <div><small>${siteId==='KOCP'?'COAL / MT':'QUANTITY MT'}</small><b>${fmt(d.quantityMt||0,2)}</b></div>
+      <div><small>${siteId==='KOCP'?'OB CuM':'WB ROWS'}</small><b>${siteId==='KOCP'?fmt(d.quantityCum||0,2):fmt(d.wbRows||0)}</b></div>
+      <div><small>HSD ISSUED</small><b>${fmt(d.hsdIssuedL||0,1)} L</b></div>
+    </div>
+    <div class="software-section"><div class="simple-start-title"><h2>Daily Operations</h2><p>Master-driven entry. Search by vehicle number, door number or machine name.</p></div>${taskCards(cfg.daily)}</div>
+    ${reviewCards.length?`<div class="software-section"><div class="simple-start-title"><h2>Review & Control</h2><p>Check exceptions and approved quantities before reporting.</p></div>${taskCards(reviewCards)}</div>`:''}
+    ${controlCards.length?`<div class="software-section"><div class="simple-start-title"><h2>Management</h2><p>Reports, master data and fleet controls.</p></div>${taskCards(controlCards)}</div>`:''}
+    <div class="simple-help-box"><b>ERP rule</b><span>Select from the master search. Internal IDs and categories are handled by the system.</span></div>
   </div>`;
 }
 renderDashboard=renderSimpleDashboard;window.renderDashboard=renderSimpleDashboard;
@@ -98,23 +115,26 @@ function clearSimpleHsdDraft(){localStorage.removeItem(draftKey('HSD'));render()
 
 window.NMTPLClearActiveDrafts=function(){NMTPLNet.clearUserDrafts(simpleUser())};
 function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module))restoreDraft('simpleTripForm',draftKey(state.module));if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));simpleCalcNet()}if(state.module==='HSD'){restoreDraft('simpleHsdForm',draftKey('HSD'));toggleSimpleHsd()}const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
-async function simpleRender(){
-  const cfg=SIMPLE[siteId]||{daily:[]};
-  const visible=new Set(['DASHBOARD',...cfg.daily,'REPORTS']);
+async async function simpleRender(){
+  const cfg=SIMPLE[siteId]||{daily:[],review:[],control:[]};
+  const visible=new Set(['DASHBOARD',...(cfg.daily||[]),...(cfg.review||[]),...(cfg.control||[])]);
   if(!visible.has(state.module) || (state.module!=='DASHBOARD'&&!authorised(state.module))){
     state.module='DASHBOARD';
   }
   setSimpleNav();
   const a=META[state.module]||['--',state.module,''];
   $('crumbTop').textContent=`NMTPL / ${siteId}`;
-  $('crumbTitle').textContent=state.module==='DASHBOARD'?'Daily Operations':(label[state.module]||a[1]);
+  $('crumbTitle').textContent=state.module==='DASHBOARD'?'Operations Dashboard':(label[state.module]||a[1]);
   let html=null;
   if(state.module==='DASHBOARD') html=renderSimpleDashboard();
-  else if(siteId==='TIOM'&&state.module==='PRODUCTION') html=await renderTiomProduction();
-  else if(['SOCP','KOCP'].includes(siteId)&&['TRIP','OB'].includes(state.module)) html=await renderSimpleTrips(state.module);
+  else if(['TRIP','OB'].includes(state.module)) html=await renderSimpleTrips(state.module);
   else if(state.module==='WB') html=await renderSimpleWB();
   else if(state.module==='HSD') html=await renderSimpleHsd();
-  else if(state.module==='REPORTS') html=await (typeof renderReportsV12==='function'?renderReportsV12():baseRender());
+  else {
+    await baseRender();
+    setSimpleNav();
+    return;
+  }
   if(html!==null && typeof html==='string') $('workspace').innerHTML=html;
   afterSimpleRender();
 }
