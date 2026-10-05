@@ -922,7 +922,9 @@ def discover_satellite(
         else:
             old_cloud = float(existing.cloud_pct) if existing.cloud_pct is not None else 101.0
             new_cloud = float(cloud) if cloud is not None else 101.0
-            if new_cloud < old_cloud or not existing.image_ref:
+            old_ref = str(existing.image_ref or "")
+            old_ref_is_metadata = "stac.dataspace.copernicus.eu" in old_ref and "/items/" in old_ref
+            if new_cloud < old_cloud or not existing.image_ref or old_ref_is_metadata:
                 existing.cloud_pct = cloud
                 existing.image_ref = item_url
                 existing.status = "DISCOVERED"
