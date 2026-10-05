@@ -657,6 +657,8 @@ class TiomRouteMaster(Base):
     source_location_id: Mapped[str] = mapped_column(ForeignKey("locations.location_id"), index=True)
     destination_location_id: Mapped[str] = mapped_column(ForeignKey("locations.location_id"), index=True)
     route_mode: Mapped[str] = mapped_column(String(20), index=True)  # WITH_WB / WITHOUT_WB
+    lead_basis: Mapped[str] = mapped_column(String(20), default="BENCH_RL", index=True)  # BENCH_RL / FIXED
+    fixed_lead_km: Mapped[Decimal | None] = mapped_column(Numeric(8, 3))
     material_scope: Mapped[str | None] = mapped_column(String(30), index=True)
     via_text: Mapped[str | None] = mapped_column(String(180))
     active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
