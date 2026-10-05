@@ -6,11 +6,11 @@ const baseRender = render;
 const baseRenderWB = typeof renderWB12==='function'?renderWB12:(typeof renderWB==='function'?renderWB:null);
 const baseRenderHSD = typeof renderHsdV12==='function'?renderHsdV12:(typeof renderHSD==='function'?renderHSD:null);
 const SIMPLE={
-  SOCP:{daily:['TRIP','WB','HSD'],review:['RECONCILIATION','DATA_QUALITY'],control:['FLEET','LOADER','DRIVER','GP_DESTINATION','REPORTS','MASTERS','MAP','SATELLITE','AUDIT']},
-  KOCP:{daily:['TRIP','OB','HSD','HMR_KMR'],review:['RECONCILIATION','MCL_FACTOR','MCL_SURVEY','BILLING','DATA_QUALITY'],control:['FLEET','LOADER','EXCAVATOR','REPORTS','MASTERS','MAP','SATELLITE','AUDIT']}
+  SOCP:{entry:['TRIP','WB','HSD'],setup:['ATTENDANCE','SHIFT_CONTROL'],review:['RECONCILIATION','DATA_QUALITY'],control:['FLEET','LOADER','DRIVER','GP_DESTINATION','REPORTS','MASTERS','MAP','SATELLITE','AUDIT']},
+  KOCP:{entry:['TRIP','OB','HSD','HMR_KMR'],setup:['ATTENDANCE','SHIFT_CONTROL'],review:['RECONCILIATION','MCL_FACTOR','MCL_SURVEY','BILLING','DATA_QUALITY'],control:['FLEET','LOADER','EXCAVATOR','REPORTS','MASTERS','MAP','SATELLITE','AUDIT']}
 };
 const MGMT=['FLEET','LOADER','EXCAVATOR','DRIVER','GP_DESTINATION','GPS','DATA_QUALITY','MAP','SATELLITE','MASTERS','AUDIT'];
-const label={PRODUCTION:'Production Entry',TRIP:'Trip Entry',OB:'OB Entry',WB:'Weighbridge',HSD:'Fuel / HSD',MECHANICAL:'Mechanical',HMR_KMR:'Machine Meter',MIS:'Paper Report Review',RECONCILIATION:'Check & Match',REPORTS:'Reports',MCL_FACTOR:'MCL Quantity Rules',MCL_SURVEY:'MCL Certified Quantity',BILLING:'Billing Check'};
+const label={DASHBOARD:'Entry Console',ATTENDANCE:'Attendance Entry',SHIFT_CONTROL:'Shift Setup',PRODUCTION:'Production Entry',TRIP:'Trip Entry',OB:'OB Entry',WB:'Weighbridge Entry',HSD:'Fuel / HSD Entry',MECHANICAL:'Mechanical',HMR_KMR:'HMR / KMR Entry',MIS:'Paper Report Review',RECONCILIATION:'Check & Match',REPORTS:'Reports',MCL_FACTOR:'MCL Quantity Rules',MCL_SURVEY:'MCL Certified Quantity',BILLING:'Billing Check'};
 function isMgmt(){return !!state.bootstrap?.user?.isManagement}
 function authorised(m){return (state.ctx?.modules||[]).includes(m)}
 function simpleShift(){
@@ -46,10 +46,11 @@ function bindLookups(root=document){root.querySelectorAll('.lookup:not([data-bou
 document.addEventListener('click',e=>{document.querySelectorAll('.lookup.open').forEach(w=>{if(!w.contains(e.target))w.classList.remove('open')})});
 function simplePageHead(title,desc){return `<div class="software-page-head"><div><h1>${esc(title)}</h1><p>${esc(desc)}</p></div><div class="software-page-meta"><b>${siteId}</b><span>${esc(state.ctx.operatingDate)}</span><span>Shift ${esc(simpleShift())}</span></div></div>`}
 function setSimpleNav(){
-  const cfg=SIMPLE[siteId]||{daily:[],review:[],control:[]};
+  const cfg=SIMPLE[siteId]||{entry:[],setup:[],review:[],control:[]};
   const available=new Set(state.ctx?.modules||[]);
   const groups=[
-    ['OPERATIONS',['DASHBOARD',...cfg.daily]],
+    ['DATA ENTRY',['DASHBOARD',...(cfg.entry||[])]],
+    ['SHIFT SETUP',cfg.setup||[]],
     ['REVIEW',cfg.review||[]],
     ['CONTROL',cfg.control||[]],
   ];
@@ -59,7 +60,7 @@ function setSimpleNav(){
     if(!rows.length)return '';
     return `<div class="field-nav-section">${title}</div>`+rows.map(m=>{
       const x=META[m]||['--',m,''];
-      const text=m==='DASHBOARD'?'Dashboard':(label[m]||x[1]);
+      const text=m==='DASHBOARD'?'Entry Console':(label[m]||x[1]);
       return `<button class="field-nav-btn ${state.module===m?'active':''}" data-module="${m}"><span>${x[0]}</span><b>${esc(text)}</b></button>`;
     }).join('');
   }).join('');
@@ -67,27 +68,40 @@ function setSimpleNav(){
 }
 setNav=setSimpleNav;window.setNav=setSimpleNav;
 function taskCards(mods){return `<div class="task-cards">${mods.filter(authorised).map(m=>{const x=META[m]||['--',m,''];const action=m==='MECHANICAL'?(siteId==='TIOM'?`location.href='/tiom'`:`location.href='/site/${siteId}'`):`setModule('${m}')`;return `<button class="task-card" onclick="${action}"><span class="task-icon">${x[0]}</span><div><b>${esc(label[m]||x[1])}</b><small>${esc(x[2])}</small></div><strong>Open →</strong></button>`}).join('')}</div>`}
+function entryFlowCards(mods,startNo=1){
+  return `<div class="entry-flow-grid">${mods.filter(authorised).map((m,i)=>{
+    const x=META[m]||['--',m,''];
+    return `<button class="entry-flow-card" onclick="setModule('${m}')">
+      <span class="entry-step">${startNo+i}</span>
+      <span class="entry-flow-icon">${x[0]}</span>
+      <span class="entry-flow-copy"><b>${esc(label[m]||x[1])}</b><small>${esc(x[2]||'Open entry sheet')}</small></span>
+      <strong>Open →</strong>
+    </button>`;
+  }).join('')}</div>`
+}
 function renderSimpleDashboard(){
-  const cfg=SIMPLE[siteId]||{daily:[],review:[],control:[]};
+  const cfg=SIMPLE[siteId]||{entry:[],setup:[],review:[],control:[]};
   const d=state.dash||{};
-  const draftCount=cfg.daily.filter(m=>localStorage.getItem(draftKey(m))).length;
-  const siteTitle=siteId==='SOCP'?'SOCP Operations Dashboard':'KOCP Operations Dashboard';
-  const siteDesc=siteId==='SOCP'?'Trips, weighbridge, fuel and daily operating controls.':'Coal, OB, MCL quantity controls, fuel and equipment operations.';
-  const reviewCards=(cfg.review||[]).filter(authorised);
-  const controlCards=(cfg.control||[]).filter(m=>authorised(m)&&['REPORTS','MASTERS','FLEET','DATA_QUALITY'].includes(m));
-  return `<div class="field-home simple-home software-home">
-    ${pageHead(siteTitle,siteDesc)}
-    <div class="simple-daybar"><div><small>OPERATING DATE</small><b>${esc(state.ctx.operatingDate)}</b></div><div><small>CURRENT SHIFT</small><b>${esc(simpleShift())}</b></div><div><small>DRAFTS ON THIS PC</small><b>${draftCount}</b></div></div>
-    <div class="simple-kpis software-kpis">
+  const draftCount=(cfg.entry||[]).filter(m=>localStorage.getItem(draftKey(m))).length;
+  const setup=(cfg.setup||[]).filter(authorised);
+  const entries=(cfg.entry||[]).filter(authorised);
+  const reviews=(cfg.review||[]).filter(authorised);
+  const siteTitle=siteId==='SOCP'?'SOCP Data Entry Console':'KOCP Data Entry Console';
+  const siteDesc=siteId==='SOCP'
+    ?'Shift-first entry for trips, weighbridge and fuel. Enter many rows together and save once.'
+    :'Shift-first entry for Coal, OB, fuel and machine meters. MCL quantity rules remain automatic.';
+  return `<div class="field-home simple-home software-home entry-console">
+    ${simplePageHead(siteTitle,siteDesc)}
+    <div class="entry-console-strip">
+      <div><small>DATE</small><b>${esc(state.ctx.operatingDate)}</b></div>
+      <div><small>SHIFT</small><b>${esc(simpleShift())}</b></div>
       <div><small>TRIPS TODAY</small><b>${fmt(d.trips||0)}</b></div>
-      <div><small>${siteId==='KOCP'?'COAL / MT':'QUANTITY MT'}</small><b>${fmt(d.quantityMt||0,2)}</b></div>
-      <div><small>${siteId==='KOCP'?'OB CuM':'WB ROWS'}</small><b>${siteId==='KOCP'?fmt(d.quantityCum||0,2):fmt(d.wbRows||0)}</b></div>
-      <div><small>HSD ISSUED</small><b>${fmt(d.hsdIssuedL||0,1)} L</b></div>
+      <div><small>DRAFT ENTRY SHEETS</small><b>${draftCount}</b></div>
     </div>
-    <div class="software-section"><div class="simple-start-title"><h2>Daily Operations</h2><p>Master-driven entry. Search by vehicle number, door number or machine name.</p></div>${taskCards(cfg.daily)}</div>
-    ${reviewCards.length?`<div class="software-section"><div class="simple-start-title"><h2>Review & Control</h2><p>Check exceptions and approved quantities before reporting.</p></div>${taskCards(reviewCards)}</div>`:''}
-    ${controlCards.length?`<div class="software-section"><div class="simple-start-title"><h2>Management</h2><p>Reports, master data and fleet controls.</p></div>${taskCards(controlCards)}</div>`:''}
-    <div class="simple-help-box"><b>ERP rule</b><span>Select from the master search. Internal IDs and categories are handled by the system.</span></div>
+    ${setup.length?`<section class="entry-console-section"><div class="entry-console-title"><b>A. Shift Setup</b><span>Do once at shift start or update only when something changes.</span></div>${entryFlowCards(setup,1)}</section>`:''}
+    <section class="entry-console-section primary-entry"><div class="entry-console-title"><b>B. Main Data Entry</b><span>Use 10-row sheets by default. Increase to 20 or 30 when required.</span></div>${entryFlowCards(entries,setup.length+1)}</section>
+    ${reviews.length?`<section class="entry-console-section"><div class="entry-console-title"><b>C. Review</b><span>Check mismatch/exception only after entry. No duplicate entry.</span></div>${entryFlowCards(reviews,setup.length+entries.length+1)}</section>`:''}
+    <div class="simple-help-box"><b>Field rule</b><span>Select from masters, use shift defaults for repeated values, enter many rows, then save the batch once. Blank rows are ignored and row errors stay highlighted.</span></div>
   </div>`;
 }
 renderDashboard=renderSimpleDashboard;window.renderDashboard=renderSimpleDashboard;
@@ -96,11 +110,120 @@ async function renderTiomProduction(){const [acts,recent]=await Promise.all([api
 async function saveTiomSimpleProduction(){const btn=$('spSave');try{for(const id of ['spMachine','spVehicle','spSource','spDest','spMaterial'])if(!$(id).value)throw new Error(`Choose a valid ${id.replace('sp','').toLowerCase()} from search`);if(!$('spUnload').value)throw new Error('Enter unloading time');btn.disabled=true;const body={operatingDate:$('spDate').value,shift:$('spShift').value,loadingAt:$('spLoad').value,unloadingAt:$('spUnload').value,machineId:$('spMachine').value,vehicleId:$('spVehicle').value,sourceLocationId:$('spSource').value,destinationLocationId:$('spDest').value,materialId:$('spMaterial').value,activity:$('spActivity').value};body.requestId=getReq('PRODUCTION',body,'single');const r=await api('/api/site-ops/TIOM/production/simple',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});clearDraft('tiomSimpleForm',draftKey('PRODUCTION'));clearReq('PRODUCTION');toast(r.idempotent?'Entry already saved — no duplicate created':'Production entry saved');await render()}catch(e){toast(e.message,'bad')}finally{if(btn)btn.disabled=false}}
 function clearTiomSimpleDraft(){localStorage.removeItem(draftKey('PRODUCTION'));clearReq('PRODUCTION');render()}
 
-function tripGridRows(kind,count=5){const isSocp=siteId==='SOCP';return Array.from({length:count},(_,i)=>`<tr class="simple-trip-row" data-i="${i}"><td>${i+1}</td><td><select class="stShift">${shiftOpts(simpleShift())}</select></td><td>${lookupMarkup(`stVehicle${i}`,'ASSET','Vehicle','TRANSPORT,VEHICLE,TIPPER,DUMPER')}</td><td>${lookupMarkup(`stLoader${i}`,'ASSET',siteId==='KOCP'?'Loader / Excavator':'Loader','LOADING,LOADER,EXCAVATOR')}</td>${isSocp?`<td>${lookupMarkup(`stDest${i}`,'LOCATION','Unloading point')}</td>`:`<td>${lookupMarkup(`stMaterial${i}`,'MATERIAL','Material')}</td>`}<td><input class="stGp" id="stGp${i}" placeholder="GP / ref"></td><td>${isSocp?`<input class="stQty qty" id="stQty${i}" type="number" inputmode="decimal" min="0" step="0.001" placeholder="MT">`:'<span class="simple-status muted">Auto by MCL rule</span>'}</td><td><span id="stStatus${i}" class="simple-status muted">Ready</span></td></tr>`).join('')}
-async function renderSimpleTrips(kind='TRIP'){const title=siteId==='KOCP'?(kind==='OB'?'KOCP OB Entry':'KOCP Coal Entry'):'SOCP Trip Entry';const desc=siteId==='SOCP'?'Fast daily entry using vehicle, loader, shift, unloading point and quantity.':kind==='OB'?'OB CuM is applied automatically from the approved MCL rule.':'Coal MT per trip is applied automatically from the approved MCL shift rule.';const rec=await api(`/api/sites/${siteId}/records/trips?operating_date=${state.ctx.operatingDate}&limit=40`).catch(()=>[]);const rows=rec.map(r=>`<tr><td>${esc(r.shift)}</td><td>${esc(r.vehicleId||r.vehicleRaw||'—')}</td><td>${esc(r.loadingEquipmentId||'—')}</td><td>${esc(siteId==='SOCP'?r.destinationLocationId:r.materialId||'—')}</td><td>${esc(r.gpNo||'—')}</td><td>${fmt(r.quantityMt,3)}</td><td>${fmt(r.quantityCum,3)}</td><td>${esc(r.weightBasis||'—')}</td></tr>`);return simplePageHead(title,desc)+`<div id="simpleTripForm" class="simple-form"><div class="simple-top"><div class="field"><span>Entry Date</span><input id="stDate" type="date" data-no-draft value="${state.ctx.operatingDate}"></div><div class="field"><span>Default Shift</span><select id="stDefaultShift" onchange="applyTripDefaults()">${shiftOpts(simpleShift())}</select></div><div class="field"><span>Rows</span><select id="stRows" onchange="rebuildSimpleTripRows()"><option>5</option><option selected>10</option><option>20</option><option>30</option></select></div></div><div class="simple-table-wrap"><table class="simple-grid-table"><thead><tr><th>#</th><th>Shift</th><th>Vehicle</th><th>${siteId==='KOCP'?'Loader / Excavator':'Loader'}</th><th>${siteId==='SOCP'?'Unloading Point':'Material'}</th><th>GP / Ref</th><th>${siteId==='SOCP'?'Qty MT':'Quantity'}</th><th>Status</th></tr></thead><tbody id="simpleTripRows">${tripGridRows(kind,10)}</tbody></table></div><div class="simple-actions"><button id="stSave" class="btn primary" onclick="saveSimpleTrips('${kind}')">Save Entered Rows</button><button class="btn outline" onclick="clearSimpleTripDraft()">Clear</button><span class="draft-state">Draft autosaves on this PC</span></div></div>${panel('Today’s Entries',recentTable(['Shift','Vehicle','Loader/Excavator',siteId==='SOCP'?'Destination':'Material','GP','MT','CuM','Basis'],rows),`${rec.length} recent records`)}`}
-function rebuildSimpleTripRows(){const n=+$('stRows').value||5;$('simpleTripRows').innerHTML=tripGridRows(state.module==='OB'?'OB':'TRIP',n);bindLookups($('simpleTripForm'));restoreDraft('simpleTripForm',draftKey(state.module));}
-function applyTripDefaults(){document.querySelectorAll('.stShift').forEach(x=>x.value=$('stDefaultShift').value);saveDraft('simpleTripForm',draftKey(state.module))}
-async function saveSimpleTrips(kind){const btn=$('stSave'),rows=[...document.querySelectorAll('.simple-trip-row')];let used=0,done=0;btn.disabled=true;try{for(const row of rows){const i=row.dataset.i,vehicle=$(`stVehicle${i}`).value,loader=$(`stLoader${i}`).value,detail=siteId==='SOCP'?$(`stDest${i}`).value:$(`stMaterial${i}`).value,gp=$(`stGp${i}`).value.trim(),qty=siteId==='SOCP'?$(`stQty${i}`).value:'';if(!vehicle&&!loader&&!detail&&!gp&&!qty)continue;used++;const st=$(`stStatus${i}`);try{if(!vehicle)throw new Error('Select vehicle');if(!loader)throw new Error('Select loader/excavator');if(!detail)throw new Error(siteId==='SOCP'?'Select unloading point':'Select material');if(siteId==='SOCP'&&!qty)throw new Error('Enter MT');st.textContent='Saving…';st.className='simple-status muted';const body={kind,operatingDate:$('stDate').value,shift:row.querySelector('.stShift').value,vehicleId:vehicle,loadingEquipmentId:loader,gpNo:gp||null};if(siteId==='SOCP'){body.destinationLocationId=detail;body.quantityMt=qty}else body.materialId=detail;body.requestId=getReq(kind,body,i);const r=await api(`/api/site-ops/${siteId}/trips/simple`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});st.textContent=r.idempotent?'Already saved':'Saved ✓';st.className='simple-status good';clearReq(kind,i);done++}catch(e){st.textContent=e.message;st.className='simple-status bad'}}if(!used)throw new Error('Enter at least one row');if(done===used){clearDraft('simpleTripForm',draftKey(kind));clearReq(kind);toast(`${done} row${done===1?'':'s'} saved`);setTimeout(()=>render(),500)}else toast(`${done}/${used} rows saved. Correct the red rows.`,done?'good':'bad')}catch(e){toast(e.message,'bad')}finally{btn.disabled=false}}
+function tripGridRows(kind,count=10){
+  const isSocp=siteId==='SOCP';
+  return Array.from({length:count},(_,i)=>`<tr class="simple-trip-row" data-i="${i}">
+    <td>${i+1}</td>
+    <td><select class="stShift">${shiftOpts(simpleShift())}</select></td>
+    <td>${lookupMarkup(`stVehicle${i}`,'ASSET','Vehicle','TRANSPORT,VEHICLE,TIPPER,DUMPER')}</td>
+    <td>${lookupMarkup(`stLoader${i}`,'ASSET',siteId==='KOCP'?'Loader / Excavator':'Loader','LOADING,LOADER,EXCAVATOR')}</td>
+    ${isSocp
+      ?`<td>${lookupMarkup(`stDest${i}`,'LOCATION','Unloading point')}</td>`
+      :`<td>${lookupMarkup(`stSource${i}`,'LOCATION','Source')}</td><td>${lookupMarkup(`stDest${i}`,'LOCATION','Destination')}</td><td>${lookupMarkup(`stMaterial${i}`,'MATERIAL','Material')}</td>`}
+    <td><input class="stGp" id="stGp${i}" placeholder="GP / ref"></td>
+    <td>${isSocp?`<input class="stQty qty" id="stQty${i}" type="number" inputmode="decimal" min="0" step="0.001" placeholder="MT">`:'<span class="simple-status muted">Auto by MCL rule</span>'}</td>
+    <td><span id="stStatus${i}" class="simple-status muted">Ready</span></td>
+  </tr>`).join('')
+}
+function defaultLookupBox(id,label,groups=''){return `<div class="field"><span>${label}</span>${lookupMarkup(id,groups==='MATERIAL'?'MATERIAL':groups==='LOCATION'?'LOCATION':'ASSET','Search '+label,groups==='MATERIAL'||groups==='LOCATION'?'':groups)}</div>`}
+async function renderSimpleTrips(kind='TRIP'){
+  const isSocp=siteId==='SOCP';
+  const title=siteId==='KOCP'?(kind==='OB'?'KOCP OB Entry':'KOCP Coal Entry'):'SOCP Trip Entry';
+  const desc=isSocp?'Batch daily trip entry. Set the repeated shift/loader/unloading point once, then fill vehicles and quantities.':kind==='OB'?'Batch OB entry. Source, destination and material are captured; CuM/trip comes from the approved MCL rule.':'Batch Coal entry. Source, destination and material are captured; MT/trip comes from the approved MCL shift rule.';
+  const rec=await api(`/api/sites/${siteId}/records/trips?operating_date=${state.ctx.operatingDate}&limit=60`).catch(()=>[]);
+  const rows=rec.map(r=>`<tr><td>${esc(r.shift)}</td><td>${esc(r.vehicleId||r.vehicleRaw||'—')}</td><td>${esc(r.loadingEquipmentId||'—')}</td>${isSocp?'':`<td>${esc(r.sourceLocationId||'—')}</td>`}<td>${esc(r.destinationLocationId||'—')}</td>${isSocp?'':`<td>${esc(r.materialId||'—')}</td>`}<td>${esc(r.gpNo||'—')}</td><td>${fmt(r.quantityMt,3)}</td><td>${fmt(r.quantityCum,3)}</td><td>${esc(r.weightBasis||'—')}</td></tr>`);
+  const defaults=isSocp
+    ?`<div class="trip-default-grid">
+        <div class="field"><span>Entry Date</span><input id="stDate" type="date" data-no-draft value="${state.ctx.operatingDate}"></div>
+        <div class="field"><span>Default Shift</span><select id="stDefaultShift">${shiftOpts(simpleShift())}</select></div>
+        ${defaultLookupBox('stDefaultLoader','Default Loader','LOADING,LOADER,EXCAVATOR')}
+        ${defaultLookupBox('stDefaultDest','Default Unloading Point','LOCATION')}
+        <div class="field"><span>Rows</span><select id="stRows" onchange="rebuildSimpleTripRows()"><option>5</option><option selected>10</option><option>20</option><option>30</option></select></div>
+        <button class="btn outline apply-defaults-btn" onclick="applyTripDefaults()">Apply Defaults to Blank Rows</button>
+      </div>`
+    :`<div class="trip-default-grid kocp-defaults">
+        <div class="field"><span>Entry Date</span><input id="stDate" type="date" data-no-draft value="${state.ctx.operatingDate}"></div>
+        <div class="field"><span>Default Shift</span><select id="stDefaultShift">${shiftOpts(simpleShift())}</select></div>
+        ${defaultLookupBox('stDefaultLoader','Default Loader / Excavator','LOADING,LOADER,EXCAVATOR')}
+        ${defaultLookupBox('stDefaultSource','Default Source','LOCATION')}
+        ${defaultLookupBox('stDefaultDest','Default Destination','LOCATION')}
+        ${defaultLookupBox('stDefaultMaterial','Default Material','MATERIAL')}
+        <div class="field"><span>Rows</span><select id="stRows" onchange="rebuildSimpleTripRows()"><option>5</option><option selected>10</option><option>20</option><option>30</option></select></div>
+        <button class="btn outline apply-defaults-btn" onclick="applyTripDefaults()">Apply Defaults to Blank Rows</button>
+      </div>`;
+  const heads=isSocp
+    ?'<th>#</th><th>Shift</th><th>Vehicle</th><th>Loader</th><th>Unloading Point</th><th>GP / Ref</th><th>Qty MT</th><th>Status</th>'
+    :'<th>#</th><th>Shift</th><th>Vehicle</th><th>Loader / Excavator</th><th>Source</th><th>Destination</th><th>Material</th><th>GP / Ref</th><th>Quantity</th><th>Status</th>';
+  const recentHeads=isSocp?['Shift','Vehicle','Loader','Destination','GP','MT','CuM','Basis']:['Shift','Vehicle','Loader/Excavator','Source','Destination','Material','GP','MT','CuM','Basis'];
+  return simplePageHead(title,desc)+`<div id="simpleTripForm" class="simple-form batch-entry-form">
+    ${defaults}
+    <div class="entry-grid-note"><b>Fast entry:</b> Set repeated values above, click <b>Apply Defaults</b>, then enter only the changing vehicle/GP/quantity fields.</div>
+    <div class="simple-table-wrap"><table class="simple-grid-table software-entry-grid trip-entry-grid"><thead><tr>${heads}</tr></thead><tbody id="simpleTripRows">${tripGridRows(kind,10)}</tbody></table></div>
+    <div class="simple-actions"><button id="stSave" class="btn primary" onclick="saveSimpleTrips('${kind}')">Save Entered Rows</button><button class="btn outline" onclick="clearSimpleTripDraft()">Clear</button><span class="draft-state">Draft autosaves on this PC</span></div>
+  </div>`+panel('Today’s Entries',recentTable(recentHeads,rows),`${rec.length} recent records`)
+}
+function rebuildSimpleTripRows(){
+  const n=+$('stRows').value||10;
+  $('simpleTripRows').innerHTML=tripGridRows(state.module==='OB'?'OB':'TRIP',n);
+  bindLookups($('simpleTripForm'));
+  restoreDraft('simpleTripForm',draftKey(state.module));
+}
+function copyLookupDefault(srcId,dstId){
+  const src=$(srcId),dst=$(dstId),srcText=$(srcId+'Text'),dstText=$(dstId+'Text');
+  if(!src||!dst||!src.value||dst.value)return;
+  dst.value=src.value;
+  if(srcText&&dstText){
+    dstText.value=srcText.value;
+    for(const k of ['vehicleNo','doorNo','group','type'])if(srcText.dataset[k])dstText.dataset[k]=srcText.dataset[k];
+  }
+}
+function applyTripDefaults(){
+  const sh=$('stDefaultShift')?.value;
+  document.querySelectorAll('.simple-trip-row').forEach(row=>{
+    const i=row.dataset.i,sel=row.querySelector('.stShift');if(sel&&sh)sel.value=sh;
+    copyLookupDefault('stDefaultLoader',`stLoader${i}`);
+    if(siteId==='SOCP') copyLookupDefault('stDefaultDest',`stDest${i}`);
+    else{
+      copyLookupDefault('stDefaultSource',`stSource${i}`);
+      copyLookupDefault('stDefaultDest',`stDest${i}`);
+      copyLookupDefault('stDefaultMaterial',`stMaterial${i}`);
+    }
+  });
+  saveDraft('simpleTripForm',draftKey(state.module));
+}
+async function saveSimpleTrips(kind){
+  const btn=$('stSave'),rows=[...document.querySelectorAll('.simple-trip-row')];
+  let used=0,done=0;btn.disabled=true;
+  try{
+    for(const row of rows){
+      const i=row.dataset.i,vehicle=$(`stVehicle${i}`).value,loader=$(`stLoader${i}`).value,gp=$(`stGp${i}`).value.trim();
+      const destination=$(`stDest${i}`).value;
+      const source=siteId==='KOCP'?$(`stSource${i}`).value:null;
+      const material=siteId==='KOCP'?$(`stMaterial${i}`).value:null;
+      const qty=siteId==='SOCP'?$(`stQty${i}`).value:'';
+      if(!vehicle&&!loader&&!destination&&!source&&!material&&!gp&&!qty)continue;
+      used++;const st=$(`stStatus${i}`);
+      try{
+        if(!vehicle)throw new Error('Select vehicle');
+        if(!loader)throw new Error('Select loader/excavator');
+        if(!destination)throw new Error(siteId==='SOCP'?'Select unloading point':'Select destination');
+        if(siteId==='KOCP'&&!source)throw new Error('Select source');
+        if(siteId==='KOCP'&&!material)throw new Error('Select material');
+        if(siteId==='SOCP'&&!qty)throw new Error('Enter MT');
+        st.textContent='Saving…';st.className='simple-status muted';
+        const body={kind,operatingDate:$('stDate').value,shift:row.querySelector('.stShift').value,vehicleId:vehicle,loadingEquipmentId:loader,destinationLocationId:destination,gpNo:gp||null};
+        if(siteId==='SOCP')body.quantityMt=qty;
+        else{body.sourceLocationId=source;body.materialId=material}
+        body.requestId=getReq(kind,body,i);
+        const r=await api(`/api/site-ops/${siteId}/trips/simple`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        st.textContent=r.idempotent?'Already saved':'Saved ✓';st.className='simple-status good';clearReq(kind,i);done++;
+      }catch(e){st.textContent=e.message;st.className='simple-status bad'}
+    }
+    if(!used)throw new Error('Enter at least one row');
+    if(done===used){clearDraft('simpleTripForm',draftKey(kind));clearReq(kind);toast(`${done} row${done===1?'':'s'} saved`);setTimeout(()=>render(),500)}
+    else toast(`${done}/${used} rows saved. Correct the red rows.`,done?'good':'bad');
+  }catch(e){toast(e.message,'bad')}finally{btn.disabled=false}
+}
 function clearSimpleTripDraft(){localStorage.removeItem(draftKey(state.module));clearReq(state.module);render()}
 
 
@@ -311,27 +434,25 @@ function clearSimpleMeterDraft(){localStorage.removeItem(draftKey('HMR_KMR'));re
 window.NMTPLClearActiveDrafts=function(){NMTPLNet.clearUserDrafts(simpleUser())};
 function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module))restoreDraft('simpleTripForm',draftKey(state.module));if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){restoreDraft('simpleHsdForm',draftKey('HSD'));document.querySelectorAll('.simple-hsd-row').forEach(r=>toggleHsdRow(r.dataset.i))}if(state.module==='HMR_KMR'){restoreDraft('simpleMeterForm',draftKey('HMR_KMR'));document.querySelectorAll('.simple-meter-row').forEach(r=>calcMeterRow(r.dataset.i))}const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
 async function simpleRender(){
-  const cfg=SIMPLE[siteId]||{daily:[],review:[],control:[]};
-  const visible=new Set(['DASHBOARD',...(cfg.daily||[]),...(cfg.review||[]),...(cfg.control||[])]);
-  if(!visible.has(state.module) || (state.module!=='DASHBOARD'&&!authorised(state.module))){
-    state.module='DASHBOARD';
-  }
+  const cfg=SIMPLE[siteId]||{entry:[],setup:[],review:[],control:[]};
+  const visible=new Set(['DASHBOARD',...(cfg.entry||[]),...(cfg.setup||[]),...(cfg.review||[]),...(cfg.control||[])]);
+  if(!visible.has(state.module) || (state.module!=='DASHBOARD'&&!authorised(state.module))) state.module='DASHBOARD';
   setSimpleNav();
   const a=META[state.module]||['--',state.module,''];
   $('crumbTop').textContent=`NMTPL / ${siteId}`;
-  $('crumbTitle').textContent=state.module==='DASHBOARD'?'Operations Dashboard':(label[state.module]||a[1]);
+  $('crumbTitle').textContent=state.module==='DASHBOARD'?'Data Entry Console':(label[state.module]||a[1]);
   let html=null;
   if(state.module==='DASHBOARD') html=renderSimpleDashboard();
   else if(['TRIP','OB'].includes(state.module)) html=await renderSimpleTrips(state.module);
   else if(state.module==='WB') html=await renderSimpleWB();
   else if(state.module==='HSD') html=await renderSimpleHsd();
   else if(state.module==='HMR_KMR') html=await renderSimpleMeter();
-  else {
+  else{
     await baseRender();
     setSimpleNav();
     return;
   }
-  if(html!==null && typeof html==='string') $('workspace').innerHTML=html;
+  if(html!==null&&typeof html==='string')$('workspace').innerHTML=html;
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
