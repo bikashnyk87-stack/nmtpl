@@ -269,6 +269,76 @@ def _recent_status_pairs(db, max_rows=None):
     return result
 
 
+def _current_shift_window(now_utc):
+    """Return current TIOM operating shift and its UTC start time."""
+    local = now_utc.astimezone(IST)
+    clock = local.time().replace(tzinfo=None)
+    if time(hour=6) <= clock < time(hour=14):
+        shift = 'A'
+        start_local = datetime.combine(local.date(), time(hour=6), IST)
+    elif time(hour=14) <= clock < time(hour=22):
+        shift = 'B'
+        start_local = datetime.combine(local.date(), time(hour=14), IST)
+    else:
+        shift = 'C'
+        shift_date = local.date() if clock >= time(hour=22) else local.date() - timedelta(days=1)
+        start_local = datetime.combine(shift_date, time(hour=22), IST)
+    return shift, start_local.astimezone(timezone.utc)
+
+
+def _shift_operational_vins(db, now_utc):
+    """Vehicles that have demonstrated real activity during the current shift.
+
+    'Operational' is intentionally different from instantaneous movement:
+    a haul truck remains operational while briefly stopped for loading,
+    weighing or unloading if it has moved / run its engine during this shift.
+    """
+    shift, start_utc = _current_shift_window(now_utc)
+    reports = db.scalars(
+        select(VolvoReport)
+        .where(
+            VolvoReport.kind.in_(['vehiclestatuses', 'vehiclepositions']),
+            VolvoReport.created_at >= start_utc,
+            VolvoReport.created_at <= now_utc,
+        )
+        .order_by(VolvoReport.vin, VolvoReport.created_at)
+    ).all()
+
+    active = set()
+    counters = defaultdict(lambda: {'engine': None, 'distance': None, 'fuel': None})
+    for report in reports:
+        payload = report.payload or {}
+        if report.kind == 'vehiclepositions':
+            p = _position_values(payload)
+            speeds = [x for x in (p['wheel_speed_kmh'], p['gps_speed_kmh']) if x is not None]
+            if speeds and max(speeds) > 1:
+                active.add(report.vin)
+            continue
+
+        s = _status_values(payload)
+        speeds = [x for x in (s['wheel_speed_kmh'],) if x is not None]
+        driver_state = str(s.get('driver_working_state') or '').strip().upper()
+        if (speeds and max(speeds) > 1) or (s['engine_speed_rpm'] is not None and s['engine_speed_rpm'] > 0):
+            active.add(report.vin)
+        if driver_state in {'DRIVE', 'DRIVING', 'WORK', 'WORKING'}:
+            active.add(report.vin)
+
+        previous = counters[report.vin]
+        current_values = {
+            'engine': s['engine_hours'],
+            'distance': s['distance_m'],
+            'fuel': s['fuel_ml'],
+        }
+        for key, current_value in current_values.items():
+            previous_value = previous[key]
+            if current_value is not None and previous_value is not None and current_value > previous_value:
+                active.add(report.vin)
+            if current_value is not None:
+                previous[key] = current_value
+
+    return active, shift, start_utc
+
+
 def _period_bounds(from_date, to_date):
     # Query wide enough to include C shift after midnight on the final operating date.
     start_local = datetime.combine(from_date, time.min, IST)
@@ -414,7 +484,7 @@ def _period_metrics(status_reports, mappings, labels, allowed_vins, from_date, t
     return vehicles, daily, totals
 
 
-def _fleet_row(vehicle, mappings, reports, recent_statuses, now):
+def _fleet_row(vehicle, mappings, reports, recent_statuses, now, operational_vins=None):
     status = reports[vehicle.vin].get('vehiclestatuses', {})
     position = reports[vehicle.vin].get('vehiclepositions', {})
     previous = recent_statuses.get(vehicle.vin, [None, None])
@@ -442,6 +512,7 @@ def _fleet_row(vehicle, mappings, reports, recent_statuses, now):
         'model': vehicle.payload.get('model'),
         'machine_id': mapped_id,
         'state': _state(status, position, now, previous_status),
+        'operational': vehicle.vin in (operational_vins or set()),
         'engine_hours': sv['engine_hours'],
         'distance_km': round(sv['distance_m'] / 1000.0, 2) if sv['distance_m'] is not None else None,
         'fuel_used_l': round(sv['fuel_ml'] / 1000.0, 2) if sv['fuel_ml'] is not None else None,
@@ -486,8 +557,9 @@ def fleet(request: Request, db=Depends(get_db)):
     recent_statuses = _recent_status_pairs(db)
     sync = db.scalar(select(VolvoSync).order_by(VolvoSync.completed_at.desc()).limit(1))
     now = datetime.now(timezone.utc)
+    operational_vins, current_shift, shift_started_at = _shift_operational_vins(db, now)
     rows = [
-        _fleet_row(vehicle, mappings, reports, recent_statuses, now)
+        _fleet_row(vehicle, mappings, reports, recent_statuses, now, operational_vins)
         for vehicle in db.scalars(select(VolvoVehicle).order_by(VolvoVehicle.vin))
     ]
     equipment = [
@@ -501,6 +573,9 @@ def fleet(request: Request, db=Depends(get_db)):
         'last_sync': sync.completed_at if sync else None,
         'counts': sync.counts if sync else {},
         'server_time': now,
+        'current_shift': current_shift,
+        'shift_started_at': shift_started_at,
+        'operational_count': sum(1 for row in rows if row['operational']),
     }
 
 
@@ -530,6 +605,7 @@ def dashboard(
         raise HTTPException(422, 'Select a maximum range of 93 days.')
 
     now = datetime.now(timezone.utc)
+    operational_vins, current_shift, shift_started_at = _shift_operational_vins(db, now)
     latest = _latest_payloads(db)
     recent_statuses = _recent_status_pairs(db)
     mappings = {r.vin: r.machine_id for r in db.scalars(select(VolvoMapping))}
@@ -555,7 +631,7 @@ def dashboard(
 
     vehicle_rows = []
     for v in all_vehicles:
-        row = _fleet_row(v, mappings, latest, recent_statuses, now)
+        row = _fleet_row(v, mappings, latest, recent_statuses, now, operational_vins)
         if selected_vehicle != 'ALL' and selected_vehicle not in {row['vin'], row['machine_id'], row['name']}:
             continue
         if state != 'ALL' and row['state'] != state:
@@ -614,6 +690,9 @@ def dashboard(
         'last_sync': sync.completed_at if sync else None,
         'fleet': vehicle_rows,
         'state_counts': dict(counts),
+        'operational_count': sum(1 for row in vehicle_rows if row['operational']),
+        'current_shift': current_shift,
+        'shift_started_at': shift_started_at,
         'period_vehicles': period_vehicles,
         'daily': daily,
         'totals': totals,
