@@ -100,3 +100,50 @@
 .volvo-table-simple{min-width:1280px}
 @media(max-width:1450px){.volvo-filters{grid-template-columns:repeat(4,1fr)}.volvo-zone-form{grid-template-columns:repeat(2,1fr)}.volvo-zone-actions{grid-column:span 2}}
 @media(max-width:900px){.volvo-zone-row{grid-template-columns:1fr}.volvo-zone-form{grid-template-columns:1fr}.volvo-zone-actions{grid-column:auto}}
+
+
+/* TIOM Volvo compact/location/performance R8 */
+.volvo-shell{font-size:11px}
+.volvo-hero{padding:11px 15px}
+.volvo-hero h2{font-size:20px}.volvo-hero p{font-size:10px}
+.volvo-sync-pill{font-size:10px;padding:4px 7px;margin-top:5px}
+.volvo-filters{gap:7px;padding:9px 10px}
+.volvo-filters label{font-size:10px}.volvo-filters input,.volvo-filters select{font-size:11px;padding:7px 8px;margin-top:3px}
+.volvo-filter-actions .btn,.volvo-map-head-actions .btn{font-size:10px;padding:7px 9px}
+.volvo-section-title{margin:10px 2px 5px}.volvo-section-title h3{font-size:12px}.volvo-section-title span{font-size:9px}
+.volvo-kpis{gap:7px;margin:6px 0 10px}
+.volvo-kpi{padding:9px 11px}.volvo-kpi span{font-size:9px}.volvo-kpi b{font-size:22px}.volvo-kpi small{font-size:9px}
+.volvo-period-kpis{gap:7px;margin-bottom:10px}.volvo-period-kpi{padding:9px 11px}.volvo-period-kpi span{font-size:9px}.volvo-period-kpi b{font-size:17px}
+.volvo-panel-head{padding:9px 11px}.volvo-panel-head h3{font-size:13px}.volvo-panel-head span{font-size:9px}
+.volvo-panel-body{padding:10px}
+.volvo-map-legend{font-size:9px;padding:6px 10px;gap:10px}
+.volvo-map-wrap{height:385px}
+.volvo-simple-status>div{padding:9px}.volvo-simple-status b{font-size:21px}.volvo-simple-status span{font-size:9px}
+.volvo-footnote,.volvo-fresh-line,.volvo-route-summary{font-size:9.5px}
+.volvo-table td{font-size:10px;padding:7px}.volvo-table th{font-size:9px;padding:8px 7px}
+.volvo-machine{font-size:10px}.volvo-vin{font-size:8px}
+.volvo-map-popup{font-size:10px;min-width:240px;max-width:290px;padding:8px}.volvo-map-popup b{font-size:12px}
+.volvo-popup-location{font-size:10px;font-weight:900;color:#0b67aa;background:#eef7fc;border:1px solid #d2e8f5;border-radius:5px;padding:4px 6px;margin:4px 0 6px}
+.volvo-location-summary{display:flex;align-items:center;gap:6px;flex-wrap:wrap;padding:6px 10px;border-bottom:1px solid #e0e8ed;background:#f8fbfc;min-height:32px}
+.volvo-location-summary .title{font-size:9px;font-weight:900;text-transform:uppercase;color:#506773;margin-right:3px}
+.volvo-location-summary.warning{display:block;font-size:9.5px;color:#7a5a12;background:#fff9e9;border-bottom-color:#eddfb3}
+.volvo-location-chip{border:1px solid #cfdae1;background:#fff;color:#345260;border-radius:999px;padding:3px 7px;font-size:9px;cursor:pointer}
+.volvo-location-chip b{margin-right:4px;color:#0b67aa}
+.volvo-location-chip:hover{background:#edf7fc;border-color:#9dc8e0}
+.volvo-map-note{font-size:8.5px}
+.volvo-map-note b{color:#a14b18}
+.volvo-bar-row{grid-template-columns:minmax(70px,105px) 1fr 66px;font-size:10px;gap:6px}.volvo-bar-track{height:11px}.volvo-bar-value{font-size:9.5px}
+.volvo-stack-bars{display:grid;gap:7px}
+.volvo-stack-row{display:grid;grid-template-columns:minmax(70px,105px) 1fr 66px;gap:6px;align-items:center;font-size:10px}
+.volvo-stack-label{font-weight:800;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.volvo-stack-track{display:flex;height:12px;border-radius:999px;overflow:hidden;background:#edf2f5}
+.volvo-stack-track .moving{background:#278b68}.volvo-stack-track .idle{background:#d89420}
+.volvo-stack-value{text-align:right;font-size:9.5px;font-weight:800;color:#34505f}
+.volvo-stack-legend{display:flex;justify-content:flex-end;gap:12px;margin-top:3px;font-size:9px;color:#667a85}
+.volvo-stack-legend span{display:flex;align-items:center;gap:4px}.volvo-stack-legend i{width:8px;height:8px;border-radius:2px}
+.volvo-stack-legend i.moving{background:#278b68}.volvo-stack-legend i.idle{background:#d89420}
+.volvo-chart-grid-simple{gap:10px}
+.volvo-chart-grid-simple .volvo-panel{min-height:250px}
+.volvo-line-svg,.volvo-scatter-svg{height:205px}
+.volvo-dot-row{font-size:10px}
+@media(max-width:1450px){.volvo-map-wrap{height:360px}}
