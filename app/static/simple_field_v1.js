@@ -540,7 +540,7 @@ async function simpleRender(){
   setSimpleNav();
   const a=META[state.module]||['--',state.module,''];
   $('crumbTop').textContent=`NMTPL / ${siteId}`;
-  $('crumbTitle').textContent=state.module==='DASHBOARD'?'Data Entry Console':(label[state.module]||a[1]);
+  $('crumbTitle').textContent=state.module==='DASHBOARD'?'Operations Dashboard':(label[state.module]||a[1]);
   let html=null;
   if(state.module==='DASHBOARD') html=await renderSimpleDashboard();
   else if(['TRIP','OB'].includes(state.module)) html=await renderSimpleTrips(state.module);
