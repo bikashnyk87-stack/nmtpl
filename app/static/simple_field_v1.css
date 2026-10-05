@@ -1567,3 +1567,44 @@ body.field-mode{
     margin-top:6px;
   }
 }
+
+
+/* R10 — KOCP single Production Entry with inline machine HMR */
+.kocp-hmr-inline{
+  margin-top:7px;
+  padding-top:7px;
+  border-top:1px solid #c9d4d8;
+}
+.kocp-hmr-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:8px;
+  margin-bottom:5px;
+}
+.kocp-hmr-head b{
+  display:block;
+  color:#493522;
+  font-size:10px;
+}
+.kocp-hmr-head span{
+  display:block;
+  margin-top:1px;
+  color:#6f6155;
+  font-size:8px;
+  font-weight:600;
+}
+.kocp-hmr-table{
+  min-width:760px!important;
+}
+.kocp-hmr-table th{
+  background:#eee0d0!important;
+  color:#493522!important;
+}
+.kocp-hmr-table td{
+  padding-top:3px!important;
+  padding-bottom:3px!important;
+}
+@media(max-width:800px){
+  .kocp-hmr-head{align-items:flex-start;flex-direction:column}
+}
