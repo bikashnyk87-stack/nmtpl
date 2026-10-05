@@ -8,6 +8,7 @@ from uuid import uuid4
 import json
 from urllib.request import Request as UrlRequest, urlopen
 from urllib.error import URLError, HTTPError
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse, StreamingResponse
@@ -807,7 +808,7 @@ def list_satellite(site_id:str,request:Request,db:Session=Depends(get_db)):
 
 @router.get("/{site_id}/satellite/{observation_id}/open")
 def open_satellite_image(site_id:str, observation_id:str, request:Request, db:Session=Depends(get_db)):
-    """Open a viewable Sentinel image, resolving old STAC metadata links on demand."""
+    """Open the selected Sentinel acquisition zoomed to its AOI in Copernicus Browser."""
     user=get_user(db,request)
     site_id=require_site(db,user,site_id)
     _require_any(db,user,site_id,"SATELLITE")
@@ -818,31 +819,61 @@ def open_satellite_image(site_id:str, observation_id:str, request:Request, db:Se
     if row is None:
         raise HTTPException(404,"Satellite observation not found.")
 
-    target=str(row.image_ref or "").strip()
-    if not target:
-        raise HTTPException(404,"No satellite image reference is available.")
+    item_id=None
+    notes=str(row.notes or "")
+    marker="CDSE STAC item "
+    if marker in notes:
+        item_id=notes.split(marker,1)[1].strip().split()[0]
 
+    stac_url=None
+    target=str(row.image_ref or "").strip()
     if "stac.dataspace.copernicus.eu" in target and "/items/" in target:
+        stac_url=target
+    elif item_id:
+        stac_url=f"https://stac.dataspace.copernicus.eu/v1/collections/sentinel-2-l2a/items/{item_id}"
+
+    bbox=None
+    image_day=row.image_date
+    if stac_url:
         try:
-            req=UrlRequest(target,headers={"User-Agent":"NMTPL-Central-Operations/1.0"})
+            req=UrlRequest(stac_url,headers={"User-Agent":"NMTPL-Central-Operations/1.0"})
             with urlopen(req,timeout=20) as resp:
                 item=json.load(resp)
-            assets=item.get("assets") or {}
-            thumbnail=assets.get("thumbnail") or {}
-            preview=thumbnail.get("href")
-            if not preview:
-                tci=assets.get("TCI_10m") or assets.get("TCI_20m") or assets.get("TCI_60m") or {}
-                preview=((tci.get("alternate") or {}).get("https") or {}).get("href")
-            if preview:
-                target=preview
-                row.image_ref=preview
-                db.commit()
+            raw_bbox=item.get("bbox") or []
+            if len(raw_bbox) >= 4:
+                bbox=[float(raw_bbox[0]),float(raw_bbox[1]),float(raw_bbox[2]),float(raw_bbox[3])]
+            raw_dt=(item.get("properties") or {}).get("datetime")
+            if raw_dt:
+                try:
+                    image_day=datetime.fromisoformat(raw_dt.replace("Z","+00:00")).date()
+                except ValueError:
+                    pass
         except (HTTPError,URLError,TimeoutError,ValueError,TypeError):
-            db.rollback()
+            pass
 
-    if not target.startswith(("http://","https://")):
-        raise HTTPException(502,"A browser-viewable Sentinel image URL is not available.")
-    return RedirectResponse(url=target,status_code=302)
+    if not bbox:
+        raise HTTPException(502,"Could not resolve the Sentinel scene location for this observation.")
+
+    lon=(bbox[0]+bbox[2])/2
+    lat=(bbox[1]+bbox[3])/2
+    day=image_day.isoformat()
+    browser_params={
+        "zoom":"14",
+        "lat":f"{lat:.6f}",
+        "lng":f"{lon:.6f}",
+        "themeId":"DEFAULT-THEME",
+        "visualizationUrl":"https://sh.dataspace.copernicus.eu/ogc/wms/a91f72b5-f393-4320-bc0f-990129bd9e63",
+        "datasetId":"S2_L2A_CDAS",
+        "fromTime":f"{day}T00:00:00.000Z",
+        "toTime":f"{day}T23:59:59.999Z",
+        "layerId":"1_TRUE_COLOR",
+        "cloudCoverage":"20",
+        "dateMode":"SINGLE",
+    }
+    browser_url="https://browser.dataspace.copernicus.eu/?"+urlencode(browser_params)
+    row.image_ref=browser_url
+    db.commit()
+    return RedirectResponse(url=browser_url,status_code=302)
 
 
 @router.post("/{site_id}/satellite")
