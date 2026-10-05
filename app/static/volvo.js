@@ -12,18 +12,19 @@ function volvoDay(iso,delta){const d=new Date(String(iso)+'T00:00:00Z');d.setUTC
 function volvoTruckArt(){return '<div class="volvo-truck" aria-hidden="true"><svg viewBox="0 0 360 170"><path fill="#dce9f3" d="M29 98h178V48h87l38 46v35h-15a35 35 0 0 0-69 0H131a35 35 0 0 0-69 0H29z"/><path fill="#7ab6df" d="M218 58h68l27 34h-95z"/><path fill="#0a3354" d="M25 40h170v51H25z"/><path fill="#1d6ca4" d="M41 54h138v23H41z"/><circle fill="#071b2b" cx="96" cy="132" r="27"/><circle fill="#cbd8e0" cx="96" cy="132" r="11"/><circle fill="#071b2b" cx="282" cy="132" r="27"/><circle fill="#cbd8e0" cx="282" cy="132" r="11"/><path fill="#fff" opacity=".75" d="M233 65h46l18 22h-64z"/></svg></div>';}
 function volvoAge(seconds){if(seconds===null||seconds===undefined)return 'unknown';seconds=Number(seconds);if(seconds<60)return Math.round(seconds)+' sec';if(seconds<3600)return Math.round(seconds/60)+' min';return (seconds/3600).toFixed(1)+' h';}
 function volvoTruckLabel(r){return r.machine_id?r.name+' · '+r.machine_id:r.name||r.vin;}
+function volvoStateLabel(state){return state==='RUNNING'?'MOVING':state==='IDLE'?'ENGINE ON / IDLE':state==='STOPPED'?'STATIONARY':state||'—';}
 
 function renderVolvo(){
   const today=(S.boot&&S.boot.today)||new Date().toISOString().slice(0,10),from=volvoDay(today,-6);
   if(VOLVO.timer){clearInterval(VOLVO.timer);VOLVO.timer=null;}
   VOLVO.route=null;VOLVO.selectedVin=null;VOLVO.map=null;
   html('app','<div class="volvo-shell">'+
-    '<div class="panel volvo-hero"><div><div class="eyebrow">VOLVO CONNECTED FLEET</div><h2>Truck Telemetry Command Center</h2><p>GPS · route trail · fuel · utilization · load · health</p><div class="volvo-sync-pill"><span class="volvo-sync-dot"></span><span id="volvo_sync_text">Loading latest saved telemetry…</span></div></div>'+volvoTruckArt()+'</div>'+
+    '<div class="panel volvo-hero"><div><div class="eyebrow">VOLVO / GPS</div><h2>Fleet Live Status</h2><p>Operational status · moving trucks · GPS · fuel · route</p><div class="volvo-sync-pill"><span class="volvo-sync-dot"></span><span id="volvo_sync_text">Loading latest telemetry…</span></div></div></div>'+
     '<div class="panel volvo-filters">'+
       '<label>From date<input id="volvo_from" type="date" value="'+esc(from)+'"></label>'+
       '<label>To date<input id="volvo_to" type="date" value="'+esc(today)+'"></label>'+
       '<label>Truck / Machine<select id="volvo_machine"><option value="ALL">All Volvo trucks</option></select></label>'+
-      '<label>Vehicle state<select id="volvo_state"><option value="ALL">All states</option><option>RUNNING</option><option>IDLE</option><option>STOPPED</option><option>OFFLINE</option></select></label>'+
+      '<label>Live movement<select id="volvo_state"><option value="ALL">All live states</option><option value="RUNNING">Moving now</option><option value="IDLE">Engine on / idle</option><option value="STOPPED">Stationary</option><option value="OFFLINE">Offline</option></select></label>'+
       '<label>Shift<select id="volvo_shift"><option value="ALL">All shifts</option><option value="A">A · 06:00–14:00</option><option value="B">B · 14:00–22:00</option><option value="C">C · 22:00–06:00</option></select></label>'+
       '<label>Mapping<select id="volvo_mapping"><option value="ALL">Mapped + Unmapped</option><option value="MAPPED">Mapped only</option><option value="UNMAPPED">Unmapped only</option></select></label>'+
       '<div class="volvo-filter-actions"><button class="btn primary" onclick="loadVolvoDashboard()">Apply</button><button id="volvo_live_btn" class="btn secondary" onclick="toggleVolvoLive()">Live 30s: ON</button><button class="btn secondary" onclick="resetVolvoFilters()">Reset</button></div>'+
@@ -57,19 +58,24 @@ function volvoApplyLiveFilters(rows){
     return true;
   });
 }
-function updateVolvoLiveKpis(fleet){
+function updateVolvoLiveKpis(fleet,operationalCount,currentShift){
   const counts={RUNNING:0,IDLE:0,STOPPED:0,OFFLINE:0};fleet.forEach(r=>{if(counts[r.state]!==undefined)counts[r.state]++;});
-  const cards=document.querySelectorAll('.volvo-kpis .volvo-kpi b');
   const freshest=fleet.map(x=>Number(x.telemetry_age_seconds)).filter(Number.isFinite).sort((a,b)=>a-b)[0];
   const gps=fleet.filter(x=>volvoGpsOk(x.gps)).length;
-  const values=[fleet.length,counts.RUNNING,counts.IDLE,counts.STOPPED,counts.OFFLINE];
-  values.forEach((v,i)=>{if(cards[i])cards[i].textContent=String(v);});
-  if(cards[12])cards[12].textContent=String(gps);
-  if(cards[13])cards[13].textContent=volvoAge(freshest);
-  const stateCards=document.querySelectorAll('.volvo-state-cards .volvo-state b');
-  [counts.RUNNING,counts.IDLE,counts.STOPPED,counts.OFFLINE].forEach((v,i)=>{if(stateCards[i])stateCards[i].textContent=String(v);});
-  if(VOLVO.data)VOLVO.data.state_counts=counts;
+  const values={
+    volvo_kpi_fleet:fleet.length,
+    volvo_kpi_operational:operationalCount==null?fleet.filter(x=>x.operational).length:operationalCount,
+    volvo_kpi_moving:counts.RUNNING,
+    volvo_kpi_stationary:counts.IDLE+counts.STOPPED,
+    volvo_kpi_offline:counts.OFFLINE,
+    volvo_kpi_gps:gps,
+    volvo_kpi_fresh:volvoAge(freshest)
+  };
+  Object.keys(values).forEach(id=>{const el=document.getElementById(id);if(el)el.textContent=String(values[id]);});
+  const sh=document.getElementById('volvo_operational_shift');if(sh&&currentShift)sh.textContent='Shift '+currentShift;
+  if(VOLVO.data){VOLVO.data.state_counts=counts;VOLVO.data.operational_count=values.volvo_kpi_operational;}
 }
+
 function refreshVolvoFleetTable(){
   const current=document.querySelector('.volvo-table tbody');if(!current||!VOLVO.data)return;
   const active=document.activeElement;
@@ -83,9 +89,9 @@ async function refreshVolvoLive(){
   try{
     const live=await volvoRequest('fleet');if(S.screen!=='VOLVO'||!VOLVO.data)return;
     const fleet=volvoApplyLiveFilters(live.rows||[]);
-    VOLVO.data.fleet=fleet;VOLVO.data.last_sync=live.last_sync;VOLVO.data.equipment=live.equipment||VOLVO.data.equipment;VOLVO.data.can_map=!!live.can_map;
+    VOLVO.data.fleet=fleet;VOLVO.data.last_sync=live.last_sync;VOLVO.data.equipment=live.equipment||VOLVO.data.equipment;VOLVO.data.can_map=!!live.can_map;VOLVO.data.operational_count=live.operational_count;VOLVO.data.current_shift=live.current_shift;
     const sync=document.getElementById('volvo_sync_text');if(sync)sync.textContent='Last collection: '+volvoDate(live.last_sync)+' · live fleet refresh '+(VOLVO.live?'ON':'OFF');
-    updateVolvoLiveKpis(fleet);
+    updateVolvoLiveKpis(fleet,live.operational_count,live.current_shift);
     renderVolvoMap(fleet,true);
     refreshVolvoFleetTable();
     if(VOLVO.selectedVin&&(Date.now()-VOLVO.lastRouteLoad>60000))loadVolvoRoute(VOLVO.selectedVin,true);
@@ -95,27 +101,45 @@ async function refreshVolvoLive(){
 function renderVolvoDashboardBody(d,silent){
   const c=d.state_counts||{},t=d.totals||{},fleet=d.fleet||[],pv=d.period_vehicles||[],daily=d.daily||[];
   const freshest=fleet.map(x=>Number(x.telemetry_age_seconds)).filter(Number.isFinite).sort((a,b)=>a-b)[0];
-  const kpis=[
-    ['Fleet',fleet.length,'vehicles',''],['Running',c.RUNNING||0,'current','run'],['Idle',c.IDLE||0,'current','idle'],['Stopped',c.STOPPED||0,'current',''],['Offline',c.OFFLINE||0,'current','offline'],
-    ['Engine hours',volvoNum(t.engine_h,1),'selected period',''],['Distance',volvoNum(t.distance_km,0)+' km','selected period',''],['Fuel used',volvoNum(t.fuel_l,0)+' L','selected period',''],['Idle fuel',volvoNum(t.idle_fuel_l,1)+' L','selected period','idle'],['Moving fuel',volvoNum(t.moving_fuel_l,1)+' L','selected period','run'],
-    ['Avg fuel / hour',volvoNum(t.fuel_lph,2)+' L/h','selected period',''],['Fuel / 100 km',volvoNum(t.fuel_l_100km,2)+' L','selected period',''],['GPS available',fleet.filter(x=>volvoGpsOk(x.gps)).length,'latest position',''],['Freshest data',volvoAge(freshest),'telemetry age','']
-  ].map(x=>'<div class="volvo-kpi '+x[3]+'"><span>'+esc(x[0])+'</span><b>'+esc(String(x[1]))+'</b><small>'+esc(x[2])+'</small></div>').join('');
-  const state='<div class="volvo-state-cards"><div class="volvo-state running"><b>'+esc(c.RUNNING||0)+'</b><span>RUNNING</span></div><div class="volvo-state idle"><b>'+esc(c.IDLE||0)+'</b><span>IDLE</span></div><div class="volvo-state stopped"><b>'+esc(c.STOPPED||0)+'</b><span>STOPPED</span></div><div class="volvo-state offline"><b>'+esc(c.OFFLINE||0)+'</b><span>OFFLINE</span></div></div>';
-  html('volvo_body','<div class="volvo-kpis">'+kpis+'</div>'+
-    '<div class="volvo-grid"><div class="volvo-panel"><div class="volvo-panel-head"><h3>Live GPS Fleet Map</h3><span id="volvo_map_mode">Drag to pan · wheel/+− to zoom · click a truck</span></div><div id="volvo_map" class="volvo-map-wrap"></div><div id="volvo_route_summary" class="volvo-route-summary">Select a truck marker or Track button to display its saved GPS trail.</div></div><div class="volvo-panel"><div class="volvo-panel-head"><h3>Current Vehicle State</h3><span>'+esc(d.from_date)+' → '+esc(d.to_date)+' · Shift '+esc(d.shift||'ALL')+'</span></div><div class="volvo-panel-body">'+state+'<div class="volvo-footnote">RUNNING uses wheel/GPS speed. IDLE uses RPM when available and also recent engine-hour/fuel increase while distance stays nearly unchanged. OFFLINE means telemetry is older than 120 minutes. Period charts and route history follow the selected operating-date/shift filter.</div></div></div></div>'+
-    '<div class="volvo-chart-grid" style="margin-top:14px">'+
-      volvoChartPanel('Fuel consumption by truck','Period delta · litres',volvoBars(pv,'fuel_l',' L'))+
-      volvoChartPanel('Distance travelled by truck','Period delta · km',volvoBars(pv,'distance_km',' km'))+
-      volvoChartPanel('Engine hours by truck','Period delta · hours',volvoBars(pv,'engine_h',' h'))+
-      volvoChartPanel('Fuel efficiency by truck','Period average · L/hour',volvoBars(pv,'fuel_lph',' L/h'))+
-      volvoChartPanel('Idle fuel by truck','Period delta · litres',volvoBars(pv,'idle_fuel_l',' L'))+
-      volvoChartPanel('Moving fuel by truck','Period delta · litres',volvoBars(pv,'moving_fuel_l',' L'))+
-      volvoChartPanel('Daily fuel trend','Litres · data labels',volvoLine(daily,'fuel_l',' L'))+
-      volvoChartPanel('Daily distance trend','Kilometres · data labels',volvoLine(daily,'distance_km',' km'))+
+  const operational=d.operational_count==null?fleet.filter(x=>x.operational).length:Number(d.operational_count);
+  const stationary=(c.IDLE||0)+(c.STOPPED||0);
+  const liveKpis=[
+    ['Fleet',fleet.length,'trucks','volvo_kpi_fleet',''],
+    ['Operational',operational,'Shift '+esc(d.current_shift||'—'),'volvo_kpi_operational','run'],
+    ['Moving now',c.RUNNING||0,'speed > 1 km/h','volvo_kpi_moving','run'],
+    ['Stationary now',stationary,'loading / queue / parked','volvo_kpi_stationary','idle'],
+    ['Offline',c.OFFLINE||0,'telemetry > 120 min','volvo_kpi_offline','offline'],
+    ['GPS online',fleet.filter(x=>volvoGpsOk(x.gps)).length,'latest position','volvo_kpi_gps','']
+  ].map(x=>'<div class="volvo-kpi '+x[4]+'"><span>'+esc(x[0])+'</span><b id="'+x[3]+'">'+esc(String(x[1]))+'</b><small>'+esc(x[2])+'</small></div>').join('');
+  const periodKpis=[
+    ['Engine hours',volvoNum(t.engine_h,1)+' h'],
+    ['Distance',volvoNum(t.distance_km,0)+' km'],
+    ['Fuel used',volvoNum(t.fuel_l,0)+' L'],
+    ['Avg fuel / hour',volvoNum(t.fuel_lph,2)+' L/h']
+  ].map(x=>'<div class="volvo-period-kpi"><span>'+esc(x[0])+'</span><b>'+esc(x[1])+'</b></div>').join('');
+  const status='<div class="volvo-simple-status">'+
+    '<div><b>'+esc(operational)+'</b><span>Operational this shift</span></div>'+
+    '<div><b>'+esc(c.RUNNING||0)+'</b><span>Moving now</span></div>'+
+    '<div><b>'+esc(c.IDLE||0)+'</b><span>Engine on / idle</span></div>'+
+    '<div><b>'+esc(c.STOPPED||0)+'</b><span>Stationary</span></div>'+
+    '</div>';
+  html('volvo_body',
+    '<div class="volvo-section-title"><h3>Live fleet</h3><span id="volvo_operational_shift">Shift '+esc(d.current_shift||'—')+'</span></div>'+
+    '<div class="volvo-kpis volvo-live-kpis">'+liveKpis+'</div>'+
+    '<div class="volvo-section-title"><h3>Selected period</h3><span>'+esc(d.from_date)+' → '+esc(d.to_date)+' · Shift '+esc(d.shift||'ALL')+'</span></div>'+
+    '<div class="volvo-period-kpis">'+periodKpis+'</div>'+
+    '<div class="volvo-grid volvo-main-grid"><div class="volvo-panel"><div class="volvo-panel-head"><h3>Live GPS Fleet Map</h3><span id="volvo_map_mode">Click a truck to track route</span></div><div id="volvo_map" class="volvo-map-wrap"></div><div id="volvo_route_summary" class="volvo-route-summary">Select a truck marker or Track button to display its GPS trail.</div></div>'+
+    '<div class="volvo-panel"><div class="volvo-panel-head"><h3>Live status</h3><span>Operational ≠ moving now</span></div><div class="volvo-panel-body">'+status+'<div class="volvo-footnote"><b>Operational</b> means the truck has shown movement, engine activity, fuel use or distance increase during the current shift. <b>Moving now</b> is only the latest speed reading. This prevents loading/unloading trucks from being shown as stopped operationally.</div><div class="volvo-fresh-line">Freshest telemetry: <b id="volvo_kpi_fresh">'+esc(volvoAge(freshest))+'</b></div></div></div></div>'+
+    '<div class="volvo-chart-grid volvo-chart-grid-simple" style="margin-top:14px">'+
+      volvoChartPanel('Fuel by truck','Selected period · litres',volvoBars(pv,'fuel_l',' L'))+
+      volvoChartPanel('Engine hours by truck','Selected period · hours',volvoBars(pv,'engine_h',' h'))+
+      volvoChartPanel('Distance by truck','Selected period · km',volvoBars(pv,'distance_km',' km'))+
+      volvoChartPanel('Daily fuel trend','Selected period · litres',volvoLine(daily,'fuel_l',' L'))+
     '</div>'+volvoFleetTable(d));
   renderVolvoMap(fleet,!!(silent&&VOLVO.map));
   if(VOLVO.route)setVolvoRouteSummary(VOLVO.route);
 }
+
 function volvoChartPanel(title,sub,body){return '<div class="volvo-panel"><div class="volvo-panel-head"><h3>'+esc(title)+'</h3><span>'+esc(sub)+'</span></div><div class="volvo-panel-body">'+body+'</div></div>';}
 function volvoBars(rows,key,suffix){
   rows=(rows||[]).filter(x=>x[key]!==null&&x[key]!==undefined).slice().sort((a,b)=>Number(b[key])-Number(a[key])).slice(0,12);
@@ -134,13 +158,21 @@ function volvoLine(rows,key,suffix){
 }
 
 function volvoFleetTable(d){
-  const rows=(d.fleet||[]).map(r=>{const gps=volvoGpsOk(r.gps)?volvoNum(r.gps.latitude,6)+', '+volvoNum(r.gps.longitude,6):'—';let link=esc(r.machine_id||'Unmapped');
+  const rows=(d.fleet||[]).map(r=>{let link=esc(r.machine_id||'Unmapped');
     if(d.can_map){const opts=(d.equipment||[]).map(e=>'<option value="'+esc(e.id)+'" '+(r.machine_id===e.id?'selected':'')+'>'+esc(e.label)+' ('+esc(e.id)+')</option>').join('');link='<div class="volvo-map-select"><select id="volvo_link_'+esc(r.vin)+'"><option value="">Unmapped</option>'+opts+'</select><button class="btn secondary small" data-vin="'+esc(r.vin)+'" onclick="saveVolvoLink(this)">Save</button></div>';}
-    const warnings=(r.active_telltales||[]).map(x=>x.name).slice(0,3).join(', ');
-    return '<tr><td><div class="volvo-machine">'+esc(r.name||r.vin)+'</div><div class="volvo-vin">'+esc(r.vin)+(r.machine_id?' · TIOM '+esc(r.machine_id):'')+'</div></td><td><span class="volvo-badge '+esc(r.state)+'">'+esc(r.state)+'</span></td><td><button class="btn secondary small" onclick="trackVolvo(\''+esc(r.vin)+'\')">Track</button></td><td>'+link+'</td><td>'+esc(volvoNum(r.wheel_speed_kmh,1))+'</td><td>'+esc(volvoNum(r.gps_speed_kmh,1))+'</td><td>'+esc(volvoNum(r.engine_speed_rpm,0))+'</td><td>'+esc(volvoNum(r.fuel_level_pct,1))+'</td><td>'+esc(volvoNum(r.adblue_pct,1))+'</td><td>'+esc(volvoNum(r.engine_hours,1))+'</td><td>'+esc(volvoNum(r.distance_km,1))+'</td><td>'+esc(volvoNum(r.fuel_used_l,1))+'</td><td>'+esc(volvoNum(r.idle_fuel_l,1))+'</td><td>'+esc(volvoNum(r.moving_fuel_l,1))+'</td><td>'+esc(volvoNum(r.gross_weight_kg,0))+'</td><td>'+esc(volvoNum(r.axle_total_kg,0))+'</td><td>'+esc(volvoNum(r.moving_h,1))+'</td><td>'+esc(volvoNum(r.stationary_h,1))+'</td><td>'+esc(r.driver_id||'—')+'</td><td>'+esc(volvoNum(r.service_distance_km,0))+'</td><td>'+esc(volvoNum(r.coolant_temp_c,1))+'</td><td title="'+esc(warnings)+'">'+esc(r.warning_count||0)+'</td><td>'+esc(gps)+'</td><td>'+esc(volvoAge(r.telemetry_age_seconds))+'</td><td>'+esc(volvoDate(r.reported_at))+'</td></tr>';
+    const speed=Math.max(Number(r.wheel_speed_kmh)||0,Number(r.gps_speed_kmh)||0);
+    return '<tr><td><div class="volvo-machine">'+esc(r.name||r.vin)+'</div><div class="volvo-vin">'+esc(r.vin)+(r.machine_id?' · TIOM '+esc(r.machine_id):'')+'</div></td>'+
+      '<td><span class="volvo-operational '+(r.operational?'yes':'no')+'">'+(r.operational?'OPERATIONAL':'NO SHIFT ACTIVITY')+'</span></td>'+
+      '<td><span class="volvo-badge '+esc(r.state)+'">'+esc(volvoStateLabel(r.state))+'</span></td>'+
+      '<td>'+esc(volvoNum(speed,1))+'</td><td>'+esc(volvoNum(r.fuel_level_pct,1))+'%</td><td>'+esc(volvoNum(r.engine_hours,1))+'</td>'+
+      '<td>'+esc(volvoNum(r.distance_km,1))+'</td><td>'+esc(volvoAge(r.telemetry_age_seconds))+'</td>'+
+      '<td><button class="btn secondary small" onclick="trackVolvo(\''+esc(r.vin)+'\')">Track</button></td><td>'+link+'</td></tr>';
   }).join('');
-  return '<div class="volvo-panel" style="margin-top:14px"><div class="volvo-panel-head"><h3>Volvo Fleet Detail</h3><div><button class="btn secondary small" onclick="volvoExportCsv()">Export CSV</button></div></div><div class="volvo-table-wrap"><table class="volvo-table"><thead><tr><th>Volvo truck / VIN</th><th>State</th><th>Route</th><th>TIOM link</th><th>Wheel km/h</th><th>GPS km/h</th><th>RPM</th><th>Fuel %</th><th>AdBlue %</th><th>Engine h</th><th>Odometer km</th><th>Total fuel L</th><th>Idle fuel L</th><th>Moving fuel L</th><th>Gross kg</th><th>Axle kg</th><th>Moving h</th><th>Stationary h</th><th>Driver</th><th>Service km</th><th>Coolant °C</th><th>Alerts</th><th>GPS</th><th>Age</th><th>Reported</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+(rows?'':'<div class="volvo-empty">No vehicles match these filters.</div>')+'</div>';
+  return '<div class="volvo-panel" style="margin-top:14px"><div class="volvo-panel-head"><h3>Fleet detail</h3><div><button class="btn secondary small" onclick="volvoExportCsv()">Export full CSV</button></div></div>'+
+    '<div class="volvo-table-wrap"><table class="volvo-table volvo-table-simple"><thead><tr><th>Truck</th><th>Shift status</th><th>Live state</th><th>Speed km/h</th><th>Fuel</th><th>Engine h</th><th>Odometer km</th><th>Data age</th><th>Route</th><th>TIOM link</th></tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    (rows?'':'<div class="volvo-empty">No vehicles match these filters.</div>')+'</div>';
 }
+
 async function saveVolvoLink(btn){btn.disabled=true;try{const vin=btn.dataset.vin,machine=document.getElementById('volvo_link_'+vin).value||null;await volvoRequest('mapping',{vin:vin,machine_id:machine});toast('Volvo vehicle mapping saved.');await loadVolvoDashboard();}catch(e){toast(e.message,true);}finally{btn.disabled=false;}}
 function volvoExportCsv(){if(!VOLVO.data)return;const head=['VolvoName','MachineID','VIN','State','WheelSpeedKmh','GpsSpeedKmh','EngineRPM','FuelLevelPct','AdBluePct','EngineHours','DistanceKm','TotalFuelL','IdleFuelL','MovingFuelL','GrossWeightKg','AxleTotalKg','MovingHours','StationaryHours','Driver','ServiceDistanceKm','CoolantC','WarningCount','Latitude','Longitude','TelemetryAgeSeconds','ReportedAt'];const rows=(VOLVO.data.fleet||[]).map(r=>[r.name||'',r.machine_id||'',r.vin,r.state,r.wheel_speed_kmh??'',r.gps_speed_kmh??'',r.engine_speed_rpm??'',r.fuel_level_pct??'',r.adblue_pct??'',r.engine_hours??'',r.distance_km??'',r.fuel_used_l??'',r.idle_fuel_l??'',r.moving_fuel_l??'',r.gross_weight_kg??'',r.axle_total_kg??'',r.moving_h??'',r.stationary_h??'',r.driver_id||'',r.service_distance_km??'',r.coolant_temp_c??'',r.warning_count??'',r.gps&&r.gps.latitude!=null?r.gps.latitude:'',r.gps&&r.gps.longitude!=null?r.gps.longitude:'',r.telemetry_age_seconds??'',r.reported_at||'']);const csv=[head].concat(rows).map(row=>row.map(v=>'"'+String(v).replace(/"/g,'""')+'"').join(',')).join('\r\n');const blob=new Blob([csv],{type:'text/csv;charset=utf-8'}),a=document.createElement('a');a.href=URL.createObjectURL(blob);a.download='Volvo_Fleet_'+val('volvo_from')+'_to_'+val('volvo_to')+'.csv';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
 
