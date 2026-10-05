@@ -6,8 +6,8 @@ const baseRender = render;
 const baseRenderWB = typeof renderWB12==='function'?renderWB12:(typeof renderWB==='function'?renderWB:null);
 const baseRenderHSD = typeof renderHsdV12==='function'?renderHsdV12:(typeof renderHSD==='function'?renderHSD:null);
 const SIMPLE={
-  SOCP:{entry:['TRIP','WB','HSD'],setup:['ATTENDANCE','SHIFT_CONTROL'],review:['RECONCILIATION','DATA_QUALITY'],control:['FLEET','LOADER','DRIVER','GP_DESTINATION','REPORTS','MASTERS','MAP','SATELLITE','AUDIT']},
-  KOCP:{entry:['TRIP','OB','HSD','HMR_KMR'],setup:['ATTENDANCE','SHIFT_CONTROL'],review:['RECONCILIATION','MCL_FACTOR','MCL_SURVEY','BILLING','DATA_QUALITY'],control:['FLEET','LOADER','EXCAVATOR','REPORTS','MASTERS','MAP','SATELLITE','AUDIT']}
+  SOCP:{entry:['TRIP','WB','HSD'],setup:[],review:['RECONCILIATION','DATA_QUALITY'],control:['REPORTS','MASTERS','MAP','SATELLITE','AUDIT']},
+  KOCP:{entry:['TRIP','OB','HSD','HMR_KMR'],setup:[],review:['RECONCILIATION','MCL_FACTOR','MCL_SURVEY','BILLING','DATA_QUALITY'],control:['REPORTS','MASTERS','MAP','SATELLITE','AUDIT']}
 };
 const MGMT=['FLEET','LOADER','EXCAVATOR','DRIVER','GP_DESTINATION','GPS','DATA_QUALITY','MAP','SATELLITE','MASTERS','AUDIT'];
 const label={DASHBOARD:'Dashboard',ATTENDANCE:'Attendance Entry',SHIFT_CONTROL:'Shift Setup',PRODUCTION:'Production Entry',TRIP:'Trip Entry',OB:'OB Entry',WB:'Weighbridge Entry',HSD:'Fuel / HSD Entry',MECHANICAL:'Mechanical',HMR_KMR:'HMR / KMR Entry',MIS:'Paper Report Review',RECONCILIATION:'Check & Match',REPORTS:'Reports',MCL_FACTOR:'MCL Quantity Rules',MCL_SURVEY:'MCL Certified Quantity',BILLING:'Billing Check'};
