@@ -916,14 +916,34 @@ def vehicle_route(
         point['location_id'] = wrapper.get('location_id')
         point['location_name'] = wrapper.get('location_name')
 
-    # Split the session into movement trips. Until source/destination geofences are
-    # fully configured, a trip boundary is a >=3 minute stationary period or a
-    # >=15 minute telemetry gap. This is intentionally conservative.
+    # Split the session into provisional mine movement legs.
+    # Before Source/Destination geofences are fully configured, never allow a
+    # multi-day range to collapse into one "trip": operating date/shift changes
+    # are hard boundaries, with stops/gaps/turnarounds as additional boundaries.
     trips = []
     trip_start = None
     stop_start = None
+    last_motion_bearing = None
+    distance_since_boundary = 0.0
 
-    def close_trip(start_idx, end_idx):
+    def movement_bearing(a, b):
+        try:
+            lat1 = math.radians(float(a['latitude']))
+            lat2 = math.radians(float(b['latitude']))
+            dlon = math.radians(float(b['longitude']) - float(a['longitude']))
+            y = math.sin(dlon) * math.cos(lat2)
+            x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+            return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+        except (TypeError, ValueError, KeyError):
+            return None
+
+    def bearing_delta(a, b):
+        if a is None or b is None:
+            return 0.0
+        return abs((float(a) - float(b) + 180.0) % 360.0 - 180.0)
+
+    def close_trip(start_idx, end_idx, reason='movement'):
+        nonlocal distance_since_boundary
         if start_idx is None or end_idx is None or end_idx <= start_idx:
             return
         segment = points[start_idx:end_idx + 1]
@@ -944,8 +964,8 @@ def vehicle_route(
             else:
                 moving_seconds += sec
         duration_seconds = max(0.0, (end_at - start_at).total_seconds()) if start_at and end_at else 0.0
-        # Ignore tiny GPS jitter sessions.
-        if distance_km < 0.15 and duration_seconds < 120:
+        # Ignore tiny GPS jitter sessions, but retain real shift/day movement legs.
+        if distance_km < 0.12 and duration_seconds < 120:
             return
         first_fuel = next((p.get('fuel_total_l') for p in segment if p.get('fuel_total_l') is not None), None)
         last_fuel = next((p.get('fuel_total_l') for p in reversed(segment) if p.get('fuel_total_l') is not None), None)
@@ -962,8 +982,12 @@ def vehicle_route(
             p['trip_id'] = trip_id
             p['trip_cumulative_km'] = round(trip_cum, 3)
             previous = p
+        op_date = segment[0].get('operating_date')
+        op_shift = segment[0].get('shift')
         trips.append({
             'trip_id': trip_id,
+            'operating_date': op_date,
+            'shift': op_shift,
             'start_at': start_at,
             'end_at': end_at,
             'duration_seconds': round(duration_seconds, 1),
@@ -977,7 +1001,10 @@ def vehicle_route(
             'destination_name': destination_name,
             'start_index': start_idx,
             'end_index': end_idx,
+            'boundary_reason': reason,
+            'provisional': not bool(source_name and destination_name),
         })
+        distance_since_boundary = 0.0
 
     for i, point in enumerate(points):
         moving = (
@@ -985,28 +1012,75 @@ def vehicle_route(
             or float(point.get('segment_km') or 0.0) > 0.05
         )
         gap_seconds = float(point.get('segment_seconds') or 0.0)
+        segment_km = float(point.get('segment_km') or 0.0)
+        if trip_start is not None:
+            distance_since_boundary += segment_km
+
+        # Operating day/shift is always a hard boundary.
+        if i > 0:
+            previous = points[i - 1]
+            if (
+                point.get('operating_date') != previous.get('operating_date')
+                or point.get('shift') != previous.get('shift')
+            ):
+                if trip_start is not None:
+                    close_trip(trip_start, i - 1, 'shift_boundary')
+                trip_start = max(0, i - 1) if moving else None
+                stop_start = None
+                last_motion_bearing = None
+                distance_since_boundary = segment_km if trip_start is not None else 0.0
+                continue
+
         if trip_start is not None and gap_seconds >= 900:
-            close_trip(trip_start, i - 1)
-            trip_start = i if moving else None
+            close_trip(trip_start, i - 1, 'telemetry_gap')
+            trip_start = max(0, i - 1) if moving else None
             stop_start = None
+            last_motion_bearing = None
+            distance_since_boundary = segment_km if trip_start is not None else 0.0
             continue
+
         if trip_start is None:
             if moving:
                 trip_start = max(0, i - 1)
+                distance_since_boundary = segment_km
+                if i > 0 and segment_km >= 0.03:
+                    last_motion_bearing = movement_bearing(points[i - 1], point)
             continue
+
         if moving:
             stop_start = None
+            # Fallback turnaround detection for mines before geofences are mapped.
+            if i > 0 and segment_km >= 0.03:
+                current_bearing = movement_bearing(points[i - 1], point)
+                delta = bearing_delta(last_motion_bearing, current_bearing)
+                elapsed = 0.0
+                if points[trip_start].get('reported_at') and point.get('reported_at'):
+                    elapsed = max(0.0, (point['reported_at'] - points[trip_start]['reported_at']).total_seconds())
+                if (
+                    not zones
+                    and last_motion_bearing is not None
+                    and delta >= 125.0
+                    and distance_since_boundary >= 0.35
+                    and elapsed >= 120
+                ):
+                    close_trip(trip_start, i - 1, 'turnaround')
+                    trip_start = max(0, i - 1)
+                    distance_since_boundary = segment_km
+                last_motion_bearing = current_bearing
             continue
+
         if stop_start is None:
             stop_start = i
         stop_duration = float(point.get('stop_seconds') or 0.0)
         if stop_duration >= 180:
-            close_trip(trip_start, stop_start)
+            close_trip(trip_start, stop_start, 'stoppage')
             trip_start = None
             stop_start = None
+            last_motion_bearing = None
+            distance_since_boundary = 0.0
 
     if trip_start is not None:
-        close_trip(trip_start, len(points) - 1)
+        close_trip(trip_start, len(points) - 1, 'range_end')
 
     raw_count = len(points)
     route_km = cumulative_km
@@ -1050,7 +1124,7 @@ def vehicle_route(
         'trips': trips,
         'current_trip_id': current_trip_id,
         'points': points,
-        'precision_note': 'Trips are segmented from Volvo GNSS movement using stops >=3 minutes or telemetry gaps >=15 minutes. Configure TIOM GPS location zones to add reliable Source/Destination labels. The trail is not road-snapped; route precision depends on GNSS/reporting frequency.',
+        'precision_note': 'Until TIOM Source/Destination GPS zones are configured, trip rows are provisional movement legs split by operating day/shift, stops >=3 minutes, telemetry gaps >=15 minutes and major turnarounds. Once zones are mapped, Source → Destination geofences should become the authoritative trip boundary. The trail is not road-snapped.',
     }
 
 
