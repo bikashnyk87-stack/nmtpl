@@ -859,12 +859,13 @@ def discover_satellite(
     except (HTTPError, URLError, TimeoutError, ValueError) as exc:
         raise HTTPException(502, f"Copernicus catalogue unavailable: {type(exc).__name__}")
     features = payload.get("features") or []
-    def _dt(item):
-        return (item.get("properties") or {}).get("datetime") or ""
-    features.sort(key=_dt, reverse=True)
-    stored = 0
-    output = []
-    for item in features[:10]:
+
+    # A single Sentinel-2 acquisition date can return multiple STAC products/tiles.
+    # The database intentionally stores one observation per site/provider/date, so
+    # collapse the catalogue response to the lowest-cloud product for each date
+    # before touching the database.
+    best_by_day = {}
+    for item in features:
         props = item.get("properties") or {}
         raw_dt = props.get("datetime") or props.get("start_datetime")
         if not raw_dt:
@@ -873,6 +874,21 @@ def discover_satellite(
             image_day = datetime.fromisoformat(raw_dt.replace("Z", "+00:00")).date()
         except ValueError:
             continue
+        cloud_raw = props.get("eo:cloud_cover")
+        try:
+            cloud_value = float(cloud_raw) if cloud_raw is not None else 101.0
+        except (TypeError, ValueError):
+            cloud_value = 101.0
+        current = best_by_day.get(image_day)
+        if current is None or cloud_value < current[0]:
+            best_by_day[image_day] = (cloud_value, item)
+
+    selected = sorted(best_by_day.items(), key=lambda x: x[0], reverse=True)[:10]
+    stored = 0
+    updated = 0
+    output = []
+    for image_day, (_, item) in selected:
+        props = item.get("properties") or {}
         cloud = props.get("eo:cloud_cover")
         links = item.get("links") or []
         item_url = next((x.get("href") for x in links if x.get("rel") in {"self", "alternate"} and x.get("href")), None)
@@ -896,10 +912,31 @@ def discover_satellite(
             )
             db.add(existing)
             stored += 1
+        else:
+            old_cloud = float(existing.cloud_pct) if existing.cloud_pct is not None else 101.0
+            new_cloud = float(cloud) if cloud is not None else 101.0
+            if new_cloud < old_cloud or not existing.image_ref:
+                existing.cloud_pct = cloud
+                existing.image_ref = item_url
+                existing.status = "DISCOVERED"
+                existing.notes = f"CDSE STAC item {item_id}" if item_id else "CDSE STAC discovery"
+                updated += 1
         output.append({"id": item_id, "imageDate": image_day, "cloudPct": cloud, "itemUrl": item_url})
-    _audit(db, user, site_id, "SATELLITE_DISCOVER", "SiteSatelliteObservation", None, after={"bbox": body["bbox"], "stored": stored})
+
+    _audit(
+        db, user, site_id, "SATELLITE_DISCOVER", "SiteSatelliteObservation", None,
+        after={"bbox": body["bbox"], "found": len(features), "uniqueDates": len(best_by_day), "stored": stored, "updated": updated},
+    )
     db.commit()
-    return {"ok": True, "provider": "Copernicus Data Space STAC", "found": len(features), "stored": stored, "items": output}
+    return {
+        "ok": True,
+        "provider": "Copernicus Data Space STAC",
+        "found": len(features),
+        "uniqueDates": len(best_by_day),
+        "stored": stored,
+        "updated": updated,
+        "items": output,
+    }
 
 @router.get("/{site_id}/reports/summary")
 def report_summary(site_id:str,request:Request,from_date:date|None=None,to_date:date|None=None,db:Session=Depends(get_db)):
