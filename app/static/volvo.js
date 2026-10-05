@@ -1,5 +1,5 @@
 /* Volvo dashboard is intentionally isolated from TIOM operational writes. */
-var VOLVO={data:null,map:null,route:null,selectedVin:null,popupVin:null,timer:null,live:true,lastRouteLoad:0,drag:null,labels:false,zoneEditor:false,mapStyle:'street',showFleetMarkers:true};
+var VOLVO={data:null,map:null,route:null,routeSession:null,routeTripId:null,selectedVin:null,popupVin:null,timer:null,live:true,lastRouteLoad:0,drag:null,labels:false,zoneEditor:false,mapStyle:'street',showFleetMarkers:true};
 
 async function volvoRequest(path,body){
   const opts={};
@@ -17,7 +17,7 @@ function volvoStateLabel(state){return state==='RUNNING'?'MOVING':state==='IDLE'
 function renderVolvo(){
   const today=(S.boot&&S.boot.today)||new Date().toISOString().slice(0,10),from=volvoDay(today,-6);
   if(VOLVO.timer){clearInterval(VOLVO.timer);VOLVO.timer=null;}
-  VOLVO.route=null;VOLVO.selectedVin=null;VOLVO.map=null;
+  VOLVO.route=null;VOLVO.routeSession=null;VOLVO.routeTripId=null;VOLVO.selectedVin=null;VOLVO.map=null;
   html('app','<div class="volvo-shell">'+
     '<div class="panel volvo-hero"><div><div class="eyebrow">VOLVO / GPS</div><h2>Fleet Live Status</h2><p>Operational status · moving trucks · GPS · fuel · route</p><div class="volvo-sync-pill"><span class="volvo-sync-dot"></span><span id="volvo_sync_text">Loading latest telemetry…</span></div></div></div>'+
     '<div class="panel volvo-filters">'+
@@ -33,7 +33,7 @@ function renderVolvo(){
   loadVolvoDashboard(true);
   VOLVO.timer=setInterval(function(){if(S.screen==='VOLVO'&&VOLVO.live)refreshVolvoLive();},30000);
 }
-function resetVolvoFilters(){const t=(S.boot&&S.boot.today)||new Date().toISOString().slice(0,10);document.getElementById('volvo_from').value=volvoDay(t,-6);document.getElementById('volvo_to').value=t;document.getElementById('volvo_machine').value='ALL';document.getElementById('volvo_state').value='ALL';document.getElementById('volvo_location').value='ALL';document.getElementById('volvo_shift').value='ALL';document.getElementById('volvo_mapping').value='ALL';VOLVO.route=null;VOLVO.selectedVin=null;loadVolvoDashboard();}
+function resetVolvoFilters(){const t=(S.boot&&S.boot.today)||new Date().toISOString().slice(0,10);document.getElementById('volvo_from').value=volvoDay(t,-6);document.getElementById('volvo_to').value=t;document.getElementById('volvo_machine').value='ALL';document.getElementById('volvo_state').value='ALL';document.getElementById('volvo_location').value='ALL';document.getElementById('volvo_shift').value='ALL';document.getElementById('volvo_mapping').value='ALL';VOLVO.route=null;VOLVO.routeSession=null;VOLVO.routeTripId=null;VOLVO.selectedVin=null;loadVolvoDashboard();}
 function toggleVolvoLive(){VOLVO.live=!VOLVO.live;const b=document.getElementById('volvo_live_btn');if(b)b.textContent='Live 30s: '+(VOLVO.live?'ON':'OFF');}
 function volvoQuery(){return new URLSearchParams({from_date:val('volvo_from'),to_date:val('volvo_to'),vehicle:val('volvo_machine')||'ALL',state:val('volvo_state')||'ALL',location:val('volvo_location')||'ALL',shift:val('volvo_shift')||'ALL',mapping:val('volvo_mapping')||'ALL'}).toString();}
 
@@ -432,7 +432,7 @@ async function deleteVolvoZone(id){
 function bindVolvoMapPan(box){box.onpointerdown=function(e){if(e.target.closest('button'))return;const c=volvoWorld(VOLVO.map.lat,VOLVO.map.lon,VOLVO.map.z);VOLVO.drag={x:e.clientX,y:e.clientY,cx:c.x,cy:c.y,pointerId:e.pointerId};try{box.setPointerCapture(e.pointerId);}catch(_e){}box.classList.add('dragging');};box.onpointermove=function(e){const d=VOLVO.drag;if(!d)return;const ll=volvoWorldToLatLon(d.cx-(e.clientX-d.x),d.cy-(e.clientY-d.y),VOLVO.map.z);VOLVO.map.lat=ll.lat;VOLVO.map.lon=ll.lon;drawVolvoMap();};box.onpointerup=box.onpointercancel=function(){VOLVO.drag=null;box.classList.remove('dragging');};box.onwheel=function(e){e.preventDefault();volvoMapZoom(e.deltaY<0?1:-1);};}
 function volvoMapZoom(delta){if(!VOLVO.map)return;VOLVO.map.z=Math.max(3,Math.min(18,VOLVO.map.z+delta));drawVolvoMap();}
 function volvoFitFleet(){if(VOLVO.data)renderVolvoMap(VOLVO.data.fleet,false);}
-function clearVolvoRoute(){VOLVO.route=null;VOLVO.selectedVin=null;VOLVO.popupVin=null;VOLVO.showFleetMarkers=true;document.querySelectorAll('.volvo-map-popup').forEach(x=>x.remove());const b=document.getElementById('volvo_fleet_marker_btn');if(b)b.textContent='Hide trucks';const s=document.getElementById('volvo_route_summary');if(s)s.textContent='Route cleared. Click a truck to track it again.';if(VOLVO.map)drawVolvoMap();}
+function clearVolvoRoute(){VOLVO.route=null;VOLVO.routeSession=null;VOLVO.routeTripId=null;VOLVO.selectedVin=null;VOLVO.popupVin=null;VOLVO.showFleetMarkers=true;document.querySelectorAll('.volvo-map-popup,.volvo-route-hover').forEach(x=>x.remove());const b=document.getElementById('volvo_fleet_marker_btn');if(b)b.textContent='Hide trucks';const s=document.getElementById('volvo_route_summary');if(s)s.textContent='Route cleared. Click a truck to track it again.';if(VOLVO.map)drawVolvoMap();}
 function showVolvoMapPopup(index,button,preserve){
   document.querySelectorAll('.volvo-map-popup').forEach(x=>x.remove());
   const r=VOLVO.map.points[index],box=document.getElementById('volvo_map'),pop=document.createElement('div');
@@ -447,14 +447,67 @@ function showVolvoMapPopup(index,button,preserve){
 }
 
 async function trackVolvo(vin){VOLVO.selectedVin=vin;VOLVO.popupVin=null;VOLVO.showFleetMarkers=false;document.querySelectorAll('.volvo-map-popup').forEach(x=>x.remove());const b=document.getElementById('volvo_fleet_marker_btn');if(b)b.textContent='Show trucks';await loadVolvoRoute(vin,false);}
+function volvoClock(value){return value?new Date(value).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',hour12:true}):'—';}
+function volvoTripOptionLabel(t,index,total){
+  const state=t.is_current?'Current':(index===total-1?'Latest':'Trip');
+  const flow=(t.source_name||t.destination_name)?' · '+(t.source_name||'?')+' → '+(t.destination_name||'?'):'';
+  return state+' '+t.trip_id+' · '+volvoClock(t.start_at)+'–'+volvoClock(t.end_at)+' · '+volvoNum(t.distance_km,2)+' km'+flow;
+}
 function setVolvoRouteSummary(route){
   const s=document.getElementById('volvo_route_summary');if(!s||!route)return;
-  const pts=route.points||[],first=pts.length?pts[0].reported_at:null,last=pts.length?pts[pts.length-1].reported_at:null;
-  s.innerHTML='<div class="volvo-route-stats"><div><span>Truck</span><b>'+esc(route.name)+(route.machine_id?' · '+esc(route.machine_id):'')+'</b></div><div><span>Trail</span><b>'+esc(volvoNum(route.route_km,2))+' km</b></div><div><span>GPS points</span><b>'+esc(route.point_count)+'</b></div><div><span>Start</span><b>'+esc(first?volvoDate(first):'—')+'</b></div><div><span>End</span><b>'+esc(last?volvoDate(last):'—')+'</b></div><div class="actions"><button class="btn secondary small" onclick="focusVolvoRoute()">Fit route</button><button class="btn secondary small" onclick="toggleVolvoFleetMarkers()">'+(VOLVO.showFleetMarkers?'Hide trucks':'Show trucks')+'</button><button class="btn secondary small" onclick="clearVolvoRoute()">Exit route</button></div></div><div class="volvo-route-note">'+esc(route.precision_note)+'</div>';
+  const session=VOLVO.routeSession||route,trips=session.trips||[],trip=route.selected_trip||null,pts=route.points||[];
+  const first=pts.length?pts[0].reported_at:null,last=pts.length?pts[pts.length-1].reported_at:null;
+  const options='<option value="FULL" '+(VOLVO.routeTripId==='FULL'?'selected':'')+'>Full session · '+volvoNum(session.route_km,2)+' km · '+esc(session.trip_count||0)+' trips</option>'+
+    trips.slice().reverse().map(t=>'<option value="'+esc(t.trip_id)+'" '+(VOLVO.routeTripId===t.trip_id?'selected':'')+'>'+esc(volvoTripOptionLabel(t,trips.indexOf(t),trips.length))+'</option>').join('');
+  const distance=trip?trip.distance_km:session.route_km;
+  const duration=trip?trip.duration_seconds:((first&&last)?Math.max(0,(new Date(last)-new Date(first))/1000):null);
+  const stop=trip?trip.stop_seconds:null;
+  const fuel=trip?trip.fuel_l:null;
+  const avg=trip?trip.avg_speed_kmh:null;
+  const flow=trip&&((trip.source_name||trip.destination_name))?(trip.source_name||'?')+' → '+(trip.destination_name||'?'):'Location zones not yet mapped';
+  s.innerHTML=
+    '<div class="volvo-trip-toolbar"><label>Route view<select id="volvo_trip_select" onchange="selectVolvoTrip(this.value,true)">'+options+'</select></label><div class="trip-flow">'+esc(flow)+'</div></div>'+
+    '<div class="volvo-route-stats">'+
+      '<div><span>Truck</span><b>'+esc(route.name)+(route.machine_id?' · '+esc(route.machine_id):'')+'</b></div>'+
+      '<div><span>Distance</span><b>'+esc(volvoNum(distance,2))+' km</b></div>'+
+      '<div><span>Duration</span><b>'+esc(duration==null?'—':volvoDuration(duration))+'</b></div>'+
+      '<div><span>Stop time</span><b>'+esc(stop==null?'—':volvoDuration(stop))+'</b></div>'+
+      '<div><span>Fuel</span><b>'+esc(fuel==null?'—':volvoNum(fuel,2)+' L')+'</b></div>'+
+      '<div><span>Avg speed</span><b>'+esc(avg==null?'—':volvoNum(avg,1)+' km/h')+'</b></div>'+
+      '<div class="actions"><button class="btn secondary small" onclick="focusVolvoRoute()">Fit route</button><button class="btn secondary small" onclick="toggleVolvoFleetMarkers()">'+(VOLVO.showFleetMarkers?'Hide trucks':'Show trucks')+'</button><button class="btn secondary small" onclick="clearVolvoRoute()">Exit route</button></div>'+
+    '</div>'+
+    '<div class="volvo-route-note">'+esc(session.precision_note||'')+'</div>';
+}
+function selectVolvoTrip(id,fit){
+  const session=VOLVO.routeSession;if(!session)return;
+  let trip=null,points=session.points||[];
+  if(id&&id!=='FULL'){
+    trip=(session.trips||[]).find(t=>t.trip_id===id)||null;
+    const filtered=points.filter(p=>p.trip_id===id);
+    if(trip&&filtered.length>=2)points=filtered;else{trip=null;id='FULL';points=session.points||[];}
+  }else{id='FULL';}
+  VOLVO.routeTripId=id;
+  VOLVO.route=Object.assign({},session,{
+    points:points,
+    route_km:trip?trip.distance_km:session.route_km,
+    point_count:trip?trip.point_count:session.point_count,
+    selected_trip:trip
+  });
+  setVolvoRouteSummary(VOLVO.route);
+  if(fit)focusVolvoRoute();else if(VOLVO.map)drawVolvoMap();
 }
 function focusVolvoRoute(){
   if(!VOLVO.route||!VOLVO.route.points||!VOLVO.route.points.length)return;
   const fake=VOLVO.route.points.map(p=>({gps:p})),box=document.getElementById('volvo_map'),fit=volvoFit(fake,(box&&box.clientWidth)||800,(box&&box.clientHeight)||430);
   if(!VOLVO.map)return;VOLVO.map.lat=fit.lat;VOLVO.map.lon=fit.lon;VOLVO.map.z=fit.z;drawVolvoMap();
 }
-async function loadVolvoRoute(vin,silent){try{const q=new URLSearchParams({from_date:val('volvo_from'),to_date:val('volvo_to'),shift:val('volvo_shift')||'ALL',limit:'1500'});const route=await volvoRequest('route/'+encodeURIComponent(vin)+'?'+q.toString());VOLVO.route=route;VOLVO.selectedVin=vin;VOLVO.lastRouteLoad=Date.now();setVolvoRouteSummary(route);if(route.points&&route.points.length){const fake=route.points.map(p=>({gps:p})),box=document.getElementById('volvo_map'),fit=volvoFit(fake,(box&&box.clientWidth)||800,(box&&box.clientHeight)||430);if(!VOLVO.map)VOLVO.map={points:(VOLVO.data&&VOLVO.data.fleet)||[],lat:fit.lat,lon:fit.lon,z:fit.z};else{VOLVO.map.lat=fit.lat;VOLVO.map.lon=fit.lon;VOLVO.map.z=fit.z;}drawVolvoMap();}}catch(e){if(!silent)toast(e.message,true);}}
+async function loadVolvoRoute(vin,silent){try{
+  const previousTrip=(VOLVO.selectedVin===vin&&VOLVO.routeTripId)?VOLVO.routeTripId:null;
+  const q=new URLSearchParams({from_date:val('volvo_from'),to_date:val('volvo_to'),shift:val('volvo_shift')||'ALL',limit:'1500'});
+  const session=await volvoRequest('route/'+encodeURIComponent(vin)+'?'+q.toString());
+  VOLVO.routeSession=session;VOLVO.selectedVin=vin;VOLVO.lastRouteLoad=Date.now();
+  const validPrevious=previousTrip==='FULL'||(session.trips||[]).some(t=>t.trip_id===previousTrip);
+  const defaultTrip=validPrevious?previousTrip:(session.current_trip_id||((session.trips||[]).length?(session.trips||[])[session.trips.length-1].trip_id:'FULL'));
+  selectVolvoTrip(defaultTrip,false);
+  if(VOLVO.route&&VOLVO.route.points&&VOLVO.route.points.length)focusVolvoRoute();
+}catch(e){if(!silent)toast(e.message,true);}}
