@@ -263,7 +263,7 @@ const masterConfig={
   PRODUCT:{key:'products',label:'Products',fields:['id','name','active']},
   ACTIVITY:{key:'activities',label:'Activities',fields:['id','vehicleRequired','active']},
   TANKER:{key:'tankers',label:'HSD tankers',fields:['id','vehicleNo','capacity','active']},
-  ROUTE:{key:'routes',label:'Route Master',fields:['id','name','sourceLocationId','destinationLocationId','routeMode','materialScope','via','leadEntries','active']},
+  ROUTE:{key:'routes',label:'Route Master',fields:['id','name','sourceLocationId','destinationLocationId','routeMode','leadBasis','fixedLeadKm','materialScope','via','leadEntries','active']},
   LEAD_DISTANCE:{key:'leadDistances',label:'Lead Master',fields:['id','routeId','benchRl','leadKm','materialScope','active']},
   DRILL_SET:{key:'drillSets',label:'Drill Sets',fields:['id','name','drillMachineId','compressorMachineId','notes','active']}
 };
@@ -274,7 +274,7 @@ const fieldLabels={
   vehicleRequired:'Vehicle required',capacity:'Capacity (litres)',locationId:'Canonical location',
   direction:'Alias use',field:'Standard WB field',header:'Excel header alias',occurrence:'Header occurrence',
   priority:'Priority',required:'Required header',sourceLocationId:'Source location',destinationLocationId:'Destination location',
-  routeMode:'Route type',materialScope:'Material scope',via:'Via / route note',leadEntries:'Lead entries',routeId:'Route',
+  routeMode:'Route type',leadBasis:'Lead basis',fixedLeadKm:'Fixed Lead KM',materialScope:'Material scope',via:'Via / route note',leadEntries:'Lead entries',routeId:'Route',
   benchRl:'Bench RL (m)',leadKm:'Lead KM',drillMachineId:'Drill machine',compressorMachineId:'Compressor',notes:'Notes'
 };
 const categoryDefaults={
@@ -346,6 +346,7 @@ function fieldOptions(t,f,current){
     return [['','Select location…'],...opts];
   }
   if(f==='routeMode')return [['WITH_WB','With Production WB'],['WITHOUT_WB','Without Production WB']];
+  if(f==='leadBasis')return [['BENCH_RL','Bench RL → Lead Master'],['FIXED','Fixed route → one Lead KM']];
   if(f==='routeId'){
     const rows=(S.mastersDesk.routes||[]).filter(x=>x.active);
     const opts=rows.map(x=>[x.id,(x.name||x.id)+' · '+(x.routeMode==='WITH_WB'?'With WB':'Without WB')]);
@@ -382,9 +383,9 @@ function editMaster(index){
     const choices=fieldOptions(t,f,row[f]),category=t+'.'+f,add=category in categoryDefaults||f==='rotationTeam';
     let control;
     if(choices){
-      control=`<select id="mf_${f}" ${['role','group','type','locationId','field','sourceLocationId','destinationLocationId','routeMode','routeId','drillMachineId','compressorMachineId'].includes(f)?'required':''}>${choices.map(([v,l])=>`<option value="${esc(v)}" ${String(row[f]??'')===String(v)?'selected':''}>${esc(l)}</option>`).join('')}</select>`;
-    }else if(['occurrence','priority','capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg','benchRl','leadKm','leadEntries'].includes(f)){
-      const decimal=['capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg','leadKm'].includes(f),min=['leadKm','capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg'].includes(f)?'0':'1',step=decimal?'0.001':'1';
+      control=`<select id="mf_${f}" ${['role','group','type','locationId','field','sourceLocationId','destinationLocationId','routeMode','leadBasis','routeId','drillMachineId','compressorMachineId'].includes(f)?'required':''}>${choices.map(([v,l])=>`<option value="${esc(v)}" ${String(row[f]??'')===String(v)?'selected':''}>${esc(l)}</option>`).join('')}</select>`;
+    }else if(['occurrence','priority','capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg','benchRl','leadKm','fixedLeadKm','leadEntries'].includes(f)){
+      const decimal=['capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg','leadKm','fixedLeadKm'].includes(f),min=['leadKm','fixedLeadKm','capacity','bucketCum','ratedPayloadT','ratedOutputTph','standingTareKg'].includes(f)?'0':'1',step=decimal?'0.001':'1';
       control=`<input id="mf_${f}" value="${esc(row[f]??'')}" type="number" min="${min}" step="${step}" ${f==='leadEntries'?'readonly':''} ${['capacity','benchRl','leadKm'].includes(f)?'required':''}>`;
     }else{
       const max=f==='header'?120:(f==='name'?(t==='LOCATION'?160:120):(f==='id'?(lengths[t]||80):80));
@@ -399,9 +400,9 @@ function editMaster(index){
     :t==='LOCATION_ALIAS'
       ?'Use this when the WB code/name is different from the canonical Location ID used by field entry.'
       :t==='ROUTE'
-        ?'Route Master defines Source → Destination and whether the approved path uses Production WB. Lead values are maintained separately by Bench RL.'
+        ?'Route Master defines Source → Destination + WB path. Use BENCH_RL for mine/bench routes; use FIXED for MSP/Crusher/Stack internal routes and enter one approved Fixed Lead KM.'
         :t==='LEAD_DISTANCE'
-          ?'Lead Master stores one approved Lead KM for an exact Route + Bench RL. Record ID is generated automatically when creating a new lead.'
+          ?'Lead Master is only for BENCH_RL routes: one approved Lead KM for an exact Route + Bench RL. FIXED routes keep their KM in Route Master.'
           :t==='DRILL_SET'
             ?'One operational Drill Set pairs one drill machine with one compressor. Their HMR readings remain separate in the drilling shift report.'
             :(index<0?'Use a unique ID. Dropdown additions are saved for everyone.':'Record ID is fixed to preserve history. Set status to Inactive to retire a record.');
