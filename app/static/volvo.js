@@ -452,26 +452,29 @@ function volvoTripOptionLabel(t,index,total){
   const state=t.is_current?'Current':(index===total-1?'Latest':'Trip');
   const day=t.operating_date?String(t.operating_date):'';
   const shift=t.shift?' · Shift '+t.shift:'';
+  const source=t.source_type==='LOAD_TRIP'?'FIELD':t.source_type==='WB'?'WB':(t.provisional?'GPS':'TIOM');
   const flow=(t.source_name||t.destination_name)?' · '+(t.source_name||'?')+' → '+(t.destination_name||'?'):' · provisional GPS';
   const material=t.material_name?' · '+t.material_name:'';
   const qty=t.quantity_mt!=null?' · '+volvoNum(t.quantity_mt,1)+' t':'';
-  return state+' '+t.trip_id+' · '+day+shift+' · '+volvoClock(t.start_at)+'–'+volvoClock(t.end_at)+' · '+volvoNum(t.distance_km,2)+' km'+flow+material+qty;
+  return state+' ['+source+'] '+t.trip_id+' · '+day+shift+' · '+volvoClock(t.start_at)+'–'+volvoClock(t.end_at)+' · '+volvoNum(t.distance_km,2)+' km'+flow+material+qty;
 }
 function setVolvoRouteSummary(route){
   const s=document.getElementById('volvo_route_summary');if(!s||!route)return;
   const session=VOLVO.routeSession||route,trips=session.trips||[],trip=route.selected_trip||null,pts=route.points||[];
   const first=pts.length?pts[0].reported_at:null,last=pts.length?pts[pts.length-1].reported_at:null;
-  const options='<option value="FULL" '+(VOLVO.routeTripId==='FULL'?'selected':'')+'>Full session · '+volvoNum(session.route_km,2)+' km · '+esc(session.trip_count||0)+' '+(session.segmentation_mode==='TIOM_TRIP'?'TIOM trips':'GPS legs')+'</option>'+
+  const modeName=session.segmentation_mode==='LOAD_TRIP'?'field trips':session.segmentation_mode==='WB_TRIP'?'WB trips':'GPS legs';
+  const options='<option value="FULL" '+(VOLVO.routeTripId==='FULL'?'selected':'')+'>Full session · '+volvoNum(session.route_km,2)+' km · '+esc(session.trip_count||0)+' '+modeName+'</option>'+
     trips.slice().reverse().map(t=>'<option value="'+esc(t.trip_id)+'" '+(VOLVO.routeTripId===t.trip_id?'selected':'')+'>'+esc(volvoTripOptionLabel(t,trips.indexOf(t),trips.length))+'</option>').join('');
   const distance=trip?trip.distance_km:session.route_km;
   const duration=trip?trip.duration_seconds:((first&&last)?Math.max(0,(new Date(last)-new Date(first))/1000):null);
   const stop=trip?trip.stop_seconds:null;
   const fuel=trip?trip.fuel_l:null;
   const avg=trip?trip.avg_speed_kmh:null;
-  const authoritative=session.segmentation_mode==='TIOM_TRIP';
+  const mode=session.segmentation_mode||'GPS_PROVISIONAL';
+  const sourceLabel=mode==='LOAD_TRIP'?'FIELD TRIP':mode==='WB_TRIP'?'WB TRIP':'GPS LEG';
   const flow=trip&&((trip.source_name||trip.destination_name))
-    ?(authoritative?'TIOM Trip · ':'')+(trip.source_name||'?')+' → '+(trip.destination_name||'?')+(trip.material_name?' · '+trip.material_name:'')+(trip.quantity_mt!=null?' · '+volvoNum(trip.quantity_mt,1)+' t':'')
-    :(trip?'GPS provisional · '+(trip.operating_date||'')+' · Shift '+(trip.shift||'—')+' · '+(trip.boundary_reason||'movement'):'Full session');
+    ?sourceLabel+' · '+(trip.source_name||'?')+' → '+(trip.destination_name||'?')+(trip.material_name?' · '+trip.material_name:'')+(trip.quantity_mt!=null?' · '+volvoNum(trip.quantity_mt,1)+' t':'')
+    :(trip?sourceLabel+' · '+(trip.operating_date||'')+' · Shift '+(trip.shift||'—')+' · '+(trip.boundary_reason||'movement'):'Full session');
   s.innerHTML=
     '<div class="volvo-trip-toolbar"><label>Route view<select id="volvo_trip_select" onchange="selectVolvoTrip(this.value,true)">'+options+'</select></label><div class="trip-flow">'+esc(flow)+'</div></div>'+
     '<div class="volvo-route-stats">'+
