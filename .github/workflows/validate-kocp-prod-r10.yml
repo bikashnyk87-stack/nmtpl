@@ -1,0 +1,26 @@
+name: Validate KOCP Production R10
+
+on:
+  push:
+    branches:
+      - validate-kocp-prod-r10-20261005
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python syntax
+        run: python -m py_compile app/routers/sites.py app/routers/site_ops.py
+      - name: JavaScript syntax
+        run: node --check app/static/simple_field_v1.js
+      - name: Consolidation checks
+        run: |
+          grep -q "KOCP Production Entry" app/static/simple_field_v1.js
+          grep -q "kocpHmrRows" app/static/simple_field_v1.js
+          grep -q "Material determines Coal vs OB" app/routers/site_ops.py
+          ! grep -A6 '"KOCP": \[' app/routers/sites.py | grep -q '"OB"'
+          ! grep -A6 '"KOCP": \[' app/routers/sites.py | grep -q '"HMR_KMR"'
