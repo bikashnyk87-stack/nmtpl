@@ -667,12 +667,21 @@ def dashboard_desk(db, user, p):
     # are tracked separately and explicitly excluded from production recovery.
     production_facts={}
     old_stock_trips=0
+    production_hourly={h:{'hour':f'{h:02d}:00','rom':0.0,'final':0.0} for h in range(24)}
+    final_output_codes={'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}
+    rom_input_codes={'ROM','ROM_STOCK_TO_PLANT_FEED'}
     for row in wb_all:
         facts=tiom_wb_report_contributions(row)
         if any(code=='PROJECT_AREA_FINES_TO_STACK' for code,_qty in facts):
             old_stock_trips+=1
+        stamp=aware(row.weigh_at).astimezone(TZ) if row.weigh_at else None
         for code,qty in facts:
-            production_facts[code]=production_facts.get(code,Decimal('0'))+Decimal(qty or 0)
+            q=Decimal(qty or 0)
+            production_facts[code]=production_facts.get(code,Decimal('0'))+q
+            if stamp and code in final_output_codes:
+                production_hourly[stamp.hour]['final']+=float(q)
+            if stamp and code in rom_input_codes:
+                production_hourly[stamp.hour]['rom']+=float(q)
 
     rom_input=production_facts.get('ROM',Decimal('0'))+production_facts.get('ROM_STOCK_TO_PLANT_FEED',Decimal('0'))
     screen_fines=production_facts.get('SCREEN_FINES',Decimal('0'))
@@ -1332,6 +1341,7 @@ def dashboard_desk(db, user, p):
             'drillHsdLitres':round(float(drill_totals.get('hsdLitres') or 0),1),'drillBreakdownHours':round(float(drill_totals.get('breakdownHours') or 0),2),
         },
         'hourly':[dict(x,tonnes=round(x['tonnes'],2)) for x in hourly.values()],
+        'productionHourly':[{'hour':x['hour'],'rom':round(x['rom'],2),'final':round(x['final'],2)} for x in production_hourly.values()],
         'materials':mat_rows,'sources':source_rows[:20],'destinations':dest_rows[:20],'routes':route_rows[:20],
         'misMaterials':_mis_rows(mis_materials)[:30],'misSources':_mis_rows(mis_sources)[:30],
         'misDestinations':_mis_rows(mis_destinations)[:30],
