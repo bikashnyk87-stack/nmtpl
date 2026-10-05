@@ -8,7 +8,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.orm import Session
 
 from app.models import Location, LocationAlias, WbMovement
-from app.site_models import TiomLocationRole, TiomWbCanonical
+from app.site_models import TiomLocationRole, TiomRouteMaster, TiomWbCanonical
 from app.services.tiom_erp import resolve_product_id
 from app.services.wb_mapping import build_location_resolver
 from app.services.time_context import now_local
@@ -22,6 +22,20 @@ def ensure_location_master_schema(engine: Engine) -> None:
         cols = {str(c["name"]).lower() for c in inspect(conn).get_columns("locations")}
         if "role" not in cols:
             conn.execute(text("ALTER TABLE locations ADD COLUMN role VARCHAR(20)"))
+
+
+def ensure_tiom_route_master_schema(engine: Engine) -> None:
+    """Add fixed-lead support to existing TIOM Route Master tables safely."""
+    with engine.begin() as conn:
+        tables = set(inspect(conn).get_table_names())
+        if "tiom_route_master" not in tables:
+            return
+        cols = {str(c["name"]).lower() for c in inspect(conn).get_columns("tiom_route_master")}
+        if "lead_basis" not in cols:
+            conn.execute(text("ALTER TABLE tiom_route_master ADD COLUMN lead_basis VARCHAR(20) DEFAULT 'BENCH_RL'"))
+        if "fixed_lead_km" not in cols:
+            conn.execute(text("ALTER TABLE tiom_route_master ADD COLUMN fixed_lead_km NUMERIC(8,3)"))
+        conn.execute(text("UPDATE tiom_route_master SET lead_basis='BENCH_RL' WHERE lead_basis IS NULL OR TRIM(lead_basis)=''"))
 
 
 def _merge_role(current: str | None, incoming: str | None) -> str:
