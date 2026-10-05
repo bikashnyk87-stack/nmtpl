@@ -1124,7 +1124,19 @@ def dashboard_desk(db, user, p):
         lead=mis_leads.get(r.row_id)
         if rec and rec.wb_movement_key: mis_wb_linked+=1
         else: mis_factor_trips+=1
-        route_mode=(lead.route_mode if lead else None) or ('WITH_WB' if rec and rec.wb_movement_key else None)
+        route_mode=(lead.route_mode if lead else None) or ('WITH_WB' if rec and rec.wb_movement_key else 'WITHOUT_WB')
+        # WB-linked MIS is evidence only; authoritative WB already contributed
+        # that trip to haulage performance. Non-WB rows (OB/internal haulage)
+        # join the same route KPI using their form timestamps and snapshotted lead.
+        if not (rec and rec.wb_movement_key):
+            cycle=duration_minutes(r.loading_at,r.unloading_at)
+            add_haulage(
+                d.source_location_id,d.destination_location_id,src,dst,route_mode,float(qty),
+                r.loading_at or r.unloading_at,
+                Decimal(lead.lead_km) if lead and lead.lead_status=='OK' and lead.lead_km is not None else None,
+                lead.lead_status if lead else 'NOT_CAPTURED',
+                cycle
+            )
         if route_mode=='WITH_WB': lead_with_wb+=1
         elif route_mode=='WITHOUT_WB': lead_without_wb+=1
         if lead and lead.lead_status=='OK' and lead.lead_km is not None:
@@ -1155,6 +1167,45 @@ def dashboard_desk(db, user, p):
             'avgLeadKm':round(float(avg_lead),3),'tonKm':round(float(x['tonKm']),2)
         })
     weighted_avg_lead=(lead_ton_km/lead_covered_qty) if lead_covered_qty>0 else Decimal('0')
+
+    # Combined haulage productivity: authoritative WB trips + non-WB form trips.
+    # TPH here intentionally means Trips Per Hour, using active clock-hour buckets.
+    haulage_rows=[]
+    combined_lead_qty=0.0; combined_ton_km=0.0; combined_trip_km=0.0
+    combined_trips=0; combined_lead_missing=0
+    for row in haulage_perf.values():
+        active_hours=len(row['hourBins'])
+        avg_lead=(row['leadTonKm']/row['leadQty']) if row['leadQty']>0 else None
+        tph=(row['trips']/active_hours) if active_hours>0 else None
+        trip_kmh=(row['leadTripKm']/active_hours) if active_hours>0 and row['leadResolvedTrips']>0 else None
+        ton_kmh=(row['leadTonKm']/active_hours) if active_hours>0 and row['leadResolvedTrips']>0 else None
+        cycles=row['cycleSamples']
+        if row['leadMissingTrips']==0 and row['leadResolvedTrips']>0:
+            lead_status='OK'
+        elif row['leadResolvedTrips']>0:
+            lead_status='PARTIAL'
+        else:
+            lead_status=sorted(row['leadStatuses'])[0] if row['leadStatuses'] else 'NOT_CONFIGURED'
+        haulage_rows.append({
+            'source':row['source'],'destination':row['destination'],'routeMode':row['routeMode'],
+            'trips':row['trips'],'tonnes':round(row['tonnes'],2),'activeHours':active_hours,
+            'tripsPerHour':round(tph,2) if tph is not None else None,
+            'avgLeadKm':round(avg_lead,3) if avg_lead is not None else None,
+            'tripKmPerHour':round(trip_kmh,2) if trip_kmh is not None else None,
+            'tonKmPerHour':round(ton_kmh,2) if ton_kmh is not None else None,
+            'avgCycleMin':round(sum(cycles)/len(cycles),1) if cycles else None,
+            'leadResolvedTrips':row['leadResolvedTrips'],'leadMissingTrips':row['leadMissingTrips'],
+            'leadStatus':lead_status,
+        })
+        combined_trips+=row['trips']; combined_lead_qty+=row['leadQty']
+        combined_ton_km+=row['leadTonKm']; combined_trip_km+=row['leadTripKm']
+        combined_lead_missing+=row['leadMissingTrips']
+    haulage_rows.sort(key=lambda x:(x['trips'],x['tonnes']),reverse=True)
+    combined_active_hours=len(all_haul_hours)
+    combined_avg_lead=(combined_ton_km/combined_lead_qty) if combined_lead_qty>0 else None
+    combined_tph=(combined_trips/combined_active_hours) if combined_active_hours>0 else None
+    combined_trip_kmh=(combined_trip_km/combined_active_hours) if combined_active_hours>0 else None
+    combined_ton_kmh=(combined_ton_km/combined_active_hours) if combined_active_hours>0 else None
 
     # Build 7-day MIS/lead trend independently of the currently selected period.
     # This mirrors the existing 7-day WB trend and preserves the selected shift scope.
