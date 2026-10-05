@@ -1042,6 +1042,317 @@ def report_summary(site_id:str,request:Request,from_date:date|None=None,to_date:
     return {"siteId":site_id,"fromDate":start,"toDate":end,"trips":trips,"quantityMt":_fmt_decimal(mt),"quantityCum":_fmt_decimal(cum),"hsdIssuedL":_fmt_decimal(hsd),"wbRows":wb,"shifts":shifts,"lPerMt":(_fmt_decimal(hsd)/_fmt_decimal(mt) if _fmt_decimal(mt)>0 else None)}
 
 
+
+@router.get("/{site_id}/dashboard/operations")
+def operations_dashboard(
+    site_id: str,
+    request: Request,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """Dense operational dashboard for SOCP/KOCP.
+
+    Today's field-entry status stays separate from the selected cumulative
+    period so the same screen serves field users and management without
+    duplicate transactions.
+    """
+    user=get_user(db,request)
+    site_id=require_site(db,user,site_id)
+    _require_any(db,user,site_id,"DASHBOARD")
+    if site_id not in {"SOCP","KOCP"}:
+        raise HTTPException(409,"Dedicated site dashboard is available for SOCP/KOCP.")
+
+    ctx=resolve_site_context(db,site_id)
+    today=ctx.operating_date
+    start=from_date or today.replace(day=1)
+    end=to_date or today
+    if end < start:
+        raise HTTPException(422,"to_date cannot be before from_date")
+    if (end-start).days > 365:
+        raise HTTPException(422,"Dashboard range is limited to 366 days.")
+
+    trip_filters=[
+        SiteTrip.site_id==site_id,
+        SiteTrip.operating_date>=start,
+        SiteTrip.operating_date<=end,
+        SiteTrip.status!="VOID",
+    ]
+    today_filters=[
+        SiteTrip.site_id==site_id,
+        SiteTrip.operating_date==today,
+        SiteTrip.status!="VOID",
+    ]
+
+    loc_rows=list(db.scalars(select(SiteLocation).where(SiteLocation.site_id==site_id)))
+    loc_name={x.site_location_id:(x.name or x.code or x.site_location_id) for x in loc_rows}
+    mat_rows=list(db.scalars(select(SiteMaterial).where(SiteMaterial.site_id==site_id)))
+    mat_name={x.site_material_id:(x.name or x.code or x.site_material_id) for x in mat_rows}
+    eq_rows=list(db.scalars(select(Equipment)))
+    eq_name={
+        x.machine_id:" · ".join(v for v in [x.door_no,x.vehicle_no,x.machine_id] if v) or x.machine_id
+        for x in eq_rows
+    }
+
+    def trip_totals(filters):
+        row=db.execute(select(
+            func.count(),
+            func.coalesce(func.sum(SiteTrip.quantity_mt),0),
+            func.coalesce(func.sum(SiteTrip.quantity_cum),0),
+            func.count(func.distinct(SiteTrip.vehicle_id)),
+            func.count(func.distinct(SiteTrip.loading_equipment_id)),
+        ).where(*filters)).one()
+        return {
+            "trips":int(row[0] or 0),
+            "quantityMt":_fmt_decimal(row[1]),
+            "quantityCum":_fmt_decimal(row[2]),
+            "vehicles":int(row[3] or 0),
+            "loadingEquipment":int(row[4] or 0),
+        }
+
+    today_totals=trip_totals(today_filters)
+    period_totals=trip_totals(trip_filters)
+
+    today_wb=db.execute(select(
+        func.count(),
+        func.coalesce(func.sum(SiteWbMovement.net_kg),0),
+    ).where(
+        SiteWbMovement.site_id==site_id,
+        SiteWbMovement.operating_date==today,
+        SiteWbMovement.row_status=="VALID",
+    )).one()
+    period_wb=db.execute(select(
+        func.count(),
+        func.coalesce(func.sum(SiteWbMovement.net_kg),0),
+    ).where(
+        SiteWbMovement.site_id==site_id,
+        SiteWbMovement.operating_date>=start,
+        SiteWbMovement.operating_date<=end,
+        SiteWbMovement.row_status=="VALID",
+    )).one()
+    today_totals["wbRows"]=int(today_wb[0] or 0)
+    today_totals["wbMt"]=_fmt_decimal(_decimal(today_wb[1])/Decimal("1000"))
+    period_totals["wbRows"]=int(period_wb[0] or 0)
+    period_totals["wbMt"]=_fmt_decimal(_decimal(period_wb[1])/Decimal("1000"))
+
+    today_hsd=db.scalar(select(func.coalesce(func.sum(SiteHsdTransaction.litres),0)).where(
+        SiteHsdTransaction.site_id==site_id,
+        SiteHsdTransaction.operating_date==today,
+        SiteHsdTransaction.transaction_type=="ISSUE",
+        SiteHsdTransaction.status=="POSTED",
+    )) or 0
+    period_hsd=db.scalar(select(func.coalesce(func.sum(SiteHsdTransaction.litres),0)).where(
+        SiteHsdTransaction.site_id==site_id,
+        SiteHsdTransaction.operating_date>=start,
+        SiteHsdTransaction.operating_date<=end,
+        SiteHsdTransaction.transaction_type=="ISSUE",
+        SiteHsdTransaction.status=="POSTED",
+    )) or 0
+    today_totals["hsdIssuedL"]=_fmt_decimal(today_hsd)
+    period_totals["hsdIssuedL"]=_fmt_decimal(period_hsd)
+    today_totals["lPerMt"]=(today_totals["hsdIssuedL"]/today_totals["quantityMt"] if today_totals["quantityMt"]>0 else None)
+    period_totals["lPerMt"]=(period_totals["hsdIssuedL"]/period_totals["quantityMt"] if period_totals["quantityMt"]>0 else None)
+    period_totals["lPerCum"]=(period_totals["hsdIssuedL"]/period_totals["quantityCum"] if period_totals["quantityCum"]>0 else None)
+
+    shift_map={}
+    for sh,tr,mt,cum in db.execute(select(
+        SiteTrip.shift,func.count(),func.coalesce(func.sum(SiteTrip.quantity_mt),0),func.coalesce(func.sum(SiteTrip.quantity_cum),0)
+    ).where(*trip_filters).group_by(SiteTrip.shift)):
+        shift_map[str(sh)]={"shift":str(sh),"trips":int(tr or 0),"quantityMt":_fmt_decimal(mt),"quantityCum":_fmt_decimal(cum),"hsdL":0.0}
+    for sh,litres in db.execute(select(
+        SiteHsdTransaction.shift,func.coalesce(func.sum(SiteHsdTransaction.litres),0)
+    ).where(
+        SiteHsdTransaction.site_id==site_id,
+        SiteHsdTransaction.operating_date>=start,
+        SiteHsdTransaction.operating_date<=end,
+        SiteHsdTransaction.transaction_type=="ISSUE",
+        SiteHsdTransaction.status=="POSTED",
+    ).group_by(SiteHsdTransaction.shift)):
+        key=str(sh or "NA")
+        shift_map.setdefault(key,{"shift":key,"trips":0,"quantityMt":0.0,"quantityCum":0.0,"hsdL":0.0})
+        shift_map[key]["hsdL"]=_fmt_decimal(litres)
+    shifts=[shift_map[k] for k in sorted(shift_map)]
+
+    def grouped_rows(column, label_map, limit=10):
+        rows=db.execute(select(
+            column,
+            func.count(),
+            func.coalesce(func.sum(SiteTrip.quantity_mt),0),
+            func.coalesce(func.sum(SiteTrip.quantity_cum),0),
+        ).where(*trip_filters).group_by(column)).all()
+        out=[]
+        for key,tr,mt,cum in rows:
+            if key in (None,""): continue
+            out.append({
+                "id":str(key),
+                "label":label_map.get(key,str(key)),
+                "trips":int(tr or 0),
+                "quantityMt":_fmt_decimal(mt),
+                "quantityCum":_fmt_decimal(cum),
+            })
+        out.sort(key=lambda x:(x["quantityMt"] if x["quantityMt"]>0 else x["quantityCum"],x["trips"]),reverse=True)
+        return out[:limit]
+
+    materials=grouped_rows(SiteTrip.material_id,mat_name,8)
+    sources=grouped_rows(SiteTrip.source_location_id,loc_name,8)
+    destinations=grouped_rows(SiteTrip.destination_location_id,loc_name,10)
+    vehicles=grouped_rows(SiteTrip.vehicle_id,eq_name,10)
+    loaders=grouped_rows(SiteTrip.loading_equipment_id,eq_name,10)
+
+    trend_trip={}
+    for day,tr,mt,cum in db.execute(select(
+        SiteTrip.operating_date,func.count(),func.coalesce(func.sum(SiteTrip.quantity_mt),0),func.coalesce(func.sum(SiteTrip.quantity_cum),0)
+    ).where(*trip_filters).group_by(SiteTrip.operating_date).order_by(SiteTrip.operating_date)):
+        trend_trip[day]={"trips":int(tr or 0),"quantityMt":_fmt_decimal(mt),"quantityCum":_fmt_decimal(cum)}
+    trend_hsd={day:_fmt_decimal(litres) for day,litres in db.execute(select(
+        SiteHsdTransaction.operating_date,func.coalesce(func.sum(SiteHsdTransaction.litres),0)
+    ).where(
+        SiteHsdTransaction.site_id==site_id,
+        SiteHsdTransaction.operating_date>=start,
+        SiteHsdTransaction.operating_date<=end,
+        SiteHsdTransaction.transaction_type=="ISSUE",
+        SiteHsdTransaction.status=="POSTED",
+    ).group_by(SiteHsdTransaction.operating_date))}
+    trend=[]
+    day=start
+    while day<=end:
+        x=trend_trip.get(day,{})
+        trend.append({
+            "date":day.isoformat(),
+            "trips":x.get("trips",0),
+            "quantityMt":x.get("quantityMt",0.0),
+            "quantityCum":x.get("quantityCum",0.0),
+            "hsdL":trend_hsd.get(day,0.0),
+        })
+        day+=timedelta(days=1)
+
+    fleet_status={}
+    for status,count in db.execute(select(
+        SiteAssetAttendance.status,func.count()
+    ).where(
+        SiteAssetAttendance.site_id==site_id,
+        SiteAssetAttendance.operating_date==today,
+    ).group_by(SiteAssetAttendance.status)):
+        fleet_status[str(status or "UNKNOWN").upper()]=int(count or 0)
+    assigned_assets=db.scalar(select(func.count(func.distinct(EquipmentSiteAssignment.machine_id))).where(
+        EquipmentSiteAssignment.site_id==site_id,
+        EquipmentSiteAssignment.active.is_(True),
+        EquipmentSiteAssignment.effective_from<=today,
+        or_(EquipmentSiteAssignment.effective_to.is_(None),EquipmentSiteAssignment.effective_to>=today),
+    )) or 0
+    recorded_assets=sum(fleet_status.values())
+    if assigned_assets>recorded_assets:
+        fleet_status["NOT_UPDATED"]=int(assigned_assets-recorded_assets)
+
+    meter_usage={}
+    for typ,usage in db.execute(select(
+        SiteAssetMeter.meter_type,func.coalesce(func.sum(SiteAssetMeter.usage),0)
+    ).where(
+        SiteAssetMeter.site_id==site_id,
+        SiteAssetMeter.operating_date>=start,
+        SiteAssetMeter.operating_date<=end,
+    ).group_by(SiteAssetMeter.meter_type)):
+        meter_usage[str(typ or "OTHER").upper()]=_fmt_decimal(usage)
+
+    recon={}
+    for status,count in db.execute(select(
+        SiteTripReconciliation.status,func.count()
+    ).where(
+        SiteTripReconciliation.site_id==site_id,
+        SiteTripReconciliation.operating_date>=start,
+        SiteTripReconciliation.operating_date<=end,
+    ).group_by(SiteTripReconciliation.status)):
+        recon[str(status or "UNKNOWN").upper()]=int(count or 0)
+
+    dq_open=db.scalar(select(func.count()).select_from(SiteDataQualityIssue).where(
+        SiteDataQualityIssue.site_id==site_id,
+        SiteDataQualityIssue.status=="OPEN",
+        or_(SiteDataQualityIssue.operating_date.is_(None),SiteDataQualityIssue.operating_date<=end),
+    )) or 0
+
+    missing_today=db.scalar(select(func.count()).select_from(SiteTrip).where(
+        *today_filters,
+        or_(
+            SiteTrip.vehicle_id.is_(None),
+            SiteTrip.loading_equipment_id.is_(None),
+            SiteTrip.destination_location_id.is_(None),
+            SiteTrip.material_id.is_(None),
+        )
+    )) or 0
+
+    current_factors=[]
+    if site_id=="KOCP":
+        rows=db.scalars(select(SiteWeightFactor).where(
+            SiteWeightFactor.site_id==site_id,
+            SiteWeightFactor.status=="APPROVED",
+            SiteWeightFactor.effective_from<=today,
+            or_(SiteWeightFactor.effective_to.is_(None),SiteWeightFactor.effective_to>=today),
+        ).order_by(SiteWeightFactor.factor_type,SiteWeightFactor.shift,SiteWeightFactor.version.desc()).limit(20)).all()
+        seen=set()
+        for r in rows:
+            key=(r.factor_type,r.shift or "ALL")
+            if key in seen: continue
+            seen.add(key)
+            current_factors.append({
+                "type":r.factor_type,
+                "shift":r.shift or "ALL",
+                "value":_fmt_decimal(r.factor_value),
+                "unit":r.factor_unit,
+                "reference":r.reference_no,
+            })
+
+    latest_survey=None
+    latest_billing=None
+    if site_id=="KOCP":
+        survey=db.scalar(select(SiteSurveyMeasurement).where(
+            SiteSurveyMeasurement.site_id==site_id
+        ).order_by(SiteSurveyMeasurement.period_end.desc(),SiteSurveyMeasurement.entered_at.desc()).limit(1))
+        if survey:
+            latest_survey={
+                "periodEnd":survey.period_end,
+                "measuredCum":_fmt_decimal(survey.measured_cum),
+                "measuredMt":_fmt_decimal(survey.measured_mt) if survey.measured_mt is not None else None,
+                "status":survey.status,
+                "reference":survey.reference_no,
+            }
+        billing=db.scalar(select(SiteBillingReconciliation).where(
+            SiteBillingReconciliation.site_id==site_id
+        ).order_by(SiteBillingReconciliation.period_end.desc(),SiteBillingReconciliation.created_at.desc()).limit(1))
+        if billing:
+            latest_billing={
+                "periodEnd":billing.period_end,
+                "operationalCum":_fmt_decimal(billing.operational_cum) if billing.operational_cum is not None else None,
+                "certifiedCum":_fmt_decimal(billing.certified_cum) if billing.certified_cum is not None else None,
+                "varianceCum":_fmt_decimal(billing.variance_cum) if billing.variance_cum is not None else None,
+                "status":billing.status,
+            }
+
+    return {
+        "siteId":site_id,
+        "today":today,
+        "currentShift":ctx.shift,
+        "fromDate":start,
+        "toDate":end,
+        "todayTotals":today_totals,
+        "periodTotals":period_totals,
+        "shifts":shifts,
+        "trend":trend,
+        "materials":materials,
+        "sources":sources,
+        "destinations":destinations,
+        "vehicles":vehicles,
+        "loaders":loaders,
+        "fleet":{"assigned":int(assigned_assets),"status":fleet_status},
+        "meters":meter_usage,
+        "reconciliation":recon,
+        "openDataQuality":int(dq_open),
+        "missingTripFieldsToday":int(missing_today),
+        "factors":current_factors,
+        "latestSurvey":latest_survey,
+        "latestBilling":latest_billing,
+    }
+
+
 @router.get("/{site_id}/reports/export.xlsx")
 def report_export(site_id:str,request:Request,from_date:date|None=None,to_date:date|None=None,db:Session=Depends(get_db)):
     user=get_user(db,request); site_id=require_site(db,user,site_id); _require_any(db,user,site_id,"REPORTS"); start,end=_period_bounds(from_date,to_date)
