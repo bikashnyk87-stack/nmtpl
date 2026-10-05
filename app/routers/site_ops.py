@@ -81,6 +81,49 @@ def _audit(db: Session, user, site_id: str | None, action: str, entity: str, ent
     ))
 
 
+def _site_shift_or_422(db: Session, site_id: str, shift: str):
+    code=str(shift or "").strip().upper()
+    row=db.get(SiteShift, {"site_id":site_id,"shift":code}) if code else None
+    if not row or not row.active:
+        raise HTTPException(422, f"Choose a valid active shift for {site_id}.")
+    return row
+
+
+def _site_equipment_or_422(db: Session, site_id: str, machine_id: str, operating_day: date, label: str="equipment"):
+    eq=db.get(Equipment,machine_id) if machine_id else None
+    assignment=db.scalar(select(EquipmentSiteAssignment).where(
+        EquipmentSiteAssignment.site_id==site_id,
+        EquipmentSiteAssignment.machine_id==machine_id,
+        EquipmentSiteAssignment.active.is_(True),
+        EquipmentSiteAssignment.effective_from<=operating_day,
+        or_(EquipmentSiteAssignment.effective_to.is_(None),EquipmentSiteAssignment.effective_to>=operating_day),
+    ).order_by(EquipmentSiteAssignment.effective_from.desc(),EquipmentSiteAssignment.id.desc()).limit(1)) if machine_id else None
+    if not eq or not eq.active or not assignment:
+        raise HTTPException(422, f"Choose a valid active {label} assigned to {site_id}.")
+    return eq
+
+
+def _site_person_or_422(db: Session, site_id: str, employee_id: str, operating_day: date):
+    person=db.get(Person,employee_id) if employee_id else None
+    assignment=db.scalar(select(PersonSiteAssignment).where(
+        PersonSiteAssignment.site_id==site_id,
+        PersonSiteAssignment.employee_id==employee_id,
+        PersonSiteAssignment.active.is_(True),
+        PersonSiteAssignment.effective_from<=operating_day,
+        or_(PersonSiteAssignment.effective_to.is_(None),PersonSiteAssignment.effective_to>=operating_day),
+    ).order_by(PersonSiteAssignment.effective_from.desc(),PersonSiteAssignment.id.desc()).limit(1)) if employee_id else None
+    if not person or not person.active or not assignment:
+        raise HTTPException(422, f"Choose a valid active employee assigned to {site_id}.")
+    return person
+
+
+def _site_location_or_422(db: Session, site_id: str, location_id: str):
+    row=db.get(SiteLocation,location_id) if location_id else None
+    if not row or row.site_id!=site_id or not row.active:
+        raise HTTPException(422, f"Choose a valid active location for {site_id}.")
+    return row
+
+
 def _decimal(value) -> Decimal:
     if value is None:
         return Decimal("0")
@@ -478,8 +521,8 @@ def list_attendance(site_id: str, request: Request, operating_date: date | None 
 def save_attendance(site_id: str, p: SiteAttendanceIn, request: Request, db: Session = Depends(get_db)):
     csrf(request); user = get_user(db, request); site_id = require_site(db, user, site_id); require_permission(db, user, site_id, "ATTENDANCE", "CREATE")
     if site_id == "TIOM": raise HTTPException(409, "Use the existing TIOM attendance workflow during migration.")
-    person = db.get(Person, p.employeeId)
-    if not person: raise HTTPException(422, "Employee ID is not in the central Employee Master.")
+    _site_shift_or_422(db,site_id,p.shift)
+    _site_person_or_422(db,site_id,p.employeeId,p.operatingDate)
     row = db.scalar(select(SitePersonAttendance).where(SitePersonAttendance.site_id == site_id, SitePersonAttendance.operating_date == p.operatingDate, SitePersonAttendance.shift == p.shift.upper(), SitePersonAttendance.employee_id == p.employeeId))
     created = row is None
     if row is None:
@@ -510,7 +553,8 @@ def list_asset_attendance(site_id: str, request: Request, operating_date: date |
 def save_asset_attendance(site_id: str, p: SiteAssetAttendanceIn, request: Request, db: Session = Depends(get_db)):
     csrf(request); user=get_user(db,request); site_id=require_site(db,user,site_id); require_permission(db,user,site_id,"FLEET","CREATE")
     if site_id=="TIOM": raise HTTPException(409,"Use the existing TIOM equipment attendance workflow during migration.")
-    if not db.get(Equipment,p.assetId): raise HTTPException(422,"Asset is not in Equipment Master.")
+    _site_shift_or_422(db,site_id,p.shift)
+    _site_equipment_or_422(db,site_id,p.assetId,p.operatingDate,"equipment")
     row=db.scalar(select(SiteAssetAttendance).where(SiteAssetAttendance.site_id==site_id,SiteAssetAttendance.operating_date==p.operatingDate,SiteAssetAttendance.shift==p.shift.upper(),SiteAssetAttendance.asset_id==p.assetId))
     created=row is None
     if not row:
@@ -539,6 +583,10 @@ def save_deployment(site_id:str,p:SiteDeploymentIn,request:Request,db:Session=De
     csrf(request); user=get_user(db,request); site_id=require_site(db,user,site_id); require_permission(db,user,site_id,"SHIFT_CONTROL","CREATE")
     if site_id=="TIOM": raise HTTPException(409,"Use the existing TIOM shift deployment workflow during migration.")
     if not p.assetId and not p.employeeId: raise HTTPException(422,"assetId or employeeId is required.")
+    _site_shift_or_422(db,site_id,p.shift)
+    if p.assetId: _site_equipment_or_422(db,site_id,p.assetId,p.operatingDate,"equipment / vehicle")
+    if p.employeeId: _site_person_or_422(db,site_id,p.employeeId,p.operatingDate)
+    if p.locationId: _site_location_or_422(db,site_id,p.locationId)
     did=f"DEP-{site_id}-{uuid4().hex[:14].upper()}"; row=SiteDeployment(deployment_id=did,site_id=site_id,operating_date=p.operatingDate,shift=p.shift.upper(),asset_id=p.assetId,employee_id=p.employeeId,location_id=p.locationId,activity=p.activity,from_at=p.fromAt,to_at=p.toAt,status=p.status.upper(),remarks=p.remarks,entered_by=user.login_id); db.add(row); _audit(db,user,site_id,"CREATE_DEPLOYMENT","site_deployment",did,after=p.model_dump()); db.commit(); return {"ok":True,"deploymentId":did}
 
 
@@ -556,12 +604,18 @@ def list_meters(site_id:str,request:Request,operating_date:date|None=None,shift:
 @router.post("/{site_id}/meters")
 def save_meter(site_id:str,p:SiteAssetMeterIn,request:Request,db:Session=Depends(get_db)):
     csrf(request); user=get_user(db,request); site_id=require_site(db,user,site_id); module="HMR_KMR" if site_id=="KOCP" else "FLEET"; require_permission(db,user,site_id,module,"CREATE")
-    existing=db.scalar(select(SiteAssetMeter).where(SiteAssetMeter.site_id==site_id,SiteAssetMeter.operating_date==p.operatingDate,SiteAssetMeter.shift==p.shift.upper(),SiteAssetMeter.asset_id==p.assetId,SiteAssetMeter.meter_type==p.meterType))
+    _site_shift_or_422(db,site_id,p.shift)
+    _site_equipment_or_422(db,site_id,p.assetId,p.operatingDate,"machine / vehicle")
+    meter_type=str(p.meterType or "").strip().upper()
+    if meter_type not in {"HMR","KMR","OTHER"}: raise HTTPException(422,"Choose HMR, KMR or OTHER.")
+    if p.openingReading is not None and p.closingReading is not None and p.closingReading < p.openingReading:
+        raise HTTPException(422,"Closing reading cannot be less than opening reading.")
+    existing=db.scalar(select(SiteAssetMeter).where(SiteAssetMeter.site_id==site_id,SiteAssetMeter.operating_date==p.operatingDate,SiteAssetMeter.shift==p.shift.upper(),SiteAssetMeter.asset_id==p.assetId,SiteAssetMeter.meter_type==meter_type))
     usage=(p.closingReading-p.openingReading) if p.openingReading is not None and p.closingReading is not None else None
     if existing:
         existing.opening_reading=p.openingReading; existing.closing_reading=p.closingReading; existing.usage=usage; existing.remarks=p.remarks; rid=existing.reading_id
     else:
-        rid=f"MTR-{site_id}-{uuid4().hex[:14].upper()}"; db.add(SiteAssetMeter(reading_id=rid,site_id=site_id,operating_date=p.operatingDate,shift=p.shift.upper(),asset_id=p.assetId,meter_type=p.meterType,opening_reading=p.openingReading,closing_reading=p.closingReading,usage=usage,source_type=p.sourceType,remarks=p.remarks,entered_by=user.login_id))
+        rid=f"MTR-{site_id}-{uuid4().hex[:14].upper()}"; db.add(SiteAssetMeter(reading_id=rid,site_id=site_id,operating_date=p.operatingDate,shift=p.shift.upper(),asset_id=p.assetId,meter_type=meter_type,opening_reading=p.openingReading,closing_reading=p.closingReading,usage=usage,source_type=p.sourceType,remarks=p.remarks,entered_by=user.login_id))
     _audit(db,user,site_id,"UPSERT_METER","site_asset_meter",rid,after=p.model_dump()); db.commit(); return {"ok":True,"readingId":rid,"usage":usage}
 
 
