@@ -174,31 +174,66 @@ dashMode=function(btn,mode){S.dashMode=mode;document.querySelectorAll('.period')
 
 loadDashboard=function(){
   appRun(d=>{
-    S.dashboard=d;dashRefreshFilterOptions(d);const k=d.kpis||{},targets=dashTargets(),days=Math.max(1,Math.round((new Date(d.toDate)-new Date(d.fromDate))/86400000)+1),periodTarget=targets.day?targets.day*days:0;
-    const achievement=periodTarget?Number(k.wbTonnes||0)/periodTarget*100:null,remaining=periodTarget?Math.max(0,periodTarget-Number(k.wbTonnes||0)):null,remainingTrips=remaining!=null&&Number(k.avgPayload)>0?Math.ceil(remaining/Number(k.avgPayload)):null;
+    S.dashboard=d;dashRefreshFilterOptions(d);const k=d.kpis||{},p=d.production||{},targets=dashTargets(),days=Math.max(1,Math.round((new Date(d.toDate)-new Date(d.fromDate))/86400000)+1),periodTarget=targets.day?targets.day*days:0;
+    const productionActual=Number(p.finalProductionMt||0),achievement=periodTarget?productionActual/periodTarget*100:null,remaining=periodTarget?Math.max(0,periodTarget-productionActual):null;
+    const finalFuelIntensity=productionActual>0?Number(k.hsdLitres||0)/productionActual:null;
     const topCards=[
-      ['WB Tonnes',dashFmt(k.wbTonnes,1,' t'),'Confirmed WB','good'],['WB Trips',dashFmt(k.wbTrips,0),'Confirmed WB','good'],['Avg Payload',dashFmt(k.avgPayload,2,' t'),'Ton / trip','neutral'],['Avg Lead',dashFmt(k.avgLeadKm,3,' km'),'Quantity-weighted lead','good'],['Lead Work',dashFmt(k.leadTonKm,1,' t-km'),'Operational haulage work','good'],['Lead Trips',dashFmt(k.leadResolvedTrips,0),'Lead master matched','neutral'],['Lead Missing',dashFmt(k.leadMissingTrips,0),'Needs route / RL / master',Number(k.leadMissingTrips)>0?'warning':'good'],['Field Trips',dashFmt(k.fieldTrips,0),'Application','neutral'],['Match Rate',dashFmt(k.matchRate,1,'%'),'WB reconciliation',dashTone(k.matchRate,90,75)],['Materials',dashFmt(k.materials,0),'WB materials','neutral'],['Sources',dashFmt(k.sources,0),'Loading points','neutral'],['Destinations',dashFmt(k.destinations,0),'Receiving points','neutral'],
-      ['Working Equipment',dashFmt(k.workingEquipment,0),'Equipment-shifts','neutral'],['People Present',dashFmt(k.presentPeople,0),'Person-shifts','neutral'],['HSD Issued',dashFmt(k.hsdLitres,1,' L'),'Selected period','neutral'],['HSD / Tonne',dashFmt(k.hsdPerTonne,2,' L/t'),'Issued / WB tonnes','neutral'],
-      ["Today's Target",targets.day?num(targets.day,0)+' t':'Not set','Targets ⚙','neutral'],['Achievement',achievement==null?'—':num(achievement,1)+'%',periodTarget?num(periodTarget,0)+' t period target':'Set target',achievement==null?'neutral':dashTone(achievement,100,80)],['Remaining Tonnes',remaining==null?'—':num(remaining,0)+' t','Against period target',remaining==null?'neutral':remaining===0?'good':'warning'],['Remaining Trips',remainingTrips==null?'—':num(remainingTrips),'At current avg payload',remainingTrips==null?'neutral':remainingTrips===0?'good':'warning'],
-      ['Ore Tonnes',dashFmt(k.oreTonnes,1,' t'),'Non-waste/non-reject','good'],['Waste Tonnes',dashFmt(k.wasteTonnes,1,' t'),'OB / waste','neutral'],['ROM',dashFmt(k.romTonnes,1,' t'),'WB classified','neutral'],['Fines',dashFmt(k.finesTonnes,1,' t'),'WB classified','neutral'],['CLO',dashFmt(k.cloTonnes,1,' t'),'WB classified','neutral'],['Reject',dashFmt(k.rejectTonnes,1,' t'),'WB classified',Number(k.rejectTonnes)>0?'warning':'neutral'],['Crusher Feed',dashFmt(k.crusherFeed,1,' t'),'Destination classified','neutral'],['Screen Feed',dashFmt(k.screenFeed,1,' t'),'Screen/MSP destination','neutral']
+      ['ROM Input',dashFmt(p.romInputMt,1,' t'),p.romPct==null?'No ROM feed':'100% process input','good'],
+      ['Screen Fines',dashFmt(p.screenFinesMt,1,' t'),p.screenFinesPct==null?'—':num(p.screenFinesPct,1)+'% of ROM','neutral'],
+      ['Screen 5-18',dashFmt(p.screen518Mt,1,' t'),p.screen518Pct==null?'—':num(p.screen518Pct,1)+'% of ROM','neutral'],
+      ['Crusher Fines',dashFmt(p.crusherFinesMt,1,' t'),p.crusherFinesPct==null?'—':num(p.crusherFinesPct,1)+'% of ROM','neutral'],
+      ['Crusher CLO (5-18)',dashFmt(p.crusherCloMt,1,' t'),p.crusherCloPct==null?'—':num(p.crusherCloPct,1)+'% of ROM','neutral'],
+      ['Screen Direct Output',dashFmt(p.screenDirectMt,1,' t'),p.screenDirectPct==null?'—':num(p.screenDirectPct,1)+'% of ROM','neutral'],
+      ['Crusher Final Output',dashFmt(p.crusherFinalMt,1,' t'),p.crusherFinalPct==null?'—':num(p.crusherFinalPct,1)+'% of ROM','neutral'],
+      ['Final Production',dashFmt(p.finalProductionMt,1,' t'),p.finalRecoveryPct==null?'Recovery —':'Recovery '+num(p.finalRecoveryPct,1)+'%','good'],
+      ['Crusher Feed',dashFmt(p.crusherFeedMt,1,' t'),p.crusherFeedPct==null?'—':num(p.crusherFeedPct,1)+'% of ROM','neutral'],
+      ['Crusher Recovery',p.crusherRecoveryPct==null?'—':num(p.crusherRecoveryPct,1)+'%','Crusher output / feed','neutral'],
+      ['Process / Timing Balance',dashFmt(p.balanceMt,1,' t'),p.balancePct==null?'—':num(p.balancePct,1)+'% of ROM','neutral'],
+      ['Old Stock Re-handled',dashFmt(p.oldStockExcludedMt,1,' t'),'EXCLUDED · '+(p.oldStockVsRomPct==null?'—':num(p.oldStockVsRomPct,1)+'% vs ROM'),'warning'],
+      ['Trips / Hr (TPH)',k.tripsPerHour==null?'—':num(k.tripsPerHour,2),'Trips per active hour','good'],
+      ['Avg Lead',k.haulAvgLeadKm==null?'—':num(k.haulAvgLeadKm,3)+' km','Combined haulage','neutral'],
+      ['Trip-km / Hr',k.tripKmPerHour==null?'—':num(k.tripKmPerHour,2),'Trips × lead / active hr','neutral'],
+      ['Ton-km / Hr',k.tonKmPerHour==null?'—':num(k.tonKmPerHour,1),'Tonnes × lead / active hr','neutral'],
+      ["Today's Final Prod. Target",targets.day?num(targets.day,0)+' t':'Not set','Targets ⚙','neutral'],
+      ['Achievement',achievement==null?'—':num(achievement,1)+'%',periodTarget?num(periodTarget,0)+' t final-production target':'Set target',achievement==null?'neutral':dashTone(achievement,100,80)],
+      ['Remaining Final Output',remaining==null?'—':num(remaining,0)+' t','Against final-production target',remaining==null?'neutral':remaining===0?'good':'warning']
     ];
     const opsCards=[
-      ['Avg Cycle',dashFmt(k.avgCycleTime,1,' min'),'Start → unload'],['Avg Loading',dashFmt(k.avgLoadingTime,1,' min'),'Start → loaded'],['Avg Unloading','—','Not captured'],['Active Crushers',dashFmt(k.activeCrushers,0),'Master + attendance'],['Active Screens',dashFmt(k.activeScreens,0),'Master + attendance'],['Running Loaders',dashFmt(k.runningLoaders,0),'Activity proxy'],['Running Excavators',dashFmt(k.runningExcavators,0),'Activity proxy'],['Running Tippers',dashFmt(k.runningTippers,0),'Activity proxy'],['Idle Equipment',dashFmt(k.idleEquipment,0),'No recorded production'],['Equipment Utilization',dashFmt(k.equipmentUtilization,1,'%'),'Activity proxy'],['Fuel / Trip',dashFmt(k.fuelPerTrip,2,' L'),'Issued HSD'],['Avg Trips / Vehicle',dashFmt(k.avgTripsVehicle,1),'Selected period'],['Avg Trips / Loader',dashFmt(k.avgTripsLoader,1),'Exact matches'],['Avg Trips / Excavator',dashFmt(k.avgTripsExcavator,1),'Exact matches'],['Avg Tonnes / Loader',dashFmt(k.avgTonnesLoader,1,' t'),'Exact matches'],['Avg Tonnes / Excavator',dashFmt(k.avgTonnesExcavator,1,' t'),'Exact matches'],['Total Routes',dashFmt(k.totalRoutes,0),'WB source → destination'],['Average Queue Time','—','Not captured']
+      ['WB Movement',dashFmt(k.wbTonnes,1,' t'),'Audit / reconciliation only'],
+      ['WB Rows',dashFmt(k.wbTrips,0),'Confirmed valid movements'],
+      ['Avg Payload',dashFmt(k.avgPayload,2,' t'),'WB movement payload'],
+      ['Match Rate',dashFmt(k.matchRate,1,'%'),'WB reconciliation'],
+      ['Lead Missing',dashFmt(k.haulLeadMissingTrips,0),'Route/lead setup required'],
+      ['HSD Issued',dashFmt(k.hsdLitres,1,' L'),'Selected period'],
+      ['HSD / Final T',finalFuelIntensity==null?'—':num(finalFuelIntensity,2)+' L/t','Issued / final production'],
+      ['Avg Cycle',dashFmt(k.avgCycleTime,1,' min'),'Start → unload'],
+      ['Avg Loading',dashFmt(k.avgLoadingTime,1,' min'),'Start → loaded'],
+      ['Working Equipment',dashFmt(k.workingEquipment,0),'Equipment-shifts'],
+      ['Running Loaders',dashFmt(k.runningLoaders,0),'Activity proxy'],
+      ['Running Excavators',dashFmt(k.runningExcavators,0),'Activity proxy'],
+      ['Running Tippers',dashFmt(k.runningTippers,0),'Activity proxy'],
+      ['Equipment Utilization',dashFmt(k.equipmentUtilization,1,'%'),'Activity proxy']
     ];
     const materialFilter=d.materialFilter?`<button class="filter-chip" onclick="dashClearMaterial()">Material: ${esc(d.materialFilter)} ×</button>`:'';const extraFilters=[d.sourceFilter&&`Source: ${esc(d.sourceFilter)}`,d.destinationFilter&&`Destination: ${esc(d.destinationFilter)}`,d.vehicleFilter&&`Vehicle: ${esc(d.vehicleFilter)}`].filter(Boolean).map(x=>`<span class="filter-chip">${x}</span>`).join('');
-    const hourly=(d.hourly||[]).map(x=>({label:x.hour,tonnes:x.tonnes,trips:x.trips}));
+    const hourly=(d.productionHourly||[]).map(x=>({label:x.hour,rom:x.rom,final:x.final}));
     const monthTarget=targets.month,monthAchievement=monthTarget?Number(d.monthly.actual||0)/monthTarget*100:null;
-    const mgmt=[['Production',achievement==null?'—':num(achievement,0)+'%','Period target'],['Fleet Utilization',dashFmt(k.equipmentUtilization,1,'%'),'Activity proxy'],['Crusher Utilization','—','Runtime not captured'],['Fuel Efficiency',dashFmt(k.hsdPerTonne,2,' L/t'),'Issued / WB tonnes']];
+    const mgmt=[['Final Production',achievement==null?'—':num(achievement,0)+'%','Against final-product target'],['Recovery',p.finalRecoveryPct==null?'—':num(p.finalRecoveryPct,1)+'%','Final output / ROM'],['TPH',k.tripsPerHour==null?'—':num(k.tripsPerHour,2),'Trips per active hour'],['Fuel / Final T',finalFuelIntensity==null?'—':num(finalFuelIntensity,2)+' L/t','Issued HSD / final production']];
     const crusherTable=table(['Crusher','Material','Trips','Tonnes','Avg Feed','Utilization'],(d.crusher||[]).map(x=>[esc(x.machine),esc(x.material),num(x.trips),num(x.tonnes,1),num(x.avgFeed,2),x.utilization==null?'—':num(x.utilization,1)+'%']));
     const screenTable=table(['Screen','Material','Trips','Tonnes','Recovery'],(d.screens||[]).map(x=>[esc(x.machine),esc(x.material),num(x.trips),num(x.tonnes,1),x.recovery==null?'—':num(x.recovery,1)+'%']));
     const loaderTable=table(['Loader','Trips','Tonnes','Avg Loading','Idle'],(d.loaders||[]).map(x=>[esc(x.machine),num(x.trips),num(x.tonnes,1),dashFmt(x.avgLoadingMin,1,' min'),'—']));
     const excTable=table(['Excavator','Trips','Tonnes','Avg Bucket','Loading'],(d.excavators||[]).map(x=>[esc(x.machine),num(x.trips),num(x.tonnes,1),'—',dashFmt(x.avgLoadingMin,1,' min')]));
     const vehicleTable=table(['Vehicle','Trips','Tonnes','Fuel','Avg Payload','Cycle','Status'],(d.vehicles||[]).map(x=>[esc(x.vehicle),num(x.trips),num(x.tonnes,1),num(x.fuel,1)+' L',num(x.avgPayload,2),dashFmt(x.cycleTime,1,' min'),`<span class="status-pill ${String(x.status).toLowerCase()}">${esc(x.status)}</span>`]));
     const routeTable=table(['Source','Destination','Trips','Tonnes','Avg Payload','Avg Time'],(d.routes||[]).slice(0,15).map(x=>[esc(x.source),esc(x.destination),num(x.trips),num(x.tonnes,1),num(x.avgPayload,2),dashFmt(x.avgTime,1,' min')]));
-    const leadTable=table(['Source','Destination','Route','Trips','Avg Lead KM','Operational MT','Ton-KM'],(d.leadRoutes||[]).slice(0,30).map(x=>[esc(x.source),esc(x.destination),esc(String(x.routeMode||'').replaceAll('_',' ')),num(x.trips),num(x.avgLeadKm,3),num(x.tonnes,2),num(x.tonKm,1)]));
+    const haulTable=table(['Source','Destination','Mode','Trips','Active Hr','Trips/Hr','Avg Lead KM','Trip-km/Hr','Ton-km/Hr','Avg Cycle','Lead'],(d.haulagePerformance||[]).slice(0,50).map(x=>[
+      esc(x.source),esc(x.destination),esc(String(x.routeMode||'').replaceAll('_',' ')),num(x.trips),num(x.activeHours),
+      x.tripsPerHour==null?'—':num(x.tripsPerHour,2),x.avgLeadKm==null?'—':num(x.avgLeadKm,3),
+      x.tripKmPerHour==null?'—':num(x.tripKmPerHour,2),x.tonKmPerHour==null?'—':num(x.tonKmPerHour,1),
+      x.avgCycleMin==null?'—':num(x.avgCycleMin,1)+' min',
+      `<span class="status-pill ${x.leadStatus==='OK'?'running':x.leadStatus==='PARTIAL'?'waiting':'breakdown'}">${esc(String(x.leadStatus||'PENDING').replaceAll('_',' '))}</span>`
+    ]));
     const fuelTable=table(['Equipment','Type','Litres','Matched T','L/T'],(d.fuelByEquipment||[]).slice(0,15).map(x=>[esc(x.machine),esc(x.type),num(x.litres,1),num(x.tonnes,1),x.litresPerTonne==null?'—':num(x.litresPerTonne,2)]));
     const shiftTable=table(['Shift','Trips','Tonnes','Fuel','Avg Payload'],(d.shiftComparison||[]).map(x=>[esc(x.shift),num(x.trips),num(x.tonnes,1),num(x.fuel,1)+' L',num(x.avgPayload,2)]));
-    const monthlyCards=[['Month Target',monthTarget?num(monthTarget,0)+' t':'Not set'],['Month Actual',num(d.monthly.actual,1)+' t'],['Achievement',monthAchievement==null?'—':num(monthAchievement,1)+'%'],['Best Day',d.monthly.bestDay?d.monthly.bestDay+' · '+num(d.monthly.bestTonnes,0)+' t':'—'],['Worst Day',d.monthly.worstDay?d.monthly.worstDay+' · '+num(d.monthly.worstTonnes,0)+' t':'—'],['Avg Daily Production',num(d.monthly.avgDaily,1)+' t']];
+    const monthlyCards=[['Month Final Prod. Target',monthTarget?num(monthTarget,0)+' t':'Not set'],['Month Final Production',num(d.monthly.actual,1)+' t'],['Achievement',monthAchievement==null?'—':num(monthAchievement,1)+'%'],['Best Day',d.monthly.bestDay?d.monthly.bestDay+' · '+num(d.monthly.bestTonnes,0)+' t':'—'],['Worst Day',d.monthly.worstDay?d.monthly.worstDay+' · '+num(d.monthly.worstTonnes,0)+' t':'—'],['Avg Daily Final Production',num(d.monthly.avgDaily,1)+' t']];
     html('dashboard_body',`<div class="dashboard-context compact"><b>${esc(d.fromDate)}${d.fromDate!==d.toDate?' → '+esc(d.toDate):''}</b><span>${d.shift==='ALL'?'All permitted shifts':'Shift '+esc(d.shift)}</span>${materialFilter}${extraFilters}<span>Updated ${esc(new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}))}</span></div>
       <div class="v2-kpi-grid">${topCards.map(x=>dashCard(...x)).join('')}</div>
       <div class="ops-kpi-strip">${opsCards.map(x=>dashMini(...x)).join('')}</div>
