@@ -687,6 +687,48 @@ def dashboard_desk(db, user, p):
     def prod_pct(value,base=rom_input):
         return round(float(Decimal(value or 0)/base*Decimal('100')),2) if base and base>0 else None
 
+    # Bench context is fallback only for legacy Source Masters that do not carry
+    # RL in the canonical Source name/ID.
+    ctx_stmt=select(TiomSourceContext).where(
+        TiomSourceContext.operating_date>=start_day,
+        TiomSourceContext.operating_date<=end_day,
+        TiomSourceContext.active.is_(True)
+    )
+    if selected_shift!='ALL':
+        ctx_stmt=ctx_stmt.where(TiomSourceContext.shift==selected_shift)
+    elif allowed_shifts:
+        ctx_stmt=ctx_stmt.where(TiomSourceContext.shift.in_(allowed_shifts))
+    source_contexts={(x.operating_date,x.shift,x.source_location_id):x.bench_rl_m for x in db.scalars(ctx_stmt)}
+
+    haulage_perf={}
+    all_haul_hours=set()
+    def add_haulage(source_id,dest_id,source_label,dest_label,route_mode,qty,stamp,
+                    lead_km=None,lead_status='NOT_CONFIGURED',cycle_min=None):
+        mode=str(route_mode or 'UNSPECIFIED').upper()
+        key=(str(source_id or source_label or 'UNMAPPED'),str(dest_id or dest_label or 'UNMAPPED'),mode)
+        row=haulage_perf.setdefault(key,{
+            'source':source_label or source_id or 'UNMAPPED',
+            'destination':dest_label or dest_id or 'UNMAPPED',
+            'sourceId':source_id or '','destinationId':dest_id or '',
+            'routeMode':mode,'trips':0,'tonnes':0.0,'hourBins':set(),
+            'leadResolvedTrips':0,'leadMissingTrips':0,'leadQty':0.0,
+            'leadTonKm':0.0,'leadTripKm':0.0,'cycleSamples':[],'leadStatuses':set()
+        })
+        row['trips']+=1; row['tonnes']+=float(qty or 0)
+        if stamp:
+            local_stamp=aware(stamp).astimezone(TZ)
+            hour_key=local_stamp.strftime('%Y-%m-%d %H')
+            row['hourBins'].add(hour_key); all_haul_hours.add(hour_key)
+        if lead_km is not None:
+            lk=float(lead_km); q=float(qty or 0)
+            row['leadResolvedTrips']+=1; row['leadQty']+=q
+            row['leadTonKm']+=q*lk; row['leadTripKm']+=lk
+        else:
+            row['leadMissingTrips']+=1
+        row['leadStatuses'].add(str(lead_status or 'NOT_CONFIGURED'))
+        if cycle_min is not None:
+            row['cycleSamples'].append(float(cycle_min))
+
     hourly = {h: {'hour': f'{h:02d}:00', 'trips': 0, 'tonnes': 0.0} for h in range(24)}
     materials, sources, destinations, routes, vehicles = {}, {}, {}, {}, {}
     material_buckets = {'ROM':0.0,'FINES':0.0,'CLO':0.0,'REJECT':0.0,'WASTE':0.0,'OTHER':0.0}
@@ -703,6 +745,11 @@ def dashboard_desk(db, user, p):
         src=src_obj.location_name if src_obj else 'UNMAPPED'; dst=dst_obj.location_name if dst_obj else 'UNMAPPED'
         add_metric(sources, src, t); add_metric(destinations, dst, t)
         route_key = f'{src_id or "UNMAPPED"} → {dst_id or "UNMAPPED"}'; rr = add_metric(routes, route_key, t); rr['source']=src; rr['destination']=dst; rr.setdefault('cycleSamples',[])
+        bench_rl=_tiom_bench_rl_from_location(db,src_id) if src_id else None
+        if bench_rl is None and src_id:
+            bench_rl=source_contexts.get((w.operating_date,w.shift,src_id))
+        lead_result=_tiom_resolve_lead(db,src_id,bench_rl,dst_id,'WITH_WB',wb_linked=True)
+        add_haulage(src_id,dst_id,src,dst,'WITH_WB',t,stamp,lead_result.get('leadKm'),lead_result.get('status'))
         vk = (w.vehicle_id or w.vehicle_raw or 'Unknown').strip(); vr = add_metric(vehicles, vk, t); vr['vehicle']=vk
         u = label.upper()
         if 'WASTE' in u or 'OVERBURDEN' in u or re.search(r'(^|[^A-Z])OB([^A-Z]|$)',u): material_buckets['WASTE'] += t
@@ -736,6 +783,10 @@ def dashboard_desk(db, user, p):
         rk=f'{canon.source_location_id if canon and canon.source_location_id else "UNMAPPED"} → {canon.destination_location_id if canon and canon.destination_location_id else "UNMAPPED"}'
         cycle=duration_minutes(t.loading_start_at,t.unload_at)
         if rk in routes and cycle is not None: routes[rk]['cycleSamples'].append(cycle)
+        if canon and cycle is not None:
+            hk=(str(canon.source_location_id or 'UNMAPPED'),str(canon.destination_location_id or 'UNMAPPED'),'WITH_WB')
+            if hk in haulage_perf:
+                haulage_perf[hk]['cycleSamples'].append(float(cycle))
 
     # Exact-match loader/excavator/material attribution.
     machine_prod, operator_prod, matrix = {}, {}, {}
