@@ -770,10 +770,14 @@ def dashboard_desk(db, user, p):
     # Month-to-date material cumulative values and monthly management summary.
     month_start = end_day.replace(day=1)
     _, month_wb_all = authoritative_wb(month_start, end_day)
-    month_material, month_days = {}, {}
+    month_material, month_days, month_production_days = {}, {}, {}
+    final_codes={'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}
     for w in month_wb_all:
         label = material_label(w); month_material[label] = month_material.get(label,0.0) + tonnes(w)
         key=str(w.operating_date); month_days[key]=month_days.get(key,0.0)+tonnes(w)
+        final_qty=sum((Decimal(qty or 0) for code,qty in tiom_wb_report_contributions(w) if code in final_codes),Decimal('0'))
+        if final_qty:
+            month_production_days[key]=month_production_days.get(key,0.0)+float(final_qty)
     for row in materials.values():
         row['monthTonnes'] = month_material.get(row['label'],0.0)
 
@@ -910,12 +914,13 @@ def dashboard_desk(db, user, p):
     seven_rows=[dict(r,tonnes=round(r['tonnes'],2),fuel=round(r['fuel'],1)) for r in seven.values()]
 
     # Daily and monthly summary.
-    best_day=max(month_days.items(),key=lambda x:x[1]) if month_days else ('',0.0)
-    worst_day=min(month_days.items(),key=lambda x:x[1]) if month_days else ('',0.0)
-    month_actual=sum(month_days.values()); elapsed_days=(end_day-month_start).days+1
+    best_day=max(month_production_days.items(),key=lambda x:x[1]) if month_production_days else ('',0.0)
+    worst_day=min(month_production_days.items(),key=lambda x:x[1]) if month_production_days else ('',0.0)
+    month_actual=sum(month_production_days.values()); elapsed_days=(end_day-month_start).days+1
     monthly={'actual':round(month_actual,2),'bestDay':best_day[0],'bestTonnes':round(best_day[1],2),
              'worstDay':worst_day[0],'worstTonnes':round(worst_day[1],2),
-             'avgDaily':round(month_actual/elapsed_days,2) if elapsed_days else 0.0,'elapsedDays':elapsed_days}
+             'avgDaily':round(month_actual/elapsed_days,2) if elapsed_days else 0.0,'elapsedDays':elapsed_days,
+             'basis':'FINAL_PRODUCTION'}
 
     load_samples=[duration_minutes(t.loading_start_at,t.loading_end_at) for t in trips]
     load_samples=[x for x in load_samples if x is not None]
@@ -1253,7 +1258,7 @@ def dashboard_desk(db, user, p):
 
     month_rows=[]; month_cumulative=0.0
     for offset in range((end_day-month_start).days+1):
-        md=month_start+timedelta(days=offset); daily=float(month_days.get(str(md),0.0))
+        md=month_start+timedelta(days=offset); daily=float(month_production_days.get(str(md),0.0))
         month_cumulative+=daily
         month_rows.append({'date':str(md),'tonnes':round(daily,2),'cumulativeTonnes':round(month_cumulative,2)})
 
