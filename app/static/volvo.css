@@ -253,3 +253,16 @@
 .volvo-empty.mini{font-size:9px;padding:18px 4px}
 @media(max-width:1250px){.volvo-mini-analytics-grid{grid-template-columns:repeat(2,1fr)}}
 @media(max-width:720px){.volvo-mini-analytics-grid{grid-template-columns:1fr}}
+
+
+/* TIOM Volvo trip segmentation R13 */
+.volvo-trip-toolbar{display:grid;grid-template-columns:minmax(280px,1.4fr) 1fr;gap:10px;align-items:end;margin-bottom:8px}
+.volvo-trip-toolbar label{font-size:9px;font-weight:900;color:#536a77;text-transform:uppercase;letter-spacing:.03em}
+.volvo-trip-toolbar select{display:block;width:100%;margin-top:4px;padding:7px 9px;border:1px solid #cfdbe2;border-radius:7px;background:#fff;color:#17384c;font-size:10px;font-weight:700}
+.volvo-trip-toolbar .trip-flow{padding:8px 10px;border:1px solid #dce6ec;border-radius:7px;background:#fff;font-size:10px;font-weight:800;color:#0b67aa;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.volvo-route-stats{grid-template-columns:1.1fr .7fr .8fr .8fr .7fr .8fr auto}
+@media(max-width:1200px){
+  .volvo-trip-toolbar{grid-template-columns:1fr}
+  .volvo-route-stats{grid-template-columns:repeat(3,1fr)}
+  .volvo-route-stats .actions{grid-column:1/-1}
+}
