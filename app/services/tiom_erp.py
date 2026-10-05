@@ -130,9 +130,10 @@ def wb_report_contributions(wb: WbMovement):
     if 'UNSCREEN' in mat and ('5 18' in mat or '5-18' in str(wb.material_name or '')):
         return [('UNSCREENED_5_18', qty)]
 
-    # 5-18 products.
-    if ('5 18' in mat or '5-18' in str(wb.material_name or '')):
-        if 'CRUSH' in src or 'OCP' in src:
+    # 5-18 / CLO products. TIOM treats Crusher CLO as the crusher 5-18 final product.
+    is_5_18 = ('5 18' in mat or '5-18' in str(wb.material_name or '') or re.search(r'(^| )CLO( |$)', mat))
+    if is_5_18:
+        if 'CRUSH' in src or 'OCP' in src or re.search(r'(^| )CLO( |$)', mat):
             out.append(('CRUSHER_5_18', qty))
         elif 'RE SCREEN' in src or 'RESCREEN' in src:
             out.append(('RE_SCREEN_5_18', qty))
