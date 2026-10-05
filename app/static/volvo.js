@@ -136,10 +136,10 @@ function renderVolvoDashboardBody(d,silent){
     '<div class="volvo-grid volvo-main-grid"><div class="volvo-panel"><div class="volvo-panel-head"><h3>Live GPS Fleet Map</h3><div class="volvo-map-head-actions"><div class="volvo-basemap-toggle"><button id="volvo_map_street" class="btn small '+(VOLVO.mapStyle==='street'?'primary':'secondary')+'" onclick="setVolvoMapStyle(\'street\')">Map</button><button id="volvo_map_satellite" class="btn small '+(VOLVO.mapStyle==='satellite'?'primary':'secondary')+'" onclick="setVolvoMapStyle(\'satellite\')">Satellite</button></div><button class="btn secondary small" onclick="volvoFitFleet()">Fit fleet</button><button class="btn secondary small" onclick="volvoFitLocation()">Fit location</button>'+(d.can_map?'<button class="btn secondary small" onclick="toggleVolvoZoneEditor()">Configure locations</button>':'')+'</div></div><div class="volvo-map-legend"><span><i class="moving"></i>Moving</span><span><i class="idle"></i>Engine on / idle</span><span><i class="stopped"></i>Stationary</span><span><em></em>Location zone</span></div>'+volvoLocationSummary(fleet,d.location_zones||[])+'<div id="volvo_map" class="volvo-map-wrap"></div><div id="volvo_zone_editor" class="volvo-zone-editor" hidden></div><div id="volvo_route_summary" class="volvo-route-summary">Select a truck marker or Track button to display its GPS trail.</div></div>'+
     '<div class="volvo-panel"><div class="volvo-panel-head"><h3>Live status</h3><span>Operational ≠ moving now</span></div><div class="volvo-panel-body">'+status+'<div class="volvo-footnote"><b>Operational</b> means the truck has shown movement, engine activity, fuel use or distance increase during the current shift. <b>Moving now</b> is only the latest speed reading. This prevents loading/unloading trucks from being shown as stopped operationally.</div><div class="volvo-fresh-line">Freshest telemetry: <b id="volvo_kpi_fresh">'+esc(volvoAge(freshest))+'</b></div></div></div></div>'+
     '<div class="volvo-chart-grid volvo-chart-grid-simple" style="margin-top:14px">'+
-      volvoChartPanel('Fuel efficiency','Higher L/h = more fuel consumed per engine hour',volvoBars(pv,'fuel_lph',' L/h'))+
-      volvoChartPanel('Truck utilization','Engine hours ÷ available period hours',volvoUtilizationBars(pv,d))+
-      volvoChartPanel('Idle vs moving fuel','Where each truck is consuming fuel',volvoFuelSplit(pv))+
-      volvoChartPanel('Daily distance trend','Fleet movement by operating date',volvoAreaLine(daily,'distance_km',' km'))+
+      volvoChartPanel('Live fleet status','Current Volvo fleet state',volvoStateDonut(c,fleet.length))+
+      volvoChartPanel('Top fuel consumers','Selected period · litres',volvoBars(pv,'fuel_l',' L'))+
+      volvoChartPanel('Engine hours by truck','Selected period · hours',volvoColumns(pv,'engine_h',' h'))+
+      volvoChartPanel('Daily fuel & distance','Fuel litres with distance trend',volvoFuelDistanceTrend(daily))+
     '</div>'+volvoFleetTable(d));
   renderVolvoMap(fleet,!!(silent&&VOLVO.map));
   if(VOLVO.route)setVolvoRouteSummary(VOLVO.route);
@@ -151,6 +151,38 @@ function volvoBars(rows,key,suffix){
   if(!rows.length)return '<div class="volvo-empty">Not enough history yet. The collector needs at least two saved readings inside the selected period/shift.</div>';
   const max=Math.max(...rows.map(x=>Number(x[key])||0),1);
   return '<div class="volvo-bars">'+rows.map(x=>'<div class="volvo-bar-row"><div class="volvo-bar-label" title="'+esc(x.label)+'">'+esc(x.label)+'</div><div class="volvo-bar-track"><div class="volvo-bar-fill" style="width:'+Math.max(1,(Number(x[key])||0)/max*100).toFixed(1)+'%"></div></div><div class="volvo-bar-value">'+esc(volvoNum(x[key],2)+suffix)+'</div></div>').join('')+'</div>';
+}
+function volvoStateDonut(counts,total){
+  const parts=[
+    {k:'RUNNING',label:'Moving',v:Number(counts.RUNNING)||0},
+    {k:'IDLE',label:'Engine on / idle',v:Number(counts.IDLE)||0},
+    {k:'STOPPED',label:'Stationary',v:Number(counts.STOPPED)||0},
+    {k:'OFFLINE',label:'Offline',v:Number(counts.OFFLINE)||0}
+  ];
+  total=Math.max(Number(total)||parts.reduce((s,x)=>s+x.v,0),1);
+  const r=54,cx=72,cy=72,C=2*Math.PI*r;
+  let offset=0;
+  const cls={RUNNING:'run',IDLE:'idle',STOPPED:'stopped',OFFLINE:'offline'};
+  const arcs=parts.map(p=>{const len=C*(p.v/total),gap=Math.max(0,C-len);const s='<circle class="volvo-donut-seg '+cls[p.k]+'" cx="'+cx+'" cy="'+cy+'" r="'+r+'" stroke-dasharray="'+len+' '+gap+'" stroke-dashoffset="'+(-offset)+'"></circle>';offset+=len;return s;}).join('');
+  const legend=parts.map(p=>'<div><span class="dot '+cls[p.k]+'"></span><b>'+esc(p.v)+'</b><em>'+esc(p.label)+'</em></div>').join('');
+  return '<div class="volvo-donut-wrap"><svg viewBox="0 0 144 144" class="volvo-donut"><circle class="volvo-donut-bg" cx="'+cx+'" cy="'+cy+'" r="'+r+'"></circle>'+arcs+'<text x="'+cx+'" y="'+(cy-2)+'" text-anchor="middle" class="total">'+esc(total)+'</text><text x="'+cx+'" y="'+(cy+16)+'" text-anchor="middle" class="caption">trucks</text></svg><div class="volvo-donut-legend">'+legend+'</div></div>';
+}
+function volvoColumns(rows,key,suffix){
+  rows=(rows||[]).filter(x=>x[key]!==null&&x[key]!==undefined).slice().sort((a,b)=>Number(b[key])-Number(a[key])).slice(0,12);
+  if(!rows.length)return '<div class="volvo-empty">Not enough history for this metric.</div>';
+  const W=680,H=230,L=34,R=14,T=20,B=58,max=Math.max(...rows.map(x=>Number(x[key])||0),1),slot=(W-L-R)/rows.length,bw=Math.max(12,slot*.58);
+  const bars=rows.map((r,i)=>{const v=Number(r[key])||0,h=(H-T-B)*(v/max),x=L+i*slot+(slot-bw)/2,y=H-B-h,label=String(r.label||'').slice(0,8);return '<rect class="volvo-col" x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+h.toFixed(1)+'"><title>'+esc(r.label+' · '+volvoNum(v,1)+suffix)+'</title></rect><text x="'+(x+bw/2).toFixed(1)+'" y="'+(H-B+14)+'" text-anchor="middle">'+esc(label)+'</text><text class="value" x="'+(x+bw/2).toFixed(1)+'" y="'+Math.max(12,y-4).toFixed(1)+'" text-anchor="middle">'+esc(volvoNum(v,0))+'</text>';}).join('');
+  return '<svg class="volvo-column-svg" viewBox="0 0 '+W+' '+H+'">'+bars+'</svg>';
+}
+function volvoFuelDistanceTrend(rows){
+  rows=(rows||[]).filter(x=>x.fuel_l!==null&&x.fuel_l!==undefined);
+  if(!rows.length)return '<div class="volvo-empty">No daily trend data for the selected period.</div>';
+  const W=680,H=230,L=42,R=20,T=26,B=40,n=Math.max(rows.length-1,1),maxFuel=Math.max(...rows.map(x=>Number(x.fuel_l)||0),1),maxKm=Math.max(...rows.map(x=>Number(x.distance_km)||0),1);
+  const fuel=rows.map((r,i)=>({x:L+(W-L-R)*(i/n),y:T+(H-T-B)*(1-(Number(r.fuel_l)||0)/maxFuel),d:r.date,v:Number(r.fuel_l)||0}));
+  const km=rows.map((r,i)=>({x:L+(W-L-R)*(i/n),y:T+(H-T-B)*(1-(Number(r.distance_km)||0)/maxKm),d:r.date,v:Number(r.distance_km)||0}));
+  const fPts=fuel.map(p=>p.x.toFixed(1)+','+p.y.toFixed(1)).join(' '),kPts=km.map(p=>p.x.toFixed(1)+','+p.y.toFixed(1)).join(' ');
+  const labels=fuel.map(p=>'<text x="'+p.x+'" y="'+(H-12)+'" text-anchor="middle">'+esc(String(p.d).slice(5))+'</text>').join('');
+  return '<div class="volvo-dual-legend"><span><i class="fuel"></i>Fuel L</span><span><i class="distance"></i>Distance km</span></div><svg class="volvo-dual-svg" viewBox="0 0 '+W+' '+H+'"><polyline class="fuel" points="'+fPts+'"/><polyline class="distance" points="'+kPts+'"/>'+labels+'</svg>';
 }
 function volvoAvailableHours(d){
   const a=new Date(String(d.from_date)+'T00:00:00Z'),b=new Date(String(d.to_date)+'T00:00:00Z');
@@ -236,7 +268,7 @@ function volvoLocationSummary(fleet,zones){
   fleet=fleet||[];zones=zones||[];
   const counts={};fleet.forEach(r=>{const k=r.location_name||'Transit / outside zones';counts[k]=(counts[k]||0)+1;});
   const chips=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]).map(k=>'<button class="volvo-location-chip" type="button" title="Filter by location" onclick="volvoSelectLocationByName(decodeURIComponent(\''+encodeURIComponent(k)+'\'))"><b>'+esc(counts[k])+'</b>'+esc(k)+'</button>').join('');
-  if(!zones.length)return '<div class="volvo-location-summary warning"><b>Locations not configured:</b> trucks currently show GPS coordinates only. Use <b>Configure locations</b> once for Pit / Crusher / Screening / WB / Stock / Dump.</div>';
+  if(!zones.length)return '<div class="volvo-location-summary warning"><b>Location names are not configured yet.</b> GPS is working, but Pit / Crusher / Screening / WB / Stock / Dump names require one-time zone setup from <b>Configure locations</b>.</div>';
   return '<div class="volvo-location-summary"><span class="title">Current truck locations</span>'+chips+'</div>';
 }
 function volvoSelectLocationByName(name){
