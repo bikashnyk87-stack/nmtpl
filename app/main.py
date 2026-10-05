@@ -173,7 +173,12 @@ def tiom_app():
 
 @app.get("/site/{site_id}")
 def site_app(site_id: str):
-    # The page resolves and authorizes the site through /api/sites/{site}/context.
+    site_id = str(site_id or "").upper().strip()
+    # TIOM is a dedicated application, not part of the generic SOCP/KOCP site shell.
+    if site_id == "TIOM":
+        return RedirectResponse("/tiom", status_code=307)
+    if site_id not in {"SOCP", "KOCP"}:
+        return RedirectResponse("/", status_code=307)
     return FileResponse(STATIC / 'site.html')
 
 
