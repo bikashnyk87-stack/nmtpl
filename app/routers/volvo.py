@@ -817,6 +817,13 @@ def vehicle_route(
     ).all()
     points = []
     seen = set()
+    latest_status = {
+        'fuel_total_l': None,
+        'engine_hours': None,
+        'engine_speed_rpm': None,
+        'driver_id': None,
+        'driver_working_state': None,
+    }
     for report in reports:
         if report.kind == 'vehiclepositions':
             pv = _position_values(report.payload)
@@ -827,9 +834,19 @@ def vehicle_route(
             altitude = pv['altitude_m']
         else:
             sv = _status_values(report.payload)
+            if sv['fuel_ml'] is not None:
+                latest_status['fuel_total_l'] = sv['fuel_ml'] / 1000.0
+            if sv['engine_hours'] is not None:
+                latest_status['engine_hours'] = sv['engine_hours']
+            if sv['engine_speed_rpm'] is not None:
+                latest_status['engine_speed_rpm'] = sv['engine_speed_rpm']
+            if sv['driver_id']:
+                latest_status['driver_id'] = sv['driver_id']
+            if sv['driver_working_state']:
+                latest_status['driver_working_state'] = sv['driver_working_state']
             gps = sv['gps']
             when = timestamp((gps or {}).get('positionDateTime')) or timestamp(sv['reported_at']) or report.created_at
-            speed = _num((gps or {}).get('speed')) if isinstance(gps, dict) else None
+            speed = _num((gps or {}).get('speed')) if isinstance(gps, dict) else sv['wheel_speed_kmh']
             heading = _num((gps or {}).get('heading')) if isinstance(gps, dict) else None
             altitude = _num((gps or {}).get('altitude')) if isinstance(gps, dict) else None
         if not isinstance(gps, dict) or not _in_operating_range(when, from_date, to_date, shift):
@@ -855,8 +872,42 @@ def vehicle_route(
             'operating_date': op_date,
             'shift': op_shift,
             'source': report.kind,
+            'fuel_total_l': latest_status['fuel_total_l'],
+            'engine_hours': latest_status['engine_hours'],
+            'engine_speed_rpm': latest_status['engine_speed_rpm'],
+            'driver_id': latest_status['driver_id'],
+            'driver_working_state': latest_status['driver_working_state'],
         })
     points.sort(key=lambda x: x['reported_at'] or datetime.min.replace(tzinfo=timezone.utc))
+
+    cumulative_km = 0.0
+    fuel_baseline_l = next((p['fuel_total_l'] for p in points if p.get('fuel_total_l') is not None), None)
+    first_time = next((p['reported_at'] for p in points if p.get('reported_at') is not None), None)
+    stop_started_at = None
+    for i, point in enumerate(points):
+        segment_km = 0.0
+        segment_seconds = 0.0
+        if i > 0:
+            previous = points[i - 1]
+            segment_km = _haversine_km(previous, point)
+            if previous.get('reported_at') and point.get('reported_at'):
+                segment_seconds = max(0.0, (point['reported_at'] - previous['reported_at']).total_seconds())
+            cumulative_km += segment_km
+        point['segment_km'] = round(segment_km, 3)
+        point['cumulative_km'] = round(cumulative_km, 3)
+        point['segment_seconds'] = round(segment_seconds, 1)
+        point['elapsed_seconds'] = round(max(0.0, (point['reported_at'] - first_time).total_seconds()), 1) if first_time and point.get('reported_at') else None
+        point['fuel_used_l'] = round(max(0.0, point['fuel_total_l'] - fuel_baseline_l), 2) if fuel_baseline_l is not None and point.get('fuel_total_l') is not None else None
+
+        stationary = point.get('speed_kmh') is not None and float(point['speed_kmh']) <= 1.0
+        if stationary and segment_km <= 0.05:
+            if stop_started_at is None:
+                stop_started_at = point.get('reported_at')
+            point['stop_seconds'] = round(max(0.0, (point['reported_at'] - stop_started_at).total_seconds()), 1) if stop_started_at and point.get('reported_at') else 0.0
+        else:
+            stop_started_at = None
+            point['stop_seconds'] = 0.0
+
     raw_count = len(points)
     if len(points) > limit:
         step = (len(points) - 1) / (limit - 1)
