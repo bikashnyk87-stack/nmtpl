@@ -100,7 +100,9 @@ function dashTrend(rows,key,label,unit=''){
 function dashDonut(status){
   const entries=Object.entries(status||{}).filter(([,v])=>Number(v)>0),total=entries.reduce((a,[,v])=>a+Number(v),0);
   if(!total)return '<div class="ops-empty">Fleet status not updated today.</div>';
-  const colors=['#08766d','#3c90a8','#d39a28','#b94b4b','#6d7f86','#7f66a8'];
+  const colors=siteId==='SOCP'
+    ?['#155b78','#2d86a5','#4d9bb6','#d2a13a','#b94b4b','#6b7f88']
+    :['#8a552d','#d18432','#b78a59','#6d7861','#b94b4b','#756457'];
   let acc=0,stops=[];
   entries.forEach(([k,v],i)=>{const a=acc,b=acc+(Number(v)/total)*100;stops.push(`${colors[i%colors.length]} ${a}% ${b}%`);acc=b});
   return `<div class="ops-donut-wrap"><div class="ops-donut" style="background:conic-gradient(${stops.join(',')})"><div><b>${total}</b><span>Assets</span></div></div><div class="ops-legend">${entries.map(([k,v],i)=>`<div><i style="background:${colors[i%colors.length]}"></i><span>${esc(k.replaceAll('_',' '))}</span><b>${v}</b></div>`).join('')}</div></div>`;
