@@ -147,3 +147,23 @@
 .volvo-line-svg,.volvo-scatter-svg{height:205px}
 .volvo-dot-row{font-size:10px}
 @media(max-width:1450px){.volvo-map-wrap{height:360px}}
+
+
+/* TIOM Volvo chart refresh R9 */
+.volvo-donut-wrap{display:grid;grid-template-columns:155px 1fr;gap:14px;align-items:center;min-height:205px}
+.volvo-donut{width:145px;height:145px;transform:rotate(-90deg)}
+.volvo-donut-bg,.volvo-donut-seg{fill:none;stroke-width:18}
+.volvo-donut-bg{stroke:#edf2f5}
+.volvo-donut-seg{stroke-linecap:butt}
+.volvo-donut-seg.run{stroke:#1d9b63}.volvo-donut-seg.idle{stroke:#d98c10}.volvo-donut-seg.stopped{stroke:#657883}.volvo-donut-seg.offline{stroke:#c84343}
+.volvo-donut text{transform:rotate(90deg);transform-origin:72px 72px;font-family:inherit}
+.volvo-donut .total{font-size:26px;font-weight:900;fill:#17384c}.volvo-donut .caption{font-size:10px;fill:#6b7d87}
+.volvo-donut-legend{display:grid;gap:9px}
+.volvo-donut-legend>div{display:grid;grid-template-columns:10px 32px 1fr;gap:7px;align-items:center}
+.volvo-donut-legend .dot{width:9px;height:9px;border-radius:50%}.volvo-donut-legend .dot.run{background:#1d9b63}.volvo-donut-legend .dot.idle{background:#d98c10}.volvo-donut-legend .dot.stopped{background:#657883}.volvo-donut-legend .dot.offline{background:#c84343}
+.volvo-donut-legend b{font-size:13px;color:#18394d}.volvo-donut-legend em{font-style:normal;font-size:10px;color:#657985}
+.volvo-column-svg{width:100%;height:215px;display:block}.volvo-column-svg .volvo-col{fill:#0b67aa}.volvo-column-svg text{font-family:inherit;fill:#637782;font-size:9px}.volvo-column-svg .value{fill:#1e455a;font-weight:900}
+.volvo-dual-legend{display:flex;gap:14px;justify-content:flex-end;margin-bottom:4px;font-size:9px;color:#637782}
+.volvo-dual-legend span{display:flex;align-items:center;gap:4px}.volvo-dual-legend i{width:14px;height:3px;border-radius:2px}.volvo-dual-legend i.fuel{background:#d98c10}.volvo-dual-legend i.distance{background:#0b67aa}
+.volvo-dual-svg{width:100%;height:205px;display:block}.volvo-dual-svg polyline{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.volvo-dual-svg .fuel{stroke:#d98c10}.volvo-dual-svg .distance{stroke:#0b67aa}.volvo-dual-svg text{font-family:inherit;fill:#687a84;font-size:9px}
+@media(max-width:800px){.volvo-donut-wrap{grid-template-columns:1fr;justify-items:center}.volvo-donut-legend{width:100%}}
