@@ -271,8 +271,8 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
     if site_id not in {"SOCP", "KOCP"}:
         raise HTTPException(409, "Simple site trip entry is configured for SOCP/KOCP")
     kind = str(payload.get("kind") or "TRIP").strip().upper()
-    needed_module = "OB" if site_id == "KOCP" and kind == "OB" else "TRIP"
-    require_permission(db, user, site_id, needed_module, "CREATE")
+    # KOCP uses one Production Entry. Material determines Coal vs OB logic.
+    require_permission(db, user, site_id, "TRIP", "CREATE")
     try:
         operating_day = date.fromisoformat(str(payload.get("operatingDate") or ''))
     except Exception:
@@ -325,9 +325,11 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
         if loc:
             x = db.get(SiteLocation, loc)
             if not x or x.site_id != site_id or not x.active: raise HTTPException(422, "Choose a valid site location")
+    material_row = None
     if material:
-        x = db.get(SiteMaterial, material)
-        if not x or x.site_id != site_id or not x.active: raise HTTPException(422, "Choose a valid material")
+        material_row = db.get(SiteMaterial, material)
+        if not material_row or material_row.site_id != site_id or not material_row.active:
+            raise HTTPException(422, "Choose a valid material")
 
     mt = payload.get("quantityMt")
     cum = payload.get("quantityCum")
@@ -336,7 +338,25 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
     factor = None
     basis = "DIRECT_ENTRY"
     if site_id == "KOCP":
-        factor_type = "OB_CUM_PER_TRIP" if kind == "OB" else "COAL_AVG_MT_PER_TRIP"
+        if not material_row:
+            raise HTTPException(422, "Choose material")
+        material_text = " ".join([
+            str(material_row.code or ""),
+            str(material_row.name or ""),
+            str(material_row.material_group or ""),
+            str(material_row.default_unit or ""),
+            str(material_row.billable_unit or ""),
+        ]).upper()
+        is_ob = (
+            "OVERBURDEN" in material_text
+            or " OB " in f" {material_text} "
+            or str(material_row.code or "").strip().upper() == "OB"
+            or str(material_row.material_group or "").strip().upper() == "OB"
+            or str(material_row.default_unit or "").strip().upper() in {"CUM","M3","M³"}
+            or str(material_row.billable_unit or "").strip().upper() in {"CUM","M3","M³"}
+        )
+        kind = "OB" if is_ob else "TRIP"
+        factor_type = "OB_CUM_PER_TRIP" if is_ob else "COAL_AVG_MT_PER_TRIP"
         stmt = select(SiteWeightFactor).where(
             SiteWeightFactor.site_id == site_id, SiteWeightFactor.factor_type == factor_type,
             SiteWeightFactor.status == "APPROVED", SiteWeightFactor.effective_from <= operating_day,
@@ -346,12 +366,16 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
         ).order_by(SiteWeightFactor.operating_date.desc(), SiteWeightFactor.effective_from.desc(), SiteWeightFactor.version.desc())
         factor = db.scalars(stmt).first()
         if not factor:
-            friendly = "OB CuM/trip" if kind == "OB" else "Coal average MT/trip"
+            friendly = "OB CuM/trip" if is_ob else "Coal average MT/trip"
             raise HTTPException(409, f"No approved MCL {friendly} rule is configured for {operating_day} Shift {shift}. Ask the supervisor to set it first.")
-        if kind == "OB":
-            cum = factor.factor_value; basis = "MCL_DUMPER_FACTOR"
+        if is_ob:
+            mt = None
+            cum = factor.factor_value
+            basis = "MCL_DUMPER_FACTOR"
         else:
-            mt = factor.factor_value; basis = "MCL_SHIFT_AVERAGE"
+            cum = None
+            mt = factor.factor_value
+            basis = "MCL_SHIFT_AVERAGE"
 
     if site_id == "SOCP" and mt is None:
         raise HTTPException(422, "Quantity MT is required")
@@ -594,7 +618,7 @@ def save_deployment(site_id:str,p:SiteDeploymentIn,request:Request,db:Session=De
 
 @router.get("/{site_id}/meters")
 def list_meters(site_id:str,request:Request,operating_date:date|None=None,shift:str|None=None,meter_type:str|None=None,db:Session=Depends(get_db)):
-    user=get_user(db,request); site_id=require_site(db,user,site_id); _require_any(db,user,site_id,"HMR_KMR" if site_id=="KOCP" else "FLEET")
+    user=get_user(db,request); site_id=require_site(db,user,site_id); _require_any(db,user,site_id,"TRIP" if site_id=="KOCP" else "FLEET")
     stmt=select(SiteAssetMeter).where(SiteAssetMeter.site_id==site_id)
     if operating_date: stmt=stmt.where(SiteAssetMeter.operating_date==operating_date)
     if shift: stmt=stmt.where(SiteAssetMeter.shift==shift)
@@ -605,7 +629,7 @@ def list_meters(site_id:str,request:Request,operating_date:date|None=None,shift:
 
 @router.post("/{site_id}/meters")
 def save_meter(site_id:str,p:SiteAssetMeterIn,request:Request,db:Session=Depends(get_db)):
-    csrf(request); user=get_user(db,request); site_id=require_site(db,user,site_id); module="HMR_KMR" if site_id=="KOCP" else "FLEET"; require_permission(db,user,site_id,module,"CREATE")
+    csrf(request); user=get_user(db,request); site_id=require_site(db,user,site_id); module="TRIP" if site_id=="KOCP" else "FLEET"; require_permission(db,user,site_id,module,"CREATE")
     _site_shift_or_422(db,site_id,p.shift)
     _site_equipment_or_422(db,site_id,p.assetId,p.operatingDate,"machine / vehicle")
     meter_type=str(p.meterType or "").strip().upper()
