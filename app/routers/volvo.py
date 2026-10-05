@@ -13,14 +13,69 @@ from sqlalchemy.exc import IntegrityError
 
 from app.db import get_db
 from app.auth import get_user, require, csrf
-from app.models import Equipment
-from app.volvo_models import VolvoVehicle, VolvoMapping, VolvoAudit, VolvoSync, VolvoReport
+from app.models import Equipment, Location
+from app.volvo_models import VolvoVehicle, VolvoMapping, VolvoAudit, VolvoSync, VolvoReport, VolvoLocationZone
 from app.services.volvo_store import latest_reports
 from app.services.volvo_client import timestamp
 
 router = APIRouter(prefix='/api/volvo', tags=['Volvo'])
 IST = timezone(timedelta(hours=5, minutes=30))
 VALID_SHIFTS = {'ALL', 'A', 'B', 'C'}
+
+
+def _ensure_location_zone_table(db):
+    VolvoLocationZone.__table__.create(bind=db.get_bind(), checkfirst=True)
+
+
+def _location_zones(db):
+    _ensure_location_zone_table(db)
+    zones=[]
+    for zone, loc in db.execute(
+        select(VolvoLocationZone, Location)
+        .join(Location, Location.location_id == VolvoLocationZone.location_id)
+        .where(Location.active.is_(True))
+        .order_by(Location.location_name, Location.location_id)
+    ).all():
+        zones.append({
+            'location_id': loc.location_id,
+            'location_name': loc.location_name,
+            'location_type': loc.location_type,
+            'latitude': float(zone.latitude),
+            'longitude': float(zone.longitude),
+            'radius_m': float(zone.radius_m),
+        })
+    return zones
+
+
+def _assign_location(row, zones):
+    gps=row.get('gps') or {}
+    try:
+        lat=float(gps.get('latitude'))
+        lon=float(gps.get('longitude'))
+    except (TypeError, ValueError):
+        row['location_id']=None
+        row['location_name']='GPS unavailable'
+        row['location_distance_m']=None
+        return row
+    best=None
+    for zone in zones:
+        km=_haversine_km(
+            {'latitude':lat,'longitude':lon},
+            {'latitude':zone['latitude'],'longitude':zone['longitude']},
+        )
+        metres=km*1000.0
+        if metres <= zone['radius_m'] and (best is None or metres < best[0]):
+            best=(metres,zone)
+    if best:
+        metres,zone=best
+        row['location_id']=zone['location_id']
+        row['location_name']=zone['location_name']
+        row['location_distance_m']=round(metres,1)
+    else:
+        row['location_id']=None
+        row['location_name']='Transit / outside zones'
+        row['location_distance_m']=None
+    return row
 
 
 def _num(value):
@@ -558,8 +613,9 @@ def fleet(request: Request, db=Depends(get_db)):
     sync = db.scalar(select(VolvoSync).order_by(VolvoSync.completed_at.desc()).limit(1))
     now = datetime.now(timezone.utc)
     operational_vins, current_shift, shift_started_at = _shift_operational_vins(db, now)
+    zones = _location_zones(db)
     rows = [
-        _fleet_row(vehicle, mappings, reports, recent_statuses, now, operational_vins)
+        _assign_location(_fleet_row(vehicle, mappings, reports, recent_statuses, now, operational_vins), zones)
         for vehicle in db.scalars(select(VolvoVehicle).order_by(VolvoVehicle.vin))
     ]
     equipment = [
@@ -576,6 +632,7 @@ def fleet(request: Request, db=Depends(get_db)):
         'current_shift': current_shift,
         'shift_started_at': shift_started_at,
         'operational_count': sum(1 for row in rows if row['operational']),
+        'location_zones': zones,
     }
 
 
@@ -589,6 +646,7 @@ def dashboard(
     state: str = Query(default='ALL', max_length=20),
     shift: str = Query(default='ALL', max_length=10),
     mapping: str = Query(default='ALL', max_length=20),
+    location: str = Query(default='ALL', max_length=80),
     db=Depends(get_db),
 ):
     user = get_user(db, request)
@@ -606,6 +664,7 @@ def dashboard(
 
     now = datetime.now(timezone.utc)
     operational_vins, current_shift, shift_started_at = _shift_operational_vins(db, now)
+    zones = _location_zones(db)
     latest = _latest_payloads(db)
     recent_statuses = _recent_status_pairs(db)
     mappings = {r.vin: r.machine_id for r in db.scalars(select(VolvoMapping))}
@@ -631,8 +690,12 @@ def dashboard(
 
     vehicle_rows = []
     for v in all_vehicles:
-        row = _fleet_row(v, mappings, latest, recent_statuses, now, operational_vins)
+        row = _assign_location(_fleet_row(v, mappings, latest, recent_statuses, now, operational_vins), zones)
         if selected_vehicle != 'ALL' and selected_vehicle not in {row['vin'], row['machine_id'], row['name']}:
+            continue
+        if location == 'UNASSIGNED' and row['location_id'] is not None:
+            continue
+        if location not in {'ALL','UNASSIGNED'} and row['location_id'] != location:
             continue
         if state != 'ALL' and row['state'] != state:
             continue
@@ -702,7 +765,10 @@ def dashboard(
             'vehicles': filter_vehicles,
             'states': ['RUNNING', 'IDLE', 'STOPPED', 'OFFLINE'],
             'shifts': ['ALL', 'A', 'B', 'C'],
+            'locations': [{'id':z['location_id'],'name':z['location_name'],'type':z['location_type']} for z in zones],
         },
+        'location_zones': zones,
+        'selected_location': location,
     }
 
 
@@ -842,6 +908,65 @@ def map_tile(z: int, x: int, y: int, request: Request, db=Depends(get_db)):
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError):
         raise HTTPException(503, 'Map tiles temporarily unavailable.') from None
     return Response(raw, media_type='image/png', headers={'Cache-Control': 'private, max-age=86400'})
+
+
+class LocationZoneInput(BaseModel):
+    location_id: str = Field(min_length=1, max_length=80)
+    latitude: float = Field(ge=-90, le=90)
+    longitude: float = Field(ge=-180, le=180)
+    radius_m: float = Field(default=300, ge=50, le=5000)
+
+
+@router.get('/location-zones')
+def location_zones(request: Request, db=Depends(get_db)):
+    user=get_user(db,request)
+    require(user,module='DASHBOARD')
+    _ensure_location_zone_table(db)
+    configured=_location_zones(db)
+    available=[
+        {'id':x.location_id,'name':x.location_name,'type':x.location_type}
+        for x in db.scalars(select(Location).where(Location.active.is_(True)).order_by(Location.location_name,Location.location_id))
+    ]
+    return {'zones':configured,'available':available,'can_edit':bool(user.admin)}
+
+
+@router.post('/location-zones')
+def save_location_zone(body: LocationZoneInput, request: Request, db=Depends(get_db)):
+    user=get_user(db,request)
+    require(user,admin=True)
+    csrf(request)
+    _ensure_location_zone_table(db)
+    loc=db.get(Location,body.location_id)
+    if not loc or not loc.active:
+        raise HTTPException(422,'Choose an active TIOM location.')
+    zone=db.get(VolvoLocationZone,body.location_id)
+    now=datetime.now(timezone.utc)
+    if zone:
+        zone.latitude=body.latitude
+        zone.longitude=body.longitude
+        zone.radius_m=body.radius_m
+        zone.changed_by=user.login_id
+        zone.changed_at=now
+    else:
+        db.add(VolvoLocationZone(
+            location_id=body.location_id,latitude=body.latitude,longitude=body.longitude,
+            radius_m=body.radius_m,changed_by=user.login_id,changed_at=now,
+        ))
+    db.commit()
+    return {'ok':True}
+
+
+@router.delete('/location-zones/{location_id}')
+def delete_location_zone(location_id: str, request: Request, db=Depends(get_db)):
+    user=get_user(db,request)
+    require(user,admin=True)
+    csrf(request)
+    _ensure_location_zone_table(db)
+    zone=db.get(VolvoLocationZone,location_id)
+    if zone:
+        db.delete(zone)
+        db.commit()
+    return {'ok':True}
 
 
 class MappingInput(BaseModel):
