@@ -44,7 +44,7 @@ function bindLookups(root=document){root.querySelectorAll('.lookup:not([data-bou
   input.addEventListener('focus',search);input.addEventListener('input',()=>{hidden.value='';input.dataset.selected='';clearTimeout(timer);timer=setTimeout(search,160)});input.addEventListener('keydown',e=>{if(!w.classList.contains('open'))return;if(e.key==='ArrowDown'){e.preventDefault();active=Math.min(active+1,items.length-1)}else if(e.key==='ArrowUp'){e.preventDefault();active=Math.max(active-1,0)}else if(e.key==='Enter'&&active>=0){e.preventDefault();choose(items[active])}else if(e.key==='Escape'){w.classList.remove('open')}else return;menu.querySelectorAll('.lookup-item').forEach((el,i)=>el.classList.toggle('active',i===active))})
 })}
 document.addEventListener('click',e=>{document.querySelectorAll('.lookup.open').forEach(w=>{if(!w.contains(e.target))w.classList.remove('open')})});
-function simplePageHead(title,desc){return pageHead(title,desc)+`<div class="context-strip"><span class="context-pill live">${siteId}</span><span class="context-pill">Date ${state.ctx.operatingDate}</span><span class="context-pill">Shift ${simpleShift()}</span></div>`}
+function simplePageHead(title,desc){return `<div class="software-page-head"><div><h1>${esc(title)}</h1><p>${esc(desc)}</p></div><div class="software-page-meta"><b>${siteId}</b><span>${esc(state.ctx.operatingDate)}</span><span>Shift ${esc(simpleShift())}</span></div></div>`}
 function setSimpleNav(){
   const cfg=SIMPLE[siteId]||{daily:[],review:[],control:[]};
   const available=new Set(state.ctx?.modules||[]);
