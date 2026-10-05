@@ -32,3 +32,40 @@
 @media(max-width:1450px){.volvo-filters{grid-template-columns:repeat(4,1fr)}.volvo-kpis{grid-template-columns:repeat(5,1fr)}}
 @media(max-width:1100px){.volvo-filters{grid-template-columns:repeat(3,1fr)}.volvo-filter-actions{grid-column:span 3}.volvo-kpis{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:700px){.volvo-filters{grid-template-columns:1fr 1fr}.volvo-filter-actions{grid-column:span 2;grid-template-columns:1fr}.volvo-kpis{grid-template-columns:1fr 1fr}.volvo-map-popup{min-width:220px;max-width:260px}}
+
+
+/* TIOM Volvo simple/accurate dashboard R4 */
+.volvo-shell{color:#162b38}
+.volvo-hero{min-height:auto;padding:16px 20px;background:#0b4f8a;box-shadow:none;border-radius:10px}
+.volvo-hero:after,.volvo-truck{display:none}
+.volvo-hero h2{font-size:24px;margin:2px 0 3px}.volvo-hero p{font-size:12px;color:#e6f2fa}
+.volvo-sync-pill{margin-top:8px;padding:5px 9px}
+.volvo-filters{border-top:0;box-shadow:none;border:1px solid #d8e2e8;border-radius:10px;background:#fff}
+.volvo-kpis{grid-template-columns:repeat(6,minmax(120px,1fr));gap:10px;margin:8px 0 14px}
+.volvo-kpi{border-radius:9px;padding:12px 13px;box-shadow:none}
+.volvo-kpi b{font-size:26px}.volvo-kpi small{font-size:10px}
+.volvo-section-title{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:14px 2px 6px}
+.volvo-section-title h3{margin:0;font-size:14px;color:#17384c}.volvo-section-title span{font-size:11px;color:#697e8a}
+.volvo-period-kpis{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:10px;margin-bottom:14px}
+.volvo-period-kpi{background:#fff;border:1px solid #d9e4eb;border-radius:9px;padding:11px 13px}
+.volvo-period-kpi span{display:block;font-size:10px;font-weight:800;text-transform:uppercase;letter-spacing:.05em;color:#6d7f89}
+.volvo-period-kpi b{display:block;margin-top:3px;font-size:20px;color:#17384c}
+.volvo-panel{box-shadow:none;border-radius:10px}
+.volvo-panel-head{background:#fff;padding:11px 13px}
+.volvo-main-grid{grid-template-columns:minmax(0,1.55fr) minmax(300px,.65fr)}
+.volvo-simple-status{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.volvo-simple-status>div{border:1px solid #dce6ec;border-radius:8px;padding:12px;background:#f8fbfc}
+.volvo-simple-status b{display:block;font-size:25px;color:#15384e}.volvo-simple-status span{font-size:10px;color:#6d808b;font-weight:800;text-transform:uppercase}
+.volvo-fresh-line{margin-top:12px;padding-top:10px;border-top:1px solid #e2eaee;font-size:11px;color:#667985}
+.volvo-chart-grid-simple{grid-template-columns:repeat(2,minmax(0,1fr))}
+.volvo-table-simple{min-width:1180px}
+.volvo-table-simple th{background:#174965}.volvo-table-simple td,.volvo-table-simple th{padding:9px 8px}
+.volvo-operational{display:inline-flex;padding:4px 7px;border-radius:999px;font-size:9px;font-weight:900;white-space:nowrap}
+.volvo-operational.yes{background:#e4f6ed;color:#137048;border:1px solid #bfe7d2}
+.volvo-operational.no{background:#eef2f4;color:#667780;border:1px solid #d9e1e5}
+.volvo-badge.STOPPED{background:#677984}
+.volvo-map-wrap{height:400px}
+.volvo-footnote{font-size:11px;color:#657985;line-height:1.5;margin-top:12px}
+@media(max-width:1450px){.volvo-kpis{grid-template-columns:repeat(3,1fr)}.volvo-period-kpis{grid-template-columns:repeat(4,1fr)}}
+@media(max-width:1100px){.volvo-main-grid,.volvo-chart-grid-simple{grid-template-columns:1fr}.volvo-period-kpis{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){.volvo-kpis,.volvo-period-kpis{grid-template-columns:1fr 1fr}.volvo-simple-status{grid-template-columns:1fr 1fr}}
