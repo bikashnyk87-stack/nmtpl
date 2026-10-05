@@ -131,7 +131,7 @@ async def response_headers(request, call_next):
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Referrer-Policy'] = 'same-origin'
     response.headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=()'
-    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://commons.wikimedia.org https://upload.wikimedia.org; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://commons.wikimedia.org https://upload.wikimedia.org https://*.googleusercontent.com https://*.gstatic.com; connect-src 'self'; frame-src https://www.google.com https://www.google.co.in; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
     if request.url.scheme == 'https' or request.headers.get('x-forwarded-proto', '').split(',')[0].strip() == 'https':
         response.headers['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains'
     if (request.url.path.startswith('/api/') and not request.url.path.startswith('/api/volvo/map-tile/')) or request.url.path in {'/','/tiom','/central-control'} or request.url.path.startswith('/site/'):
