@@ -18,7 +18,7 @@ from app.maintenance_models import create_maintenance_tables
 from app.services.site_context import seed_default_sites_and_shifts
 from app.services.cloud_sync import init_sync_source
 from app.services.tiom_reference_seed import seed_tiom_temp_reference_data
-from app.services.tiom_location_erp import ensure_location_master_schema, ensure_location_master_roles
+from app.services.tiom_location_erp import ensure_location_master_schema, ensure_location_master_roles, ensure_tiom_route_master_schema
 
 @asynccontextmanager
 async def lifespan(app):
@@ -29,6 +29,7 @@ async def lifespan(app):
     # Older PC/temp databases predate Location.role. Add it before any ORM query
     # so Source/Destination/Both lives in the central Location Master.
     ensure_location_master_schema(engine)
+    ensure_tiom_route_master_schema(engine)
     create_multisite_tables(engine)
     create_maintenance_tables(engine)
     init_sync_source(engine)
