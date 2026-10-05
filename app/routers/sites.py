@@ -127,6 +127,45 @@ def _clean(value):
     return str(value).strip() if value not in (None, "") else None
 
 
+def _norm_asset_ref(value):
+    return "".join(ch for ch in str(value or "").upper() if ch.isalnum())
+
+
+def _site_equipment_assignment(db: Session, site_id: str, machine_id: str, operating_day: date):
+    eq=db.get(Equipment,machine_id) if machine_id else None
+    assignment=db.scalar(select(EquipmentSiteAssignment).where(
+        EquipmentSiteAssignment.site_id==site_id,
+        EquipmentSiteAssignment.machine_id==machine_id,
+        EquipmentSiteAssignment.active.is_(True),
+        EquipmentSiteAssignment.effective_from<=operating_day,
+        or_(EquipmentSiteAssignment.effective_to.is_(None),EquipmentSiteAssignment.effective_to>=operating_day),
+    ).order_by(EquipmentSiteAssignment.effective_from.desc(),EquipmentSiteAssignment.id.desc()).limit(1)) if machine_id else None
+    return eq if eq and eq.active and assignment else None
+
+
+def _site_vehicle_from_display(db: Session, site_id: str, raw: str, operating_day: date):
+    key=_norm_asset_ref(raw)
+    if not key: return None
+    rows=db.execute(select(Equipment,EquipmentSiteAssignment).join(
+        EquipmentSiteAssignment,EquipmentSiteAssignment.machine_id==Equipment.machine_id
+    ).where(
+        EquipmentSiteAssignment.site_id==site_id,
+        EquipmentSiteAssignment.active.is_(True),
+        EquipmentSiteAssignment.effective_from<=operating_day,
+        or_(EquipmentSiteAssignment.effective_to.is_(None),EquipmentSiteAssignment.effective_to>=operating_day),
+        Equipment.active.is_(True),
+    )).all()
+    for eq,_a in rows:
+        if key in {_norm_asset_ref(eq.machine_id),_norm_asset_ref(eq.vehicle_no),_norm_asset_ref(eq.door_no)}:
+            return eq
+    return None
+
+
+def _site_shift_active(db: Session, site_id: str, shift: str):
+    row=db.get(SiteShift,{"site_id":site_id,"shift":str(shift or "").strip().upper()})
+    return bool(row and row.active)
+
+
 def _audit(db: Session, user, site_id: str | None, action: str, entity: str, entity_id: str | None, before=None, after=None, reason=None):
     db.add(SiteAuditLog(
         site_id=site_id,
@@ -920,9 +959,15 @@ def save_manual_wb(site_id: str, p: SiteWbManualIn, request: Request, db: Sessio
     user = get_user(db, request)
     site_id = require_site(db, user, site_id)
     require_permission(db, user, site_id, "WB", "CREATE")
+    ctx = resolve_site_context(db, site_id, p.weighAt)
+    if p.grossKg <= p.tareKg:
+        raise HTTPException(422, "Gross weight must be greater than Tare weight.")
+    if p.netKg != (p.grossKg - p.tareKg):
+        raise HTTPException(422, "Net weight must equal Gross minus Tare.")
+    if not _site_vehicle_from_display(db,site_id,p.vehicleRegNo,ctx.operating_date):
+        raise HTTPException(422, f"Choose a valid active vehicle assigned to {site_id}.")
     if db.scalar(select(SiteWbMovement.movement_key).where(SiteWbMovement.site_id == site_id, SiteWbMovement.wb_id == p.wbId)):
         raise HTTPException(409, "This WB ID is already recorded for the site.")
-    ctx = resolve_site_context(db, site_id, p.weighAt)
     movement_key = f"{site_id}:WB:{p.wbId}"
     row = SiteWbMovement(
         movement_key=movement_key,
@@ -1111,6 +1156,16 @@ def create_hsd_transaction(site_id: str, p: SiteHsdTransactionIn, request: Reque
     user = get_user(db, request)
     site_id = require_site(db, user, site_id)
     require_permission(db, user, site_id, "HSD", "CREATE")
+    if not _site_shift_active(db,site_id,p.shift):
+        raise HTTPException(422, f"Choose a valid active shift for {site_id}.")
+    tx_type=str(p.transactionType or "").strip().upper()
+    if p.litres is None or p.litres <= 0:
+        raise HTTPException(422, "Litres must be greater than zero.")
+    if tx_type=="ISSUE":
+        if not p.assetId or not _site_equipment_assignment(db,site_id,p.assetId,p.operatingDate):
+            raise HTTPException(422, f"Choose a valid active equipment assigned to {site_id}.")
+    if tx_type=="RECEIPT" and not (p.supplier or "").strip():
+        raise HTTPException(422, "Supplier is required for HSD receipt.")
     if p.sourceRecordUid:
         existing = db.scalar(select(SiteHsdTransaction.transaction_id).where(SiteHsdTransaction.site_id == site_id, SiteHsdTransaction.source_type == p.sourceType, SiteHsdTransaction.source_record_uid == p.sourceRecordUid))
         if existing:
