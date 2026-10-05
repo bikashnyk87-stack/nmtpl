@@ -450,8 +450,10 @@ async function trackVolvo(vin){VOLVO.selectedVin=vin;VOLVO.popupVin=null;VOLVO.s
 function volvoClock(value){return value?new Date(value).toLocaleTimeString('en-IN',{timeZone:'Asia/Kolkata',hour:'2-digit',minute:'2-digit',hour12:true}):'—';}
 function volvoTripOptionLabel(t,index,total){
   const state=t.is_current?'Current':(index===total-1?'Latest':'Trip');
-  const flow=(t.source_name||t.destination_name)?' · '+(t.source_name||'?')+' → '+(t.destination_name||'?'):'';
-  return state+' '+t.trip_id+' · '+volvoClock(t.start_at)+'–'+volvoClock(t.end_at)+' · '+volvoNum(t.distance_km,2)+' km'+flow;
+  const day=t.operating_date?String(t.operating_date):'';
+  const shift=t.shift?' · Shift '+t.shift:'';
+  const flow=(t.source_name||t.destination_name)?' · '+(t.source_name||'?')+' → '+(t.destination_name||'?'):' · provisional';
+  return state+' '+t.trip_id+' · '+day+shift+' · '+volvoClock(t.start_at)+'–'+volvoClock(t.end_at)+' · '+volvoNum(t.distance_km,2)+' km'+flow;
 }
 function setVolvoRouteSummary(route){
   const s=document.getElementById('volvo_route_summary');if(!s||!route)return;
@@ -464,7 +466,7 @@ function setVolvoRouteSummary(route){
   const stop=trip?trip.stop_seconds:null;
   const fuel=trip?trip.fuel_l:null;
   const avg=trip?trip.avg_speed_kmh:null;
-  const flow=trip&&((trip.source_name||trip.destination_name))?(trip.source_name||'?')+' → '+(trip.destination_name||'?'):'Location zones not yet mapped';
+  const flow=trip&&((trip.source_name||trip.destination_name))?(trip.source_name||'?')+' → '+(trip.destination_name||'?'):(trip?'Provisional '+(trip.operating_date||'')+' · Shift '+(trip.shift||'—')+' · '+(trip.boundary_reason||'movement'):'Full session');
   s.innerHTML=
     '<div class="volvo-trip-toolbar"><label>Route view<select id="volvo_trip_select" onchange="selectVolvoTrip(this.value,true)">'+options+'</select></label><div class="trip-flow">'+esc(flow)+'</div></div>'+
     '<div class="volvo-route-stats">'+
