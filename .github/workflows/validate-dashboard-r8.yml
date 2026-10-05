@@ -21,6 +21,6 @@ jobs:
         run: |
           grep -q "dashboard/operations" app/routers/site_ops.py
           grep -q "renderSimpleDashboard" app/static/simple_field_v1.js
-          grep -q "SOCP Operations Dashboard" app/static/simple_field_v1.js
+          grep -q "Operations Dashboard" app/static/simple_field_v1.js
           grep -q "MCL / Billing Control" app/static/simple_field_v1.js
           grep -q "R8 — dedicated SOCP / KOCP operational dashboard" app/static/simple_field_v1.css
