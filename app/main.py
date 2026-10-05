@@ -18,7 +18,7 @@ from app.maintenance_models import create_maintenance_tables
 from app.services.site_context import seed_default_sites_and_shifts
 from app.services.cloud_sync import init_sync_source
 from app.services.tiom_reference_seed import seed_tiom_temp_reference_data
-from app.services.tiom_location_erp import ensure_location_master_schema, ensure_location_master_roles, ensure_tiom_route_master_schema
+from app.services.tiom_location_erp import ensure_location_master_schema, ensure_location_master_roles, ensure_tiom_route_master_schema, ensure_tiom_routes_from_history
 
 @asynccontextmanager
 async def lifespan(app):
@@ -39,6 +39,7 @@ async def lifespan(app):
     with SessionLocal() as db:
         ensure_wb_header_mapping(db)
         ensure_location_master_roles(db)
+        ensure_tiom_routes_from_history(db)
         seed_default_sites_and_shifts(db)
         if os.getenv("TIOM_TEMP_REFERENCE_SEED", "").strip().lower() in {"1","true","yes","on"}:
             seed_counts=seed_tiom_temp_reference_data(db)
