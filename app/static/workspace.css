@@ -33,3 +33,54 @@ nav{position:fixed;top:64px;bottom:0;left:0;width:174px;display:flex;flex-direct
 .dashboard-heading .head-actions{display:flex;gap:6px;flex-wrap:wrap;justify-content:flex-end}
 @media(max-width:900px){.dashboard-toolbar{flex-wrap:wrap}.dashboard-toolbar label{min-width:140px;flex:1}.dashboard-heading{align-items:flex-start}.dashboard-heading .head-actions{justify-content:flex-start}}
 @media print{#nav,.topbar,.dashboard-toolbar,.dashboard-heading .head-actions{display:none!important}.page{padding:0!important}.v2-panel{break-inside:avoid;box-shadow:none!important}.dashboard-grid{display:block!important}.dashboard-grid>section{margin-bottom:10px!important}}
+
+
+/* TIOM production truth + haulage productivity */
+.production-truth{border-top:3px solid #0b776f}
+.prod-flow{
+  display:grid;
+  grid-template-columns:minmax(150px,.8fr) 26px minmax(260px,1.5fr) 26px minmax(260px,1.5fr) 26px minmax(170px,.9fr);
+  gap:8px;align-items:stretch;margin-top:8px
+}
+.prod-node,.prod-stage{
+  border:1px solid #b8c8cd;border-radius:8px;background:#f8fafb;padding:10px;min-width:0
+}
+.prod-node.input{background:#e5f1ef;border-color:#8fbbb4}
+.prod-node.final{background:#e8f3e8;border-color:#94bea0}
+.prod-node span,.prod-stage-title{
+  display:block;font-size:9px;font-weight:900;letter-spacing:.05em;color:#60757c
+}
+.prod-node b{display:block;margin-top:4px;color:#153640;font-size:14px}
+.prod-node strong{display:block;margin-top:4px;color:#0b655f;font-size:20px}
+.prod-node em{display:block;margin-top:2px;color:#506a72;font-size:10px;font-style:normal;font-weight:800}
+.prod-stage-title{margin-bottom:6px;color:#294b57}
+.prod-output{
+  display:grid;grid-template-columns:minmax(90px,1fr) auto;grid-template-areas:"name qty" "pct pct";
+  gap:2px 8px;border:1px solid #ced9dd;background:#fff;border-radius:6px;padding:7px;margin-top:5px
+}
+.prod-output b{grid-area:name;color:#24434e;font-size:10px}
+.prod-output strong{grid-area:qty;color:#123740;font-size:12px}
+.prod-output em{grid-area:pct;color:#61767e;font-size:9px;font-style:normal}
+.prod-intermediate{margin-top:6px;padding:6px 7px;border-radius:5px;background:#f1e8d7;border:1px solid #d2bc91}
+.prod-intermediate b{display:block;color:#634c24;font-size:9px}.prod-intermediate span{display:block;margin-top:2px;color:#78684a;font-size:8px}
+.prod-arrow{display:grid;place-items:center;color:#6a858d;font-size:22px;font-weight:900}
+.prod-exclusion{
+  display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;
+  margin-top:8px;padding:8px 10px;border:1px solid #d4b4a6;border-left:4px solid #a65b3f;border-radius:6px;background:#fbf1ed
+}
+.prod-exclusion b{display:block;color:#6d3626;font-size:10px}.prod-exclusion span{display:block;color:#7f665d;font-size:9px;margin-top:2px}
+.prod-exclusion strong{color:#733c2c;font-size:14px}.prod-exclusion em{font-style:normal;color:#806a62;font-size:9px}
+.prod-balance{margin-top:6px;padding:7px 9px;border:1px dashed #aebfc5;border-radius:6px;background:#f5f8f9}
+.prod-balance b{color:#34515a;font-size:9px;margin-right:8px}.prod-balance span{color:#62777e;font-size:9px}
+.haulage-control{overflow:auto}
+.haulage-control .compact-table,.haulage-control table{min-width:1120px}
+@media(max-width:1200px){
+  .prod-flow{grid-template-columns:1fr 20px 1.5fr;grid-auto-rows:auto}
+  .prod-flow>.prod-arrow:nth-of-type(4),.prod-flow>.prod-arrow:nth-of-type(6){display:none}
+  .prod-stage.crusher,.prod-node.final{grid-column:auto}
+}
+@media(max-width:760px){
+  .prod-flow{display:block}.prod-arrow{transform:rotate(90deg);height:24px}
+  .prod-stage,.prod-node{margin-bottom:4px}
+  .prod-exclusion{grid-template-columns:1fr auto}.prod-exclusion em{grid-column:1/-1}
+}
