@@ -96,12 +96,35 @@ function dashLine(rows,series){
   return `<div class="svg-chart"><div class="chart-legend">${legend}</div><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none"><line x1="${L}" y1="${T+ph}" x2="${W-R}" y2="${T+ph}" class="axis"/>${pieces}${labels}</svg></div>`;
 }
 
+function dashProductionFlow(p){
+  p=p||{};
+  const pct=v=>v==null?'—':num(v,1)+'%';
+  return `<div class="prod-flow">
+    <div class="prod-node input"><span>PROCESS INPUT</span><b>ROM</b><strong>${num(p.romInputMt||0,1)} t</strong><em>${p.romPct==null?'—':'100%'}</em></div>
+    <div class="prod-arrow">→</div>
+    <div class="prod-stage"><div class="prod-stage-title">SCREEN / MSP</div>
+      <div class="prod-output"><b>Screen Fines</b><strong>${num(p.screenFinesMt||0,1)} t</strong><em>${pct(p.screenFinesPct)} of ROM</em></div>
+      <div class="prod-output"><b>Screen 5-18</b><strong>${num(p.screen518Mt||0,1)} t</strong><em>${pct(p.screen518Pct)} of ROM</em></div>
+      <div class="prod-intermediate"><b>Lumps / Spillage</b><span>Intermediate → Crusher</span></div>
+    </div>
+    <div class="prod-arrow">→</div>
+    <div class="prod-stage crusher"><div class="prod-stage-title">CRUSHER</div>
+      <div class="prod-output"><b>Crusher Fines</b><strong>${num(p.crusherFinesMt||0,1)} t</strong><em>${pct(p.crusherFinesPct)} of ROM</em></div>
+      <div class="prod-output"><b>Crusher CLO (5-18)</b><strong>${num(p.crusherCloMt||0,1)} t</strong><em>${pct(p.crusherCloPct)} of ROM</em></div>
+      <div class="prod-intermediate"><b>Crusher Feed</b><span>${num(p.crusherFeedMt||0,1)} t · ${pct(p.crusherFeedPct)} of ROM</span></div>
+    </div>
+    <div class="prod-arrow">→</div>
+    <div class="prod-node final"><span>STACK / FINAL OUTPUT</span><b>Final Production</b><strong>${num(p.finalProductionMt||0,1)} t</strong><em>Recovery ${pct(p.finalRecoveryPct)}</em></div>
+  </div>
+  <div class="prod-exclusion"><div><b>Old Stock Re-handled — Excluded from Production</b><span>PA SRF / Project Area client fines</span></div><strong>${num(p.oldStockExcludedMt||0,1)} t</strong><em>${pct(p.oldStockVsRomPct)} vs ROM · ${num(p.oldStockTrips||0)} trips</em></div>
+  <div class="prod-balance"><b>Process / Timing Balance</b><span>ROM input − final output = ${num(p.balanceMt||0,1)} t (${pct(p.balancePct)}). This is not labelled as loss because feed/output can cross reporting periods or use prior stock.</span></div>`;
+}
 function dashTargetChart(d,target){
-  if(!target||d.fromDate!==d.toDate)return'<div class="emptyviz">Set a daily target; hourly target comparison is shown for a single day.</div>';
-  const rows=(d.hourly||[]).map(x=>({...x}));if(!rows.length)return'<div class="emptyviz">No hourly WB production yet.</div>';
+  if(!target||d.fromDate!==d.toDate)return'<div class="emptyviz">Set a daily final-production target; hourly target comparison is shown for a single day.</div>';
+  const rows=(d.productionHourly||[]).map(x=>({...x}));if(!rows.length)return'<div class="emptyviz">No hourly final-production data yet.</div>';
   let cum=0;const shiftFactor=d.shift!=='ALL'?1/3:1;const periodTarget=target*shiftFactor, step=periodTarget/Math.max(rows.length,1);
-  const data=rows.map((x,i)=>{cum+=Number(x.tonnes||0);return{label:x.hour,actual:cum,target:step*(i+1)}});
-  return dashLine(data,[{key:'actual',label:'Actual cumulative',unit:' t',d:0},{key:'target',label:'Paced target',unit:' t',d:0}]);
+  const data=rows.map((x,i)=>{cum+=Number(x.final||0);return{label:x.hour,actual:cum,target:step*(i+1)}});
+  return dashLine(data,[{key:'actual',label:'Final production cumulative',unit:' t',d:0},{key:'target',label:'Paced target',unit:' t',d:0}]);
 }
 function dashMaterialTable(rows){
   rows=rows||[];if(!rows.length)return'<div class="emptyviz">No material production</div>';const max=Math.max(...rows.map(x=>Number(x.tonnes||0)),1);
@@ -137,7 +160,7 @@ function dashDownloadText(name,text,type){const b=new Blob([text],{type:type||'t
 function dashboardCsv(){const d=S.dashboard||{},k=d.kpis||{},rows=[['SECTION','LABEL','VALUE'],...Object.entries(k).map(([a,b])=>['KPI',a,b]),...(d.materials||[]).map(x=>['MATERIAL',x.label,x.tonnes]),...(d.routes||[]).map(x=>['ROUTE',x.source+' → '+x.destination,x.tonnes])];dashDownloadText(`TIOM_Dashboard_${d.fromDate||''}_${d.toDate||''}.csv`,rows.map(r=>r.map(dashCsvCell).join(',')).join('\n'),'text/csv')}
 function dashboardJson(){const d=S.dashboard||{};dashDownloadText(`TIOM_Dashboard_${d.fromDate||''}_${d.toDate||''}.json`,JSON.stringify(d,null,2),'application/json')}
 function dashboardPrint(){window.print()}
-async function dashboardShare(){const d=S.dashboard||{},k=d.kpis||{},text=`TIOM Dashboard ${d.fromDate||''} to ${d.toDate||''}\nWB ${num(k.wbTonnes||0,1)} t · ${num(k.wbTrips||0)} trips · Avg Lead ${num(k.avgLeadKm||0,3)} km · Lead Work ${num(k.leadTonKm||0,1)} t-km · HSD ${num(k.hsdLitres||0,1)} L · Utilization ${num(k.equipmentUtilization||0,1)}%`;if(navigator.share){await navigator.share({title:'TIOM Production Dashboard',text});}else{await navigator.clipboard?.writeText(text);toast('Dashboard summary copied.')}}
+async function dashboardShare(){const d=S.dashboard||{},k=d.kpis||{},p=d.production||{},text=`TIOM Dashboard ${d.fromDate||''} to ${d.toDate||''}\nROM ${num(p.romInputMt||0,1)} t (100%) · Final Production ${num(p.finalProductionMt||0,1)} t · Recovery ${p.finalRecoveryPct==null?'—':num(p.finalRecoveryPct,1)+'%'} · TPH ${k.tripsPerHour==null?'—':num(k.tripsPerHour,2)} trips/hr · Avg Lead ${k.haulAvgLeadKm==null?'—':num(k.haulAvgLeadKm,3)+' km'} · HSD ${num(k.hsdLitres||0,1)} L`;if(navigator.share){await navigator.share({title:'TIOM Production Dashboard',text});}else{await navigator.clipboard?.writeText(text);toast('Dashboard summary copied.')}}
 renderDashboard = function(){
   S.dashMode='TODAY';S.dashMaterialFilter='';
   html('app',`<div class="page-heading dashboard-heading"><div><div class="eyebrow">MINE OPERATIONS CONTROL ROOM</div><h1>Production Dashboard</h1></div><div class="head-actions"><button class="btn secondary small" onclick="dashSetTargets()">Targets ⚙</button><button class="btn secondary small" onclick="dashboardCsv()">CSV</button><button class="btn secondary small" onclick="dashboardJson()">JSON</button><button class="btn secondary small" onclick="dashboardPrint()">Print / PDF</button><button class="btn secondary small" onclick="dashboardShare()">Share</button><button class="btn secondary small" onclick="loadDashboard()">Refresh</button></div></div>
