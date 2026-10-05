@@ -897,7 +897,7 @@ def _osm_tile(z: int, x: int, y: int) -> bytes:
 @lru_cache(maxsize=256)
 def _satellite_tile(z: int, x: int, y: int) -> bytes:
     req = urllib.request.Request(
-        f'https://wi.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        f'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
         headers={'User-Agent': 'NMTPL-TIOM-Internal-Volvo-Dashboard/1.0'},
     )
     with urllib.request.urlopen(req, timeout=10) as response:
