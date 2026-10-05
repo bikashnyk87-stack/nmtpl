@@ -10,7 +10,7 @@ import json
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.auth import WebSession, WebUser, csrf, get_user, hash_password
@@ -630,6 +630,13 @@ def _single_master_save(db: Session, user, site_id: str, key: str, item: dict):
         machine_id = str(item.get("machineId") or "").strip()
         typ = str(item.get("type") or "").strip()
         group = str(item.get("group") or ("VEHICLE" if key == "VEHICLE" else "EQUIPMENT")).strip()
+        ownership_input = _clean(item.get("ownership"))
+        legacy_ownership = group.upper() in {"OWN", "HIRED", "RENTED", "CONTRACTOR", "PRIVATE", "PVT", "OTHER PARTY"}
+        transport_type = any(token in typ.upper() for token in ("TRIPPER", "TIPPER", "DUMPER", "TRUCK", "VEHICLE", "TANKER"))
+        if legacy_ownership and not ownership_input:
+            ownership_input = group.upper()
+            if transport_type:
+                group = "VEHICLE"
         if not machine_id or not typ or not group:
             raise HTTPException(422, "Machine ID, type and group are required.")
         row = db.get(Equipment, machine_id)
@@ -643,7 +650,7 @@ def _single_master_save(db: Session, user, site_id: str, key: str, item: dict):
         row.type = typ
         row.group = group
         row.make_model = _clean(item.get("makeModel"))
-        row.ownership = _clean(item.get("ownership"))
+        row.ownership = ownership_input
         row.bucket_cum = float(_num(item.get("bucketCum"), "Bucket CuM")) if item.get("bucketCum") not in (None, "") else None
         row.rated_payload_t = float(_num(item.get("ratedPayloadT"), "Rated Payload T")) if item.get("ratedPayloadT") not in (None, "") else None
         row.active = _bool(item.get("active"), row.active)
@@ -768,7 +775,20 @@ def list_master_records(site_id: str, master_type: str, request: Request, active
     if key in {"VEHICLE", "EQUIPMENT"}:
         stmt = select(Equipment, EquipmentSiteAssignment).join(EquipmentSiteAssignment, EquipmentSiteAssignment.machine_id == Equipment.machine_id).where(EquipmentSiteAssignment.site_id == site_id)
         if key == "VEHICLE":
-            stmt = stmt.where(Equipment.group == "VEHICLE")
+            # Vehicle eligibility is semantic, not one fragile Group value.
+            # Existing site masters may contain Group=OWN/OTHER from older UI,
+            # while Type still correctly says Tripper/Dumper/Truck.
+            typ = func.upper(func.coalesce(Equipment.type, ""))
+            grp = func.upper(func.coalesce(Equipment.group, ""))
+            stmt = stmt.where(or_(
+                grp.in_(["VEHICLE", "TRANSPORT", "TRIPPER", "DUMPER", "TIPPER"]),
+                typ.like("%TRIPPER%"),
+                typ.like("%TIPPER%"),
+                typ.like("%DUMPER%"),
+                typ.like("%TRUCK%"),
+                typ.like("%VEHICLE%"),
+                typ.like("%TANKER%"),
+            ))
         if active_only:
             stmt = stmt.where(EquipmentSiteAssignment.active.is_(True), Equipment.active.is_(True))
         rows = db.execute(stmt.order_by(Equipment.machine_id).limit(limit)).all()
