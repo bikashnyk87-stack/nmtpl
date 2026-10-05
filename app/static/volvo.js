@@ -135,17 +135,32 @@ function renderVolvoDashboardBody(d,silent){
     '<div class="volvo-period-kpis">'+periodKpis+'</div>'+
     '<div class="volvo-grid volvo-main-grid"><div id="volvo_map_panel" class="volvo-panel volvo-map-panel"><div class="volvo-panel-head"><h3>Live GPS Fleet Map</h3><div class="volvo-map-head-actions"><div class="volvo-basemap-toggle"><button id="volvo_map_street" class="btn small '+(VOLVO.mapStyle==='street'?'primary':'secondary')+'" onclick="setVolvoMapStyle(\'street\')">Map</button><button id="volvo_map_satellite" class="btn small '+(VOLVO.mapStyle==='satellite'?'primary':'secondary')+'" onclick="setVolvoMapStyle(\'satellite\')">Satellite</button></div><button class="btn secondary small" onclick="volvoFitFleet()">Fit fleet</button><button class="btn secondary small" onclick="volvoFitLocation()">Fit location</button><button id="volvo_fleet_marker_btn" class="btn secondary small" onclick="toggleVolvoFleetMarkers()">Hide trucks</button><button id="volvo_fullscreen_btn" class="btn secondary small" onclick="toggleVolvoMapFullscreen()">Full screen</button>'+(d.can_map?'<button class="btn secondary small" onclick="toggleVolvoZoneEditor()">Configure locations</button>':'')+'</div></div><div class="volvo-map-legend"><span><i class="moving"></i>Moving</span><span><i class="idle"></i>Engine on / idle</span><span><i class="stopped"></i>Stationary</span><span><em></em>Location zone</span></div>'+volvoLocationSummary(fleet,d.location_zones||[])+'<div id="volvo_map" class="volvo-map-wrap"></div><div id="volvo_zone_editor" class="volvo-zone-editor" hidden></div><div id="volvo_route_summary" class="volvo-route-summary">Select a truck marker or Track button to display its GPS trail.</div></div>'+
     '<div class="volvo-panel"><div class="volvo-panel-head"><h3>Live status</h3><span>Operational ≠ moving now</span></div><div class="volvo-panel-body">'+status+'<div class="volvo-footnote"><b>Operational</b> means the truck has shown movement, engine activity, fuel use or distance increase during the current shift. <b>Moving now</b> is only the latest speed reading. This prevents loading/unloading trucks from being shown as stopped operationally.</div><div class="volvo-fresh-line">Freshest telemetry: <b id="volvo_kpi_fresh">'+esc(volvoAge(freshest))+'</b></div></div></div></div>'+
-    '<div class="volvo-section-title volvo-analytics-title"><h3>Fleet performance analytics</h3><span>Selected period · '+esc(d.from_date)+' → '+esc(d.to_date)+'</span></div>'+
-    '<div class="volvo-analytics-grid">'+
-      '<div class="volvo-analytics-wide">'+volvoChartPanel('Top fuel consumers','Highest total fuel used — top 10 trucks',volvoBars((pv||[]).slice().sort((a,b)=>Number(b.fuel_l||0)-Number(a.fuel_l||0)).slice(0,10),'fuel_l',' L'))+'</div>'+
-      volvoChartPanel('Engine hours by truck','Highest engine-hours — top 10 trucks',volvoBars((pv||[]).slice().sort((a,b)=>Number(b.engine_h||0)-Number(a.engine_h||0)).slice(0,10),'engine_h',' h'))+
-      volvoChartPanel('Distance by truck','Highest travelled distance — top 10 trucks',volvoBars((pv||[]).slice().sort((a,b)=>Number(b.distance_km||0)-Number(a.distance_km||0)).slice(0,10),'distance_km',' km'))+
-      '<div class="volvo-analytics-wide">'+volvoChartPanel('Daily operating trend','Fuel consumption and distance by date',volvoFuelDistanceTrend(daily))+'</div>'+
+    '<div class="volvo-section-title volvo-analytics-title"><h3>Fleet analytics</h3><span>Compact view · '+esc(d.from_date)+' → '+esc(d.to_date)+'</span></div>'+
+    '<div class="volvo-mini-analytics-grid">'+
+      volvoMiniChartPanel('Fuel','Top consumers',volvoMiniBars((pv||[]).slice().sort((a,b)=>Number(b.fuel_l||0)-Number(a.fuel_l||0)).slice(0,5),'fuel_l','L'))+
+      volvoMiniChartPanel('Engine','Top hours',volvoMiniBars((pv||[]).slice().sort((a,b)=>Number(b.engine_h||0)-Number(a.engine_h||0)).slice(0,5),'engine_h','h'))+
+      volvoMiniChartPanel('Distance','Top km',volvoMiniBars((pv||[]).slice().sort((a,b)=>Number(b.distance_km||0)-Number(a.distance_km||0)).slice(0,5),'distance_km','km'))+
+      volvoMiniChartPanel('Daily trend','Fuel / distance',volvoMiniTrend(daily))+
     '</div>'+volvoFleetTable(d));
   renderVolvoMap(fleet,!!(silent&&VOLVO.map));
   if(VOLVO.route)setVolvoRouteSummary(VOLVO.route);
 }
 
+function volvoMiniChartPanel(title,sub,body){return '<div class="volvo-mini-chart"><div class="head"><div><b>'+esc(title)+'</b><span>'+esc(sub)+'</span></div></div><div class="body">'+body+'</div></div>';}
+function volvoMiniBars(rows,key,suffix){
+  rows=(rows||[]).filter(x=>x[key]!==null&&x[key]!==undefined);
+  if(!rows.length)return '<div class="volvo-empty mini">No data</div>';
+  const max=Math.max(...rows.map(x=>Number(x[key])||0),1);
+  return '<div class="volvo-mini-bars">'+rows.map(x=>'<div class="row"><span title="'+esc(x.label)+'">'+esc(String(x.label||'').slice(0,10))+'</span><i><em style="width:'+Math.max(3,(Number(x[key])||0)/max*100).toFixed(1)+'%"></em></i><b>'+esc(volvoNum(x[key],0))+' '+esc(suffix)+'</b></div>').join('')+'</div>';
+}
+function volvoMiniTrend(rows){
+  rows=(rows||[]).filter(x=>x.fuel_l!==null&&x.fuel_l!==undefined);
+  if(rows.length<2)return '<div class="volvo-empty mini">No trend</div>';
+  const W=260,H=105,L=8,R=8,T=8,B=18,n=Math.max(rows.length-1,1),maxFuel=Math.max(...rows.map(x=>Number(x.fuel_l)||0),1),maxKm=Math.max(...rows.map(x=>Number(x.distance_km)||0),1);
+  const fuel=rows.map((r,i)=>[L+(W-L-R)*(i/n),T+(H-T-B)*(1-(Number(r.fuel_l)||0)/maxFuel)]).map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  const km=rows.map((r,i)=>[L+(W-L-R)*(i/n),T+(H-T-B)*(1-(Number(r.distance_km)||0)/maxKm)]).map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  return '<svg class="volvo-mini-trend" viewBox="0 0 '+W+' '+H+'"><polyline class="fuel" points="'+fuel+'"/><polyline class="distance" points="'+km+'"/></svg><div class="volvo-mini-legend"><span>Fuel</span><span>Distance</span></div>';
+}
 function volvoChartPanel(title,sub,body){return '<div class="volvo-panel"><div class="volvo-panel-head"><h3>'+esc(title)+'</h3><span>'+esc(sub)+'</span></div><div class="volvo-panel-body">'+body+'</div></div>';}
 function volvoBars(rows,key,suffix){
   rows=(rows||[]).filter(x=>x[key]!==null&&x[key]!==undefined).slice().sort((a,b)=>Number(b[key])-Number(a[key])).slice(0,12);
@@ -283,7 +298,7 @@ function volvoWorldToLatLon(x,y,z){const size=256*Math.pow(2,z),lon=x/size*360-1
 function volvoFit(points,w,h){if(points.length===1)return{lat:Number(points[0].gps.latitude),lon:Number(points[0].gps.longitude),z:17};for(let z=18;z>=3;z--){const pp=points.map(p=>volvoWorld(p.gps.latitude,p.gps.longitude,z)),xs=pp.map(p=>p.x),ys=pp.map(p=>p.y);if(Math.max(...xs)-Math.min(...xs)<w-120&&Math.max(...ys)-Math.min(...ys)<h-120){const cx=(Math.max(...xs)+Math.min(...xs))/2,cy=(Math.max(...ys)+Math.min(...ys))/2,ll=volvoWorldToLatLon(cx,cy,z);return{lat:ll.lat,lon:ll.lon,z:z};}}return{lat:Number(points[0].gps.latitude),lon:Number(points[0].gps.longitude),z:3};}
 function renderVolvoMap(fleet,preserve){const box=document.getElementById('volvo_map');if(!box)return;const points=(fleet||[]).filter(r=>volvoGpsOk(r.gps));if(!points.length){box.innerHTML='<div class="volvo-map-error"><div><b>No GPS coordinates available</b><br><span>Vehicle telemetry will appear here when Volvo returns valid positions.</span></div></div>';return;}const cluster=volvoMainCluster(points);requestAnimationFrame(()=>{if(!preserve||!VOLVO.map){const fit=volvoFit(cluster.points,box.clientWidth||800,box.clientHeight||430);VOLVO.map={points:points,fitPoints:cluster.points,outliers:cluster.outliers,lat:fit.lat,lon:fit.lon,z:fit.z};}else{VOLVO.map.points=points;VOLVO.map.fitPoints=cluster.points;VOLVO.map.outliers=cluster.outliers;}drawVolvoMap();});}
 function drawVolvoMap(){const box=document.getElementById('volvo_map'),m=VOLVO.map;if(!box||!m)return;const w=box.clientWidth||800,h=box.clientHeight||430,c=volvoWorld(m.lat,m.lon,m.z),left=c.x-w/2,top=c.y-h/2,n=Math.pow(2,m.z);let tiles='';for(let tx=Math.floor(left/256);tx<=Math.floor((left+w)/256);tx++){for(let ty=Math.floor(top/256);ty<=Math.floor((top+h)/256);ty++){if(ty<0||ty>=n)continue;const wrapped=((tx%n)+n)%n;const tileVersion=(VOLVO.mapStyle==='satellite'?'sat-r10':'street-r1');tiles+='<img class="volvo-map-tile" alt="" draggable="false" src="/api/volvo/map-tile/'+m.z+'/'+wrapped+'/'+ty+'.png?layer='+encodeURIComponent(VOLVO.mapStyle||'street')+'&v='+tileVersion+'" style="left:'+(tx*256-left)+'px;top:'+(ty*256-top)+'px">';}}
-  let routeSvg='';if(VOLVO.route&&VOLVO.route.points&&VOLVO.route.points.length){const rp=VOLVO.route.points.map(p=>{const wpt=volvoWorld(p.latitude,p.longitude,m.z);return{x:wpt.x-left,y:wpt.y-top};});const poly=rp.map(p=>p.x.toFixed(1)+','+p.y.toFixed(1)).join(' ');const first=rp[0],last=rp[rp.length-1];routeSvg='<svg class="volvo-route-layer" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none"><polyline class="route-halo" points="'+poly+'"/><polyline class="route-main" points="'+poly+'"/><circle class="route-start" cx="'+first.x+'" cy="'+first.y+'" r="7"/><text class="route-label start" x="'+(first.x+10)+'" y="'+(first.y-10)+'">START</text><circle class="route-end" cx="'+last.x+'" cy="'+last.y+'" r="7"/><text class="route-label end" x="'+(last.x+10)+'" y="'+(last.y-10)+'">END</text></svg>';}
+  let routeSvg='';if(VOLVO.route&&VOLVO.route.points&&VOLVO.route.points.length){const rp=VOLVO.route.points.map(p=>{const wpt=volvoWorld(p.latitude,p.longitude,m.z);return{x:wpt.x-left,y:wpt.y-top};});const poly=rp.map(p=>p.x.toFixed(1)+','+p.y.toFixed(1)).join(' ');const first=rp[0],last=rp[rp.length-1];routeSvg='<svg class="volvo-route-layer" viewBox="0 0 '+w+' '+h+'" preserveAspectRatio="none"><polyline class="route-halo" points="'+poly+'"/><polyline class="route-main" points="'+poly+'"/><polyline class="route-hit" points="'+poly+'"/><circle class="route-start" cx="'+first.x+'" cy="'+first.y+'" r="7"/><text class="route-label start" x="'+(first.x+10)+'" y="'+(first.y-10)+'">START</text><circle class="route-end" cx="'+last.x+'" cy="'+last.y+'" r="7"/><text class="route-label end" x="'+(last.x+10)+'" y="'+(last.y-10)+'">END</text></svg>';}
   const zones=((VOLVO.data&&VOLVO.data.location_zones)||[]).map(z=>{const p=volvoWorld(z.latitude,z.longitude,m.z),x=p.x-left,y=p.y-top,mpp=156543.03392*Math.cos(Number(z.latitude)*Math.PI/180)/Math.pow(2,m.z),radius=Math.max(8,Number(z.radius_m||300)/Math.max(mpp,.01));return '<div class="volvo-zone" style="left:'+x+'px;top:'+y+'px;width:'+(radius*2)+'px;height:'+(radius*2)+'px"><span>'+esc(z.location_name)+'</span></div>';}).join('');
   const showLabels=VOLVO.labels||m.z>=16;
   const markerRows=(VOLVO.route&&!VOLVO.showFleetMarkers)?m.points.filter(r=>r.vin===VOLVO.selectedVin):m.points;
@@ -291,8 +306,56 @@ function drawVolvoMap(){const box=document.getElementById('volvo_map'),m=VOLVO.m
   const attribution=VOLVO.mapStyle==='satellite'?'Satellite imagery © Esri and imagery providers':'© OpenStreetMap contributors';
   const outlierCount=(m.outliers||[]).length;box.innerHTML='<div class="volvo-map-tiles '+(VOLVO.mapStyle==='satellite'?'satellite':'street')+'">'+tiles+'</div><div class="volvo-zone-layer">'+zones+'</div>'+routeSvg+'<div class="volvo-map-markers">'+markers+'</div><div class="volvo-map-controls"><button onclick="volvoMapZoom(1)" title="Zoom in">+</button><button onclick="volvoMapZoom(-1)" title="Zoom out">−</button><button onclick="volvoFitFleet()" title="Fit fleet">⌂</button><button onclick="toggleVolvoLabels()" title="Toggle truck labels">L</button><button onclick="clearVolvoRoute()" title="Clear route">×</button></div><div class="volvo-map-note">'+esc(m.points.length)+' GPS trucks · '+esc(((VOLVO.data&&VOLVO.data.location_zones)||[]).length)+' zones'+(outlierCount?' · <b>'+esc(outlierCount)+' GPS outlier'+(outlierCount>1?'s':'')+' ignored in fit</b>':'')+' · '+esc(attribution)+'</div>';
   bindVolvoMapPan(box);
+  bindVolvoRouteHover(box);
   if(VOLVO.popupVin){const idx=m.points.findIndex(r=>r.vin===VOLVO.popupVin),buttons=box.querySelectorAll('.volvo-map-marker');if(idx>=0&&buttons[idx])showVolvoMapPopup(idx,buttons[idx],true);}
 }
+function volvoDuration(seconds){
+  const s=Math.max(0,Number(seconds)||0),h=Math.floor(s/3600),m=Math.floor((s%3600)/60),sec=Math.round(s%60);
+  if(h)return h+'h '+m+'m';
+  if(m)return m+'m '+sec+'s';
+  return sec+'s';
+}
+function bindVolvoRouteHover(box){
+  const hit=box&&box.querySelector('.route-hit');
+  if(!hit||!VOLVO.route||!VOLVO.route.points||!VOLVO.route.points.length)return;
+  hit.onpointermove=function(e){
+    const rect=box.getBoundingClientRect(),mx=e.clientX-rect.left,my=e.clientY-rect.top,m=VOLVO.map;
+    const w=box.clientWidth||800,h=box.clientHeight||430,c=volvoWorld(m.lat,m.lon,m.z),left=c.x-w/2,top=c.y-h/2;
+    let best=null,bestD=Infinity;
+    const pts=VOLVO.route.points||[],step=Math.max(1,Math.floor(pts.length/700));
+    for(let i=0;i<pts.length;i+=step){
+      const wp=volvoWorld(pts[i].latitude,pts[i].longitude,m.z),x=wp.x-left,y=wp.y-top,d=(x-mx)*(x-mx)+(y-my)*(y-my);
+      if(d<bestD){bestD=d;best={p:pts[i],x:x,y:y};}
+    }
+    if(!best||bestD>900){hideVolvoRouteHover(box);return;}
+    showVolvoRouteHover(box,best.p,mx,my);
+  };
+  hit.onpointerleave=function(){hideVolvoRouteHover(box);};
+}
+function showVolvoRouteHover(box,p,x,y){
+  let tip=box.querySelector('.volvo-route-hover');
+  if(!tip){tip=document.createElement('div');tip.className='volvo-route-hover';box.appendChild(tip);}
+  const speed=p.speed_kmh==null?'—':volvoNum(p.speed_kmh,1)+' km/h';
+  const stop=Number(p.stop_seconds)||0;
+  const rpm=p.engine_speed_rpm==null?'—':volvoNum(p.engine_speed_rpm,0)+' rpm';
+  const fuel=p.fuel_used_l==null?'—':volvoNum(p.fuel_used_l,2)+' L';
+  tip.innerHTML='<div class="title">'+esc(volvoDate(p.reported_at))+'</div>'+
+    '<div class="grid">'+
+      '<span>Speed<b>'+esc(speed)+'</b></span>'+
+      '<span>Segment<b>'+esc(volvoNum(p.segment_km,3))+' km</b></span>'+
+      '<span>Distance<b>'+esc(volvoNum(p.cumulative_km,2))+' km</b></span>'+
+      '<span>Elapsed<b>'+esc(volvoDuration(p.elapsed_seconds))+'</b></span>'+
+      '<span>Stopped<b class="'+(stop>=120?'warn':'')+'">'+esc(volvoDuration(stop))+'</b></span>'+
+      '<span>Fuel used<b>'+esc(fuel)+'</b></span>'+
+      '<span>Engine<b>'+esc(rpm)+'</b></span>'+
+      '<span>Driver<b>'+esc(p.driver_id||'—')+'</b></span>'+
+    '</div>'+
+    '<div class="coords">'+esc(volvoNum(p.latitude,6))+', '+esc(volvoNum(p.longitude,6))+'</div>';
+  tip.style.left=Math.max(8,Math.min((box.clientWidth||800)-220,x+14))+'px';
+  tip.style.top=Math.max(8,Math.min((box.clientHeight||430)-170,y+14))+'px';
+  tip.hidden=false;
+}
+function hideVolvoRouteHover(box){const tip=box&&box.querySelector('.volvo-route-hover');if(tip)tip.hidden=true;}
 function setVolvoMapStyle(style){
   VOLVO.mapStyle=style==='satellite'?'satellite':'street';
   const a=document.getElementById('volvo_map_street'),b=document.getElementById('volvo_map_satellite');
