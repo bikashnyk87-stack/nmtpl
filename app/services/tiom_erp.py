@@ -130,10 +130,16 @@ def wb_report_contributions(wb: WbMovement):
     if 'UNSCREEN' in mat and ('5 18' in mat or '5-18' in str(wb.material_name or '')):
         return [('UNSCREENED_5_18', qty)]
 
-    # 5-18 / CLO products. TIOM treats Crusher CLO as the crusher 5-18 final product.
-    is_5_18 = ('5 18' in mat or '5-18' in str(wb.material_name or '') or re.search(r'(^| )CLO( |$)', mat))
+    # CLO is a product family, not a size or proof of crusher origin.
+    # For example CLO 10-40 from a rehandling stack is not crusher 5-18.
+    is_5_18 = bool(re.search(r'(^| )5 18( |$)', mat))
+    is_crusher = 'CRUSH' in src or 'OCP' in src
+    is_screen = 'MSP' in src or 'SCREEN' in src
+    final_stack = _is_stack(dst) and not any(x in dst for x in ('MSP', 'PLANT', 'CRUSH', 'SCREEN', 'OCP'))
     if is_5_18:
-        if 'CRUSH' in src or 'OCP' in src or re.search(r'(^| )CLO( |$)', mat):
+        if not final_stack or not (is_crusher or is_screen):
+            return [('OTHER_PRODUCT_MOVEMENT', qty)]
+        if is_crusher:
             out.append(('CRUSHER_5_18', qty))
         elif 'RE SCREEN' in src or 'RESCREEN' in src:
             out.append(('RE_SCREEN_5_18', qty))
@@ -145,7 +151,9 @@ def wb_report_contributions(wb: WbMovement):
 
     # Fines products.
     if 'FINE' in mat:
-        if 'CRUSH' in src or 'OCP' in src:
+        if not final_stack or not (is_crusher or is_screen):
+            return [('OTHER_PRODUCT_MOVEMENT', qty)]
+        if is_crusher:
             out.append(('CRUSHER_FINES', qty))
             if _is_stack(dst):
                 out.append(('CRUSHER_FINES_SHIFTED', qty))
@@ -185,4 +193,4 @@ def wb_report_contributions(wb: WbMovement):
         if 'TANKURA' in dst:
             return [('SHIFT_5_40_TANKURA', qty)]
 
-    return []
+    return [('OTHER_PRODUCT_MOVEMENT', qty)]
