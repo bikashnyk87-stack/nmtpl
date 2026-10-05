@@ -915,9 +915,14 @@ def dashboard_desk(db, user, p):
     trend_start=end_day-timedelta(days=6)
     _, trend_wb=authoritative_wb(trend_start,end_day)
     trend_hsd=scoped_range(HsdIssue,trend_start,end_day)
-    seven={str(trend_start+timedelta(days=i)):{'date':str(trend_start+timedelta(days=i)),'trips':0,'tonnes':0.0,'fuel':0.0} for i in range(7)}
+    seven={str(trend_start+timedelta(days=i)):{'date':str(trend_start+timedelta(days=i)),'trips':0,'tonnes':0.0,'fuel':0.0,'romInput':0.0,'finalProduction':0.0} for i in range(7)}
     for w in trend_wb:
         r=seven[str(w.operating_date)];r['trips']+=1;r['tonnes']+=tonnes(w)
+        for code,qty in tiom_wb_report_contributions(w):
+            if code in {'ROM','ROM_STOCK_TO_PLANT_FEED'}:
+                r['romInput']+=float(qty or 0)
+            if code in {'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}:
+                r['finalProduction']+=float(qty or 0)
     for x in trend_hsd:
         if str(x.operating_date) in seven: seven[str(x.operating_date)]['fuel']+=float(x.litres or 0)
     seven_rows=[dict(r,tonnes=round(r['tonnes'],2),fuel=round(r['fuel'],1)) for r in seven.values()]
@@ -1259,6 +1264,7 @@ def dashboard_desk(db, user, p):
         cumulative_lead_ton_km+=float(row.get('leadTonKm') or 0)
         seven_rows.append({
             'date':row['date'],'trips':row['trips'],'tonnes':round(row['tonnes'],2),'fuel':round(row['fuel'],1),
+            'romInput':round(row.get('romInput',0.0),2),'finalProduction':round(row.get('finalProduction',0.0),2),
             'misQty':round(row['misQty'],2),'leadTonKm':round(row['leadTonKm'],2),
             'cumulativeTrips':cumulative_trips,'cumulativeTonnes':round(cumulative_tonnes,2),
             'cumulativeFuel':round(cumulative_fuel,1),'cumulativeMisQty':round(cumulative_mis,2),
