@@ -1,0 +1,23 @@
+name: Build Consolidated PC Site Software
+
+on:
+  push:
+    branches:
+      - pc-site-r7-20261005
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and validate package
+        run: bash packaging/site_pc/build_package.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NMTPL_PC_SITE_SOFTWARE_R7
+          path: NMTPL_PC_SITE_SOFTWARE_R7
+          if-no-files-found: error
+          retention-days: 7
