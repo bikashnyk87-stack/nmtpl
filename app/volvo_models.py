@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, DateTime, JSON, ForeignKey
+from sqlalchemy import String, DateTime, JSON, ForeignKey, Float
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base
 
@@ -40,4 +40,23 @@ class VolvoSync(Base):
     completed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     counts: Mapped[dict] = mapped_column(JSON)
 
-TABLES = [VolvoVehicle.__table__, VolvoReport.__table__, VolvoMapping.__table__, VolvoAudit.__table__, VolvoSync.__table__]
+
+class VolvoLocationZone(Base):
+    """GPS geofence for an existing TIOM Location Master row.
+
+    Kept separate from the ERP Location Master so Volvo/GPS configuration does
+    not alter operational master semantics.
+    """
+    __tablename__ = 'volvo_location_zone'
+    location_id: Mapped[str] = mapped_column(ForeignKey('locations.location_id'), primary_key=True)
+    latitude: Mapped[float] = mapped_column(Float, nullable=False)
+    longitude: Mapped[float] = mapped_column(Float, nullable=False)
+    radius_m: Mapped[float] = mapped_column(Float, nullable=False, default=300.0)
+    changed_by: Mapped[str] = mapped_column(String(60))
+    changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+TABLES = [
+    VolvoVehicle.__table__, VolvoReport.__table__, VolvoMapping.__table__,
+    VolvoAudit.__table__, VolvoSync.__table__, VolvoLocationZone.__table__,
+]
