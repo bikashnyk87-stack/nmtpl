@@ -894,8 +894,25 @@ def _osm_tile(z: int, x: int, y: int) -> bytes:
     return raw
 
 
+@lru_cache(maxsize=256)
+def _satellite_tile(z: int, x: int, y: int) -> bytes:
+    req = urllib.request.Request(
+        f'https://wi.maptiles.arcgis.com/arcgis/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        headers={'User-Agent': 'NMTPL-TIOM-Internal-Volvo-Dashboard/1.0'},
+    )
+    with urllib.request.urlopen(req, timeout=10) as response:
+        raw = response.read(1024 * 1024 + 1)
+    if len(raw) > 1024 * 1024:
+        raise ValueError('Satellite tile too large')
+    return raw
+
+
 @router.get('/map-tile/{z}/{x}/{y}.png')
-def map_tile(z: int, x: int, y: int, request: Request, db=Depends(get_db)):
+def map_tile(
+    z: int, x: int, y: int, request: Request,
+    layer: str = Query(default='street', max_length=20),
+    db=Depends(get_db),
+):
     user = get_user(db, request)
     require(user, module='DASHBOARD')
     if z < 0 or z > 18:
@@ -903,11 +920,17 @@ def map_tile(z: int, x: int, y: int, request: Request, db=Depends(get_db)):
     max_tile = 2 ** z
     if x < 0 or y < 0 or x >= max_tile or y >= max_tile:
         raise HTTPException(404, 'Map tile not found.')
+    layer = str(layer or 'street').strip().lower()
     try:
-        raw = _osm_tile(z, x, y)
+        if layer == 'satellite':
+            raw = _satellite_tile(z, x, y)
+            media_type = 'image/jpeg'
+        else:
+            raw = _osm_tile(z, x, y)
+            media_type = 'image/png'
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError):
         raise HTTPException(503, 'Map tiles temporarily unavailable.') from None
-    return Response(raw, media_type='image/png', headers={'Cache-Control': 'private, max-age=86400'})
+    return Response(raw, media_type=media_type, headers={'Cache-Control': 'private, max-age=86400'})
 
 
 class LocationZoneInput(BaseModel):
