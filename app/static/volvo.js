@@ -246,9 +246,16 @@ function renderVolvoZoneEditor(data){
   const zones=data.zones||[],available=data.available||[];
   const rows=zones.map(z=>'<div class="volvo-zone-row"><b>'+esc(z.location_name)+'</b><span>'+esc(volvoNum(z.latitude,6))+', '+esc(volvoNum(z.longitude,6))+' · '+esc(volvoNum(z.radius_m,0))+' m</span><button class="btn secondary small" onclick="editVolvoZone(\''+esc(z.location_id)+'\')">Edit</button><button class="btn secondary small" onclick="deleteVolvoZone(\''+esc(z.location_id)+'\')">Delete</button></div>').join('');
   const opts=available.map(x=>'<option value="'+esc(x.id)+'">'+esc(x.name)+(x.type?' · '+esc(x.type):'')+'</option>').join('');
-  box.innerHTML='<div class="volvo-zone-form"><label>TIOM location<select id="volvo_zone_location">'+opts+'</select></label><label>Latitude<input id="volvo_zone_lat" type="number" step="0.000001"></label><label>Longitude<input id="volvo_zone_lon" type="number" step="0.000001"></label><label>Radius m<input id="volvo_zone_radius" type="number" min="50" max="5000" value="300"></label><div class="volvo-zone-actions"><button class="btn secondary small" onclick="useVolvoMapCenter()">Use map center</button><button class="btn primary small" onclick="saveVolvoZone()">Save zone</button></div></div><div class="volvo-zone-list">'+(rows||'<div class="volvo-empty">No GPS location zones configured yet.</div>')+'</div>';
+  box.innerHTML='<div class="volvo-zone-form"><label>TIOM location<select id="volvo_zone_location">'+opts+'</select></label><label>Latitude<input id="volvo_zone_lat" type="number" step="0.000001"></label><label>Longitude<input id="volvo_zone_lon" type="number" step="0.000001"></label><label>Radius m<input id="volvo_zone_radius" type="number" min="50" max="5000" value="300"></label><div class="volvo-zone-actions"><button class="btn secondary small" onclick="useVolvoMapCenter()">Use map center</button><button class="btn secondary small" onclick="useSelectedVolvoTruck()">Use selected truck</button><button class="btn primary small" onclick="saveVolvoZone()">Save zone</button></div></div><div class="volvo-zone-list">'+(rows||'<div class="volvo-empty">No GPS location zones configured yet.</div>')+'</div>';
 }
 function useVolvoMapCenter(){if(!VOLVO.map)return;document.getElementById('volvo_zone_lat').value=Number(VOLVO.map.lat).toFixed(6);document.getElementById('volvo_zone_lon').value=Number(VOLVO.map.lon).toFixed(6);}
+function useSelectedVolvoTruck(){
+  const vin=VOLVO.popupVin||VOLVO.selectedVin;
+  const r=((VOLVO.data&&VOLVO.data.fleet)||[]).find(x=>x.vin===vin);
+  if(!r||!volvoGpsOk(r.gps)){toast('Click a truck marker with GPS first.',true);return;}
+  document.getElementById('volvo_zone_lat').value=Number(r.gps.latitude).toFixed(6);
+  document.getElementById('volvo_zone_lon').value=Number(r.gps.longitude).toFixed(6);
+}
 async function editVolvoZone(id){
   const z=((VOLVO.data&&VOLVO.data.location_zones)||[]).find(x=>x.location_id===id);
   if(!z)return;
