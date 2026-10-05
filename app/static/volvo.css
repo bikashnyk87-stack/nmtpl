@@ -167,3 +167,51 @@
 .volvo-dual-legend span{display:flex;align-items:center;gap:4px}.volvo-dual-legend i{width:14px;height:3px;border-radius:2px}.volvo-dual-legend i.fuel{background:#d98c10}.volvo-dual-legend i.distance{background:#0b67aa}
 .volvo-dual-svg{width:100%;height:205px;display:block}.volvo-dual-svg polyline{fill:none;stroke-width:3;stroke-linecap:round;stroke-linejoin:round}.volvo-dual-svg .fuel{stroke:#d98c10}.volvo-dual-svg .distance{stroke:#0b67aa}.volvo-dual-svg text{font-family:inherit;fill:#687a84;font-size:9px}
 @media(max-width:800px){.volvo-donut-wrap{grid-template-columns:1fr;justify-items:center}.volvo-donut-legend{width:100%}}
+
+
+/* TIOM Volvo route/fullscreen/analytics R11 */
+.volvo-route-layer .route-halo{fill:none;stroke:rgba(255,255,255,.94);stroke-width:9;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 1px 3px rgba(0,0,0,.55))}
+.volvo-route-layer .route-main{fill:none;stroke:#006fd6;stroke-width:4;stroke-linecap:round;stroke-linejoin:round}
+.volvo-route-layer .route-start{fill:#19a463;stroke:#fff;stroke-width:3}
+.volvo-route-layer .route-end{fill:#d33e3e;stroke:#fff;stroke-width:3}
+.volvo-route-layer .route-label{font:800 11px/1 sans-serif;paint-order:stroke;stroke:#fff;stroke-width:4px;stroke-linejoin:round;fill:#15384e}
+.volvo-route-layer .route-label.end{fill:#a52929}
+.volvo-map-marker.route-mode:not(.selected){opacity:.2}
+.volvo-map-marker.route-mode.selected i{width:26px;height:26px;border-width:2px;outline:3px solid rgba(0,111,214,.28)}
+.volvo-map-marker.route-mode.selected i:after{font-size:13px}
+.volvo-route-summary{padding:9px 11px;background:#fbfdfe;border-top:1px solid #dde7ed}
+.volvo-route-stats{display:grid;grid-template-columns:1.1fr .7fr .7fr 1fr 1fr auto;gap:8px;align-items:center}
+.volvo-route-stats>div:not(.actions){padding:6px 8px;border:1px solid #dce6ec;border-radius:7px;background:#fff}
+.volvo-route-stats span{display:block;font-size:8px;font-weight:900;text-transform:uppercase;letter-spacing:.04em;color:#72838d}
+.volvo-route-stats b{display:block;font-size:10px;color:#17384c;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.volvo-route-stats .actions{display:flex;gap:5px;justify-content:flex-end;flex-wrap:wrap}
+.volvo-route-note{font-size:8.5px;color:#71828c;margin-top:6px}
+.volvo-map-panel:fullscreen{background:#eef3f6;padding:0;display:flex;flex-direction:column}
+.volvo-map-panel:fullscreen .volvo-map-wrap{height:calc(100vh - 170px)!important;flex:1;min-height:520px}
+.volvo-map-panel:fullscreen .volvo-panel-head{padding:10px 14px}
+.volvo-map-panel:fullscreen .volvo-location-summary,.volvo-map-panel:fullscreen .volvo-map-legend{flex:0 0 auto}
+.volvo-map-panel:fullscreen .volvo-route-summary{flex:0 0 auto}
+.volvo-map-fullscreen{position:fixed!important;inset:8px!important;z-index:99999!important;background:#eef3f6!important;box-shadow:0 20px 60px rgba(0,0,0,.35)!important;display:flex!important;flex-direction:column!important}
+.volvo-map-fullscreen .volvo-map-wrap{height:calc(100vh - 190px)!important;flex:1!important}
+.volvo-analytics-title{margin-top:16px}
+.volvo-analytics-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin-top:8px}
+.volvo-analytics-grid .volvo-panel{min-height:300px}
+.volvo-analytics-grid .volvo-panel-head{padding:11px 13px}
+.volvo-analytics-grid .volvo-panel-head h3{font-size:14px}
+.volvo-analytics-grid .volvo-panel-head span{font-size:10px}
+.volvo-analytics-grid .volvo-panel-body{padding:14px 16px}
+.volvo-analytics-wide{grid-column:1/-1}
+.volvo-analytics-wide .volvo-panel{min-height:320px}
+.volvo-analytics-grid .volvo-bars{display:grid;gap:10px}
+.volvo-analytics-grid .volvo-bar-row{grid-template-columns:minmax(120px,160px) 1fr 90px;gap:10px;font-size:11px}
+.volvo-analytics-grid .volvo-bar-track{height:16px;border-radius:8px;background:#edf2f5}
+.volvo-analytics-grid .volvo-bar-fill{height:100%;border-radius:8px;background:linear-gradient(90deg,#0b67aa,#2a93cf)}
+.volvo-analytics-grid .volvo-bar-value{font-size:11px;font-weight:900}
+.volvo-analytics-wide .volvo-dual-svg{height:270px}
+.volvo-analytics-wide .volvo-dual-legend{font-size:10px;margin-bottom:8px}
+@media(max-width:1150px){
+  .volvo-route-stats{grid-template-columns:repeat(3,1fr)}
+  .volvo-route-stats .actions{grid-column:1/-1;justify-content:flex-start}
+  .volvo-analytics-grid{grid-template-columns:1fr}
+  .volvo-analytics-wide{grid-column:auto}
+}
