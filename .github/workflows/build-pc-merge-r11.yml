@@ -1,0 +1,69 @@
+name: Build PC Merge R11
+
+on:
+  push:
+    branches:
+      - pc-merge-r11-20261005
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate latest payload
+        shell: bash
+        run: |
+          set -euo pipefail
+          R=packaging/pc_merge_r11/latest
+          python -m py_compile "$R/app/main.py" "$R/app/routers/sites.py" "$R/app/routers/site_ops.py"
+          node --check "$R/app/static/simple_field_v1.js"
+          node --check "$R/app/static/site_ops.js"
+          grep -q "KOCP Production Entry" "$R/app/static/simple_field_v1.js"
+          grep -q "kocpHmrRows" "$R/app/static/simple_field_v1.js"
+          grep -q "ops-theme-socp" "$R/app/static/simple_field_v1.js"
+          grep -q "ops-theme-kocp" "$R/app/static/simple_field_v1.js"
+          grep -q "mapEmbedUrl" "$R/app/static/site_ops.js"
+          grep -q "Material determines Coal vs OB" "$R/app/routers/site_ops.py"
+          ! grep -A6 '"KOCP": \[' "$R/app/routers/sites.py" | grep -q '"OB"'
+          ! grep -A6 '"KOCP": \[' "$R/app/routers/sites.py" | grep -q '"HMR_KMR"'
+          ! grep -A5 '"SOCP": \[' "$R/app/routers/sites.py" | grep -q 'ATTENDANCE'
+
+      - name: Validate PowerShell
+        shell: pwsh
+        run: |
+          [scriptblock]::Create((Get-Content -Raw 'packaging/pc_merge_r11/INSTALL_PC_MERGE_R11.ps1')) | Out-Null
+          [scriptblock]::Create((Get-Content -Raw 'packaging/pc_merge_r11/ROLLBACK_PC_MERGE_R11.ps1')) | Out-Null
+
+      - name: Assemble artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          ROOT=NMTPL_PC_MERGE_R11
+          rm -rf "$ROOT"
+          mkdir -p "$ROOT"
+          cp -R packaging/pc_merge_r11/base "$ROOT/"
+          cp -R packaging/pc_merge_r11/latest "$ROOT/"
+          cp packaging/pc_merge_r11/INSTALL_PC_MERGE_R11.bat "$ROOT/"
+          cp packaging/pc_merge_r11/INSTALL_PC_MERGE_R11.ps1 "$ROOT/"
+          cp packaging/pc_merge_r11/ROLLBACK_PC_MERGE_R11.bat "$ROOT/"
+          cp packaging/pc_merge_r11/ROLLBACK_PC_MERGE_R11.ps1 "$ROOT/"
+          cp packaging/pc_merge_r11/README_FIRST.txt "$ROOT/"
+          cat > "$ROOT/PACKAGE_MANIFEST.txt" <<'EOF'
+          package=NMTPL_PC_MERGE_R11
+          source_freeze=99dcf176873a7e740afc4b745b6920db698c9033
+          merge_base=PC_SITE_SOFTWARE_R7
+          strategy=three_way_merge_preserve_pc_local_changes
+          automatic_backup=true
+          automatic_rollback_on_validation_failure=true
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NMTPL_PC_MERGE_R11
+          path: NMTPL_PC_MERGE_R11
+          if-no-files-found: error
+          retention-days: 7
