@@ -288,6 +288,41 @@ def _source_has_bench_rl(loc: Location | None) -> bool:
     return bool(re.search(r'(?:^|[/\\\s_.-])RL\s*[-:=]?\s*-?\d{2,4}(?:\D|$)', text_value))
 
 
+def ensure_tiom_routes_from_history(db: Session) -> int:
+    """Create missing WITH_WB Route Master pairs from canonical WB history."""
+    canonical_rows=list(db.scalars(select(TiomWbCanonical)))
+    if not canonical_rows:
+        return 0
+    existing=list(db.scalars(select(TiomRouteMaster)))
+    known={
+        (str(x.source_location_id or ""),str(x.destination_location_id or ""),str(x.route_mode or "").upper())
+        for x in existing
+    }
+    locations={x.location_id:x for x in db.scalars(select(Location))}
+    created=0
+    seen=set()
+    for c in canonical_rows:
+        src_id=str(c.source_location_id or ""); dst_id=str(c.destination_location_id or "")
+        if not src_id or not dst_id or src_id==dst_id:
+            continue
+        key=(src_id,dst_id,"WITH_WB")
+        if key in known or key in seen:
+            continue
+        src=locations.get(src_id); dst=locations.get(dst_id)
+        db.add(TiomRouteMaster(
+            route_id=_wb_route_id(src_id,dst_id),
+            route_name=f"{src.location_name if src else src_id} → {dst.location_name if dst else dst_id}",
+            source_location_id=src_id,destination_location_id=dst_id,route_mode="WITH_WB",
+            lead_basis="BENCH_RL" if _source_has_bench_rl(src) else "FIXED",
+            fixed_lead_km=None,material_scope=None,via_text="Production Weigh Bridge",
+            active=True,entered_by="WB_HISTORY",entered_at=now_local(),
+        ))
+        seen.add(key); created+=1
+    if created:
+        db.flush()
+    return created
+
+
 def ensure_routes_from_canonical_wb(
     db: Session,
     rows: list[WbMovement],
