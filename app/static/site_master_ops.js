@@ -9,6 +9,8 @@ const defs={
  LOCATION:{label:'Location',fields:[['code','Code','text',true],['name','Location Name','text',true],['locationType','Location Type','text',false],['distanceKm','Distance KM','number',false],['latitude','Latitude','number',false],['longitude','Longitude','number',false],['active','Active','checkbox',false]],cols:[['code','Code'],['name','Location'],['locationType','Type'],['distanceKm','KM'],['latitude','Lat'],['longitude','Long'],['active','Active']]},
  MATERIAL:{label:'Material',fields:[['code','Code','text',true],['name','Material Name','text',true],['materialGroup','Material Group','text',false],['defaultUnit','Default Unit','text',true],['billableUnit','Billable Unit','text',false],['active','Active','checkbox',false]],cols:[['code','Code'],['name','Material'],['materialGroup','Group'],['defaultUnit','Default'],['billableUnit','Billable'],['active','Active']]}
 };
+delete defs.VEHICLE;
+if(defs.EQUIPMENT) defs.EQUIPMENT.label='Equipment / Vehicle';
 function activeCell(v){return v?'<span class="status ok">Active</span>':'<span class="status bad">Inactive</span>'}
 function equipmentGroupForType(v){v=String(v||'').toUpperCase();if(['TRIPPER','DUMPER','TIPPER','TRUCK'].includes(v))return'TRANSPORT';if(v==='LOADER')return'LOADING';if(v==='EXCAVATOR')return'EXCAVATION';if(v==='DRILL')return'DRILLING';if(v==='COMPRESSOR')return'COMPRESSOR';if(v==='TANKER')return'HSD_TANKER';if(v==='PLANT')return'PLANT';if(['DOZER','GRADER','SUPPORT'].includes(v))return'SUPPORT';return'OTHER'}
 function syncEquipmentGroup(){const t=$('sm_type'),g=$('sm_group');if(t&&g)g.value=equipmentGroupForType(t.value)}
