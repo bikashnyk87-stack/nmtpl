@@ -1297,3 +1297,273 @@ body.field-mode{
   .ops-shifts{grid-template-columns:1fr}
   .ops-health,.ops-mini-stats,.ops-cert-row,.ops-factor-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
+
+
+/* R9 — site-specific dashboard themes aligned to compact entry screens */
+.ops-dashboard{
+  --ops-accent:#0a625b;
+  --ops-accent2:#3c8f89;
+  --ops-dark:#123740;
+  --ops-soft:#e6f1ef;
+  --ops-border:#aebfc6;
+  --ops-head:#dce6e9;
+}
+.ops-dashboard.ops-theme-socp{
+  --ops-accent:#155b78;
+  --ops-accent2:#2d86a5;
+  --ops-dark:#103b50;
+  --ops-soft:#e5f0f5;
+  --ops-border:#9fb8c3;
+  --ops-head:#d9e7ed;
+}
+.ops-dashboard.ops-theme-kocp{
+  --ops-accent:#8a552d;
+  --ops-accent2:#d18432;
+  --ops-dark:#493522;
+  --ops-soft:#f5ecdf;
+  --ops-border:#c5ae95;
+  --ops-head:#eee0d0;
+}
+
+/* Strong dashboard header, visually tied to the entry toolbar. */
+.ops-dashboard .ops-dashboard-top{
+  align-items:center;
+  margin:0 0 7px;
+  padding:8px 10px;
+  border:1px solid var(--ops-dark);
+  border-radius:7px;
+  background:var(--ops-dark);
+  box-shadow:0 1px 3px rgba(20,45,55,.12);
+}
+.ops-dashboard .ops-dashboard-top h1{
+  color:#fff;
+  font-size:16px;
+}
+.ops-dashboard .ops-dashboard-top p{
+  color:#d9e5e8;
+  font-size:8px;
+}
+.ops-theme-kocp .ops-dashboard-top p{
+  color:#f0e4d8;
+}
+.ops-dashboard .ops-range label{
+  color:#e6eff1;
+}
+.ops-theme-kocp .ops-range label{
+  color:#f2e7dc;
+}
+.ops-dashboard .ops-range input{
+  height:26px;
+  min-height:26px;
+  border-color:#d4dfe2;
+  font-size:9px;
+}
+.ops-dashboard .ops-range button{
+  min-height:26px;
+  background:var(--ops-accent);
+  border-color:var(--ops-accent);
+  font-size:9px;
+}
+
+/* Quick-entry area follows the same compact field-entry language. */
+.ops-dashboard .ops-entry-strip{
+  padding:6px 7px;
+  margin-bottom:7px;
+  border:1px solid var(--ops-border);
+  border-left:4px solid var(--ops-accent);
+  background:var(--ops-soft);
+  border-radius:6px;
+}
+.ops-dashboard .ops-strip-head{
+  margin-bottom:4px;
+}
+.ops-dashboard .ops-strip-head b{
+  color:var(--ops-dark);
+  font-size:10px;
+}
+.ops-dashboard .ops-strip-head span,
+.ops-dashboard .ops-strip-head small{
+  color:#536a72;
+  font-size:8px;
+}
+.ops-theme-kocp .ops-strip-head span,
+.ops-theme-kocp .ops-strip-head small{
+  color:#66584d;
+}
+.ops-dashboard .ops-quick{
+  gap:4px;
+}
+.ops-dashboard .ops-quick button{
+  min-height:38px;
+  grid-template-columns:21px 1fr;
+  column-gap:5px;
+  padding:4px 6px;
+  border:1px solid var(--ops-border);
+  border-radius:5px;
+  background:#fff;
+}
+.ops-dashboard .ops-quick button:hover{
+  border-color:var(--ops-accent);
+  box-shadow:0 1px 3px rgba(20,55,65,.10);
+}
+.ops-dashboard .ops-quick button>span{
+  width:21px;
+  height:21px;
+  background:var(--ops-soft);
+  color:var(--ops-accent);
+  border:1px solid var(--ops-border);
+  border-radius:4px;
+}
+.ops-dashboard .ops-quick button b{
+  font-size:8px;
+  color:var(--ops-dark);
+}
+.ops-dashboard .ops-quick button small{
+  font-size:7px;
+}
+
+/* KPI boxes match the small entry boxes rather than large presentation cards. */
+.ops-dashboard .ops-kpis{
+  gap:5px;
+  margin-bottom:7px;
+}
+.ops-dashboard .ops-kpi{
+  min-height:53px;
+  padding:6px 7px;
+  border:1px solid var(--ops-border);
+  border-top:2px solid var(--ops-accent);
+  border-radius:5px;
+  box-shadow:none;
+}
+.ops-dashboard .ops-kpi.primary,
+.ops-dashboard .ops-kpi.good{
+  border-top-color:var(--ops-accent);
+}
+.ops-dashboard .ops-kpi span{
+  font-size:7px;
+}
+.ops-dashboard .ops-kpi b{
+  font-size:14px;
+  margin-top:2px;
+}
+.ops-dashboard .ops-kpi small{
+  margin-top:2px;
+  font-size:7px;
+}
+
+/* Dashboard panels use the same stronger borders as batch entry tables. */
+.ops-dashboard .ops-grid{
+  gap:6px;
+}
+.ops-dashboard .ops-panel{
+  border:1px solid var(--ops-border);
+  border-radius:6px;
+  padding:6px 7px;
+  box-shadow:none;
+}
+.ops-dashboard .ops-panel-head{
+  min-height:26px;
+  margin-bottom:4px;
+  padding:0 0 4px;
+  border-bottom:1px solid var(--ops-border);
+}
+.ops-dashboard .ops-panel-head b{
+  color:var(--ops-dark);
+  font-size:9px;
+}
+.ops-dashboard .ops-panel-head span{
+  font-size:7px;
+}
+.ops-dashboard .ops-panel-head button{
+  min-height:24px;
+  padding:3px 7px;
+  background:var(--ops-accent);
+  border-color:var(--ops-accent);
+  font-size:8px;
+}
+
+/* Themed visualizations */
+.ops-dashboard .ops-bar-track{
+  height:6px;
+  background:#e6ecee;
+}
+.ops-theme-kocp .ops-bar-track{
+  background:#eee6df;
+}
+.ops-dashboard .ops-bar-track i{
+  background:linear-gradient(90deg,var(--ops-accent),var(--ops-accent2));
+}
+.ops-dashboard .ops-line .trend{
+  stroke:var(--ops-accent);
+}
+.ops-dashboard .ops-line circle{
+  stroke:var(--ops-accent);
+}
+.ops-dashboard .ops-shifts strong{
+  color:var(--ops-accent);
+}
+.ops-dashboard .ops-shifts>div,
+.ops-dashboard .ops-mini-stats>div,
+.ops-dashboard .ops-health>div,
+.ops-dashboard .ops-cert-row>div,
+.ops-dashboard .ops-factor-grid>div{
+  border-color:var(--ops-border);
+  background:#f8fafb;
+}
+.ops-theme-kocp .ops-shifts>div,
+.ops-theme-kocp .ops-mini-stats>div,
+.ops-theme-kocp .ops-health>div,
+.ops-theme-kocp .ops-cert-row>div,
+.ops-theme-kocp .ops-factor-grid>div{
+  background:#fbf7f2;
+}
+
+/* Make management visuals as dense as data-entry sections. */
+.ops-dashboard .ops-bar-row{
+  grid-template-columns:minmax(105px,1.35fr) minmax(90px,2fr) 48px;
+  gap:5px;
+}
+.ops-dashboard .ops-bar-label{
+  font-size:7px;
+}
+.ops-dashboard .ops-bar-row small{
+  font-size:7px;
+}
+.ops-dashboard .ops-line{
+  min-height:152px;
+}
+.ops-dashboard .ops-line svg{
+  height:116px;
+}
+.ops-dashboard .ops-donut-wrap{
+  grid-template-columns:105px 1fr;
+  min-height:112px;
+}
+.ops-dashboard .ops-donut{
+  width:96px;
+  height:96px;
+}
+.ops-dashboard .ops-donut>div{
+  width:60px;
+  height:60px;
+}
+.ops-dashboard .ops-donut b{
+  font-size:16px;
+}
+
+/* Theme the fleet donut consistently with each site. */
+.ops-theme-socp .ops-donut{
+  filter:saturate(.9);
+}
+.ops-theme-kocp .ops-donut{
+  filter:sepia(.12) saturate(1.05);
+}
+
+@media(max-width:800px){
+  .ops-dashboard .ops-dashboard-top{
+    display:block;
+  }
+  .ops-dashboard .ops-range{
+    margin-top:6px;
+  }
+}
