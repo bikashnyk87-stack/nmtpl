@@ -14,6 +14,7 @@ from sqlalchemy.exc import IntegrityError
 from app.db import get_db
 from app.auth import get_user, require, csrf
 from app.models import Equipment, Location
+from app.site_models import SiteTrip, SiteLocation, SiteMaterial
 from app.volvo_models import VolvoVehicle, VolvoMapping, VolvoAudit, VolvoSync, VolvoReport, VolvoLocationZone
 from app.services.volvo_store import latest_reports
 from app.services.volvo_client import timestamp
@@ -916,171 +917,318 @@ def vehicle_route(
         point['location_id'] = wrapper.get('location_id')
         point['location_name'] = wrapper.get('location_name')
 
-    # Split the session into provisional mine movement legs.
+    mapping = db.get(VolvoMapping, vin)
+    authoritative_trips = []
+    if mapping and mapping.machine_id:
+        trip_stmt = (
+            select(SiteTrip)
+            .where(
+                SiteTrip.site_id == 'TIOM',
+                SiteTrip.vehicle_id == mapping.machine_id,
+                SiteTrip.operating_date >= from_date,
+                SiteTrip.operating_date <= to_date,
+                SiteTrip.status != 'VOID',
+            )
+            .order_by(
+                SiteTrip.operating_date,
+                SiteTrip.loading_start_at,
+                SiteTrip.event_at,
+                SiteTrip.trip_seq,
+                SiteTrip.trip_id,
+            )
+        )
+        if shift != 'ALL':
+            trip_stmt = trip_stmt.where(SiteTrip.shift == shift)
+        tiom_trip_rows = db.scalars(trip_stmt).all()
+
+        location_ids = {
+            x for t in tiom_trip_rows
+            for x in (t.source_location_id, t.destination_location_id)
+            if x
+        }
+        material_ids = {t.material_id for t in tiom_trip_rows if t.material_id}
+        location_map = {
+            row.site_location_id: row
+            for row in db.scalars(
+                select(SiteLocation).where(
+                    SiteLocation.site_id == 'TIOM',
+                    SiteLocation.site_location_id.in_(location_ids),
+                )
+            ).all()
+        } if location_ids else {}
+        material_map = {
+            row.site_material_id: row
+            for row in db.scalars(
+                select(SiteMaterial).where(
+                    SiteMaterial.site_id == 'TIOM',
+                    SiteMaterial.site_material_id.in_(material_ids),
+                )
+            ).all()
+        } if material_ids else {}
+
+        # Build precise GPS windows from TIOM trip timestamps.
+        for idx, trip_row in enumerate(tiom_trip_rows):
+            start_at = (
+                trip_row.loading_end_at
+                or trip_row.loading_start_at
+                or trip_row.event_at
+            )
+            next_start = None
+            if idx + 1 < len(tiom_trip_rows):
+                nxt = tiom_trip_rows[idx + 1]
+                next_start = nxt.loading_end_at or nxt.loading_start_at or nxt.event_at
+            end_at = (
+                trip_row.unloading_end_at
+                or trip_row.unloading_start_at
+                or next_start
+            )
+            if start_at is None:
+                continue
+            if end_at is None:
+                end_at = points[-1].get('reported_at') if points else start_at
+            if end_at and end_at < start_at:
+                continue
+
+            # Small tolerance captures nearest Volvo samples around field timestamps.
+            window_start = start_at - timedelta(minutes=3)
+            window_end = end_at + timedelta(minutes=3)
+            indexes = [
+                i for i, p in enumerate(points)
+                if p.get('reported_at') and window_start <= p['reported_at'] <= window_end
+            ]
+            if not indexes:
+                continue
+            start_idx, end_idx = indexes[0], indexes[-1]
+            segment = points[start_idx:end_idx + 1]
+            distance_km = 0.0
+            stop_total = 0.0
+            moving_seconds = 0.0
+            for j in range(1, len(segment)):
+                distance_km += _haversine_km(segment[j - 1], segment[j])
+                sec = float(segment[j].get('segment_seconds') or 0.0)
+                stationary = (
+                    (segment[j].get('speed_kmh') is not None and float(segment[j]['speed_kmh']) <= 1.0)
+                    and float(segment[j].get('segment_km') or 0.0) <= 0.05
+                )
+                if stationary:
+                    stop_total += sec
+                else:
+                    moving_seconds += sec
+            duration_seconds = max(0.0, (end_at - start_at).total_seconds()) if end_at else 0.0
+            first_fuel = next((p.get('fuel_total_l') for p in segment if p.get('fuel_total_l') is not None), None)
+            last_fuel = next((p.get('fuel_total_l') for p in reversed(segment) if p.get('fuel_total_l') is not None), None)
+            fuel_l = max(0.0, last_fuel - first_fuel) if first_fuel is not None and last_fuel is not None else None
+            source = location_map.get(trip_row.source_location_id)
+            destination = location_map.get(trip_row.destination_location_id)
+            material = material_map.get(trip_row.material_id)
+            trip_id = str(trip_row.trip_id)
+            trip_cum = 0.0
+            previous = None
+            for p in segment:
+                if previous is not None:
+                    trip_cum += _haversine_km(previous, p)
+                p['trip_id'] = trip_id
+                p['trip_cumulative_km'] = round(trip_cum, 3)
+                previous = p
+            authoritative_trips.append({
+                'trip_id': trip_id,
+                'trip_seq': trip_row.trip_seq,
+                'operating_date': trip_row.operating_date,
+                'shift': trip_row.shift,
+                'start_at': start_at,
+                'end_at': end_at,
+                'duration_seconds': round(duration_seconds, 1),
+                'moving_seconds': round(moving_seconds, 1),
+                'stop_seconds': round(stop_total, 1),
+                'distance_km': round(distance_km, 2),
+                'fuel_l': round(fuel_l, 2) if fuel_l is not None else None,
+                'avg_speed_kmh': round(distance_km / (duration_seconds / 3600.0), 1) if duration_seconds > 0 else None,
+                'point_count': len(segment),
+                'source_name': source.name if source else trip_row.source_location_id,
+                'destination_name': destination.name if destination else trip_row.destination_location_id,
+                'material_name': material.name if material else trip_row.material_id,
+                'quantity_mt': float(trip_row.quantity_mt) if trip_row.quantity_mt is not None else None,
+                'driver_id': trip_row.driver_id,
+                'loading_equipment_id': trip_row.loading_equipment_id,
+                'start_index': start_idx,
+                'end_index': end_idx,
+                'boundary_reason': 'tiom_trip',
+                'provisional': False,
+                'source_type': trip_row.source_type,
+            })
+
+    # Split the session into provisional mine movement legs only when authoritative
+    # TIOM trip rows are unavailable for this mapped vehicle/date range.
+
     # Before Source/Destination geofences are fully configured, never allow a
     # multi-day range to collapse into one "trip": operating date/shift changes
     # are hard boundaries, with stops/gaps/turnarounds as additional boundaries.
-    trips = []
-    trip_start = None
-    stop_start = None
-    last_motion_bearing = None
-    distance_since_boundary = 0.0
-
-    def movement_bearing(a, b):
-        try:
-            lat1 = math.radians(float(a['latitude']))
-            lat2 = math.radians(float(b['latitude']))
-            dlon = math.radians(float(b['longitude']) - float(a['longitude']))
-            y = math.sin(dlon) * math.cos(lat2)
-            x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
-            return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
-        except (TypeError, ValueError, KeyError):
-            return None
-
-    def bearing_delta(a, b):
-        if a is None or b is None:
-            return 0.0
-        return abs((float(a) - float(b) + 180.0) % 360.0 - 180.0)
-
-    def close_trip(start_idx, end_idx, reason='movement'):
-        nonlocal distance_since_boundary
-        if start_idx is None or end_idx is None or end_idx <= start_idx:
-            return
-        segment = points[start_idx:end_idx + 1]
-        start_at = segment[0].get('reported_at')
-        end_at = segment[-1].get('reported_at')
-        distance_km = 0.0
-        stop_total = 0.0
-        moving_seconds = 0.0
-        for j in range(1, len(segment)):
-            distance_km += _haversine_km(segment[j - 1], segment[j])
-            sec = float(segment[j].get('segment_seconds') or 0.0)
-            stationary = (
-                (segment[j].get('speed_kmh') is not None and float(segment[j]['speed_kmh']) <= 1.0)
-                and float(segment[j].get('segment_km') or 0.0) <= 0.05
-            )
-            if stationary:
-                stop_total += sec
-            else:
-                moving_seconds += sec
-        duration_seconds = max(0.0, (end_at - start_at).total_seconds()) if start_at and end_at else 0.0
-        # Ignore tiny GPS jitter sessions, but retain real shift/day movement legs.
-        if distance_km < 0.12 and duration_seconds < 120:
-            return
-        first_fuel = next((p.get('fuel_total_l') for p in segment if p.get('fuel_total_l') is not None), None)
-        last_fuel = next((p.get('fuel_total_l') for p in reversed(segment) if p.get('fuel_total_l') is not None), None)
-        fuel_l = max(0.0, last_fuel - first_fuel) if first_fuel is not None and last_fuel is not None else None
-        configured_locations = [p for p in segment if p.get('location_id')]
-        source_name = configured_locations[0].get('location_name') if configured_locations else None
-        destination_name = configured_locations[-1].get('location_name') if configured_locations else None
-        trip_id = f"T{len(trips) + 1:03d}"
-        trip_cum = 0.0
-        previous = None
-        for p in segment:
-            if previous is not None:
-                trip_cum += _haversine_km(previous, p)
-            p['trip_id'] = trip_id
-            p['trip_cumulative_km'] = round(trip_cum, 3)
-            previous = p
-        op_date = segment[0].get('operating_date')
-        op_shift = segment[0].get('shift')
-        trips.append({
-            'trip_id': trip_id,
-            'operating_date': op_date,
-            'shift': op_shift,
-            'start_at': start_at,
-            'end_at': end_at,
-            'duration_seconds': round(duration_seconds, 1),
-            'moving_seconds': round(moving_seconds, 1),
-            'stop_seconds': round(stop_total, 1),
-            'distance_km': round(distance_km, 2),
-            'fuel_l': round(fuel_l, 2) if fuel_l is not None else None,
-            'avg_speed_kmh': round(distance_km / (duration_seconds / 3600.0), 1) if duration_seconds > 0 else None,
-            'point_count': len(segment),
-            'source_name': source_name,
-            'destination_name': destination_name,
-            'start_index': start_idx,
-            'end_index': end_idx,
-            'boundary_reason': reason,
-            'provisional': not bool(source_name and destination_name),
-        })
+    if authoritative_trips:
+        trips = authoritative_trips
+        segmentation_mode = 'TIOM_TRIP'
+    else:
+        segmentation_mode = 'GPS_PROVISIONAL'
+        trips = []
+        trip_start = None
+        stop_start = None
+        last_motion_bearing = None
         distance_since_boundary = 0.0
 
-    for i, point in enumerate(points):
-        moving = (
-            (point.get('speed_kmh') is not None and float(point['speed_kmh']) > 1.0)
-            or float(point.get('segment_km') or 0.0) > 0.05
-        )
-        gap_seconds = float(point.get('segment_seconds') or 0.0)
-        segment_km = float(point.get('segment_km') or 0.0)
-        if trip_start is not None:
-            distance_since_boundary += segment_km
+        def movement_bearing(a, b):
+            try:
+                lat1 = math.radians(float(a['latitude']))
+                lat2 = math.radians(float(b['latitude']))
+                dlon = math.radians(float(b['longitude']) - float(a['longitude']))
+                y = math.sin(dlon) * math.cos(lat2)
+                x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(dlon)
+                return (math.degrees(math.atan2(y, x)) + 360.0) % 360.0
+            except (TypeError, ValueError, KeyError):
+                return None
 
-        # Operating day/shift is always a hard boundary.
-        if i > 0:
-            previous = points[i - 1]
-            if (
-                point.get('operating_date') != previous.get('operating_date')
-                or point.get('shift') != previous.get('shift')
-            ):
-                if trip_start is not None:
-                    close_trip(trip_start, i - 1, 'shift_boundary')
+        def bearing_delta(a, b):
+            if a is None or b is None:
+                return 0.0
+            return abs((float(a) - float(b) + 180.0) % 360.0 - 180.0)
+
+        def close_trip(start_idx, end_idx, reason='movement'):
+            nonlocal distance_since_boundary
+            if start_idx is None or end_idx is None or end_idx <= start_idx:
+                return
+            segment = points[start_idx:end_idx + 1]
+            start_at = segment[0].get('reported_at')
+            end_at = segment[-1].get('reported_at')
+            distance_km = 0.0
+            stop_total = 0.0
+            moving_seconds = 0.0
+            for j in range(1, len(segment)):
+                distance_km += _haversine_km(segment[j - 1], segment[j])
+                sec = float(segment[j].get('segment_seconds') or 0.0)
+                stationary = (
+                    (segment[j].get('speed_kmh') is not None and float(segment[j]['speed_kmh']) <= 1.0)
+                    and float(segment[j].get('segment_km') or 0.0) <= 0.05
+                )
+                if stationary:
+                    stop_total += sec
+                else:
+                    moving_seconds += sec
+            duration_seconds = max(0.0, (end_at - start_at).total_seconds()) if start_at and end_at else 0.0
+            # Ignore tiny GPS jitter sessions, but retain real shift/day movement legs.
+            if distance_km < 0.12 and duration_seconds < 120:
+                return
+            first_fuel = next((p.get('fuel_total_l') for p in segment if p.get('fuel_total_l') is not None), None)
+            last_fuel = next((p.get('fuel_total_l') for p in reversed(segment) if p.get('fuel_total_l') is not None), None)
+            fuel_l = max(0.0, last_fuel - first_fuel) if first_fuel is not None and last_fuel is not None else None
+            configured_locations = [p for p in segment if p.get('location_id')]
+            source_name = configured_locations[0].get('location_name') if configured_locations else None
+            destination_name = configured_locations[-1].get('location_name') if configured_locations else None
+            trip_id = f"T{len(trips) + 1:03d}"
+            trip_cum = 0.0
+            previous = None
+            for p in segment:
+                if previous is not None:
+                    trip_cum += _haversine_km(previous, p)
+                p['trip_id'] = trip_id
+                p['trip_cumulative_km'] = round(trip_cum, 3)
+                previous = p
+            op_date = segment[0].get('operating_date')
+            op_shift = segment[0].get('shift')
+            trips.append({
+                'trip_id': trip_id,
+                'operating_date': op_date,
+                'shift': op_shift,
+                'start_at': start_at,
+                'end_at': end_at,
+                'duration_seconds': round(duration_seconds, 1),
+                'moving_seconds': round(moving_seconds, 1),
+                'stop_seconds': round(stop_total, 1),
+                'distance_km': round(distance_km, 2),
+                'fuel_l': round(fuel_l, 2) if fuel_l is not None else None,
+                'avg_speed_kmh': round(distance_km / (duration_seconds / 3600.0), 1) if duration_seconds > 0 else None,
+                'point_count': len(segment),
+                'source_name': source_name,
+                'destination_name': destination_name,
+                'start_index': start_idx,
+                'end_index': end_idx,
+                'boundary_reason': reason,
+                'provisional': not bool(source_name and destination_name),
+            })
+            distance_since_boundary = 0.0
+
+        for i, point in enumerate(points):
+            moving = (
+                (point.get('speed_kmh') is not None and float(point['speed_kmh']) > 1.0)
+                or float(point.get('segment_km') or 0.0) > 0.05
+            )
+            gap_seconds = float(point.get('segment_seconds') or 0.0)
+            segment_km = float(point.get('segment_km') or 0.0)
+            if trip_start is not None:
+                distance_since_boundary += segment_km
+
+            # Operating day/shift is always a hard boundary.
+            if i > 0:
+                previous = points[i - 1]
+                if (
+                    point.get('operating_date') != previous.get('operating_date')
+                    or point.get('shift') != previous.get('shift')
+                ):
+                    if trip_start is not None:
+                        close_trip(trip_start, i - 1, 'shift_boundary')
+                    trip_start = max(0, i - 1) if moving else None
+                    stop_start = None
+                    last_motion_bearing = None
+                    distance_since_boundary = segment_km if trip_start is not None else 0.0
+                    continue
+
+            if trip_start is not None and gap_seconds >= 900:
+                close_trip(trip_start, i - 1, 'telemetry_gap')
                 trip_start = max(0, i - 1) if moving else None
                 stop_start = None
                 last_motion_bearing = None
                 distance_since_boundary = segment_km if trip_start is not None else 0.0
                 continue
 
-        if trip_start is not None and gap_seconds >= 900:
-            close_trip(trip_start, i - 1, 'telemetry_gap')
-            trip_start = max(0, i - 1) if moving else None
-            stop_start = None
-            last_motion_bearing = None
-            distance_since_boundary = segment_km if trip_start is not None else 0.0
-            continue
-
-        if trip_start is None:
-            if moving:
-                trip_start = max(0, i - 1)
-                distance_since_boundary = segment_km
-                if i > 0 and segment_km >= 0.03:
-                    last_motion_bearing = movement_bearing(points[i - 1], point)
-            continue
-
-        if moving:
-            stop_start = None
-            # Fallback turnaround detection for mines before geofences are mapped.
-            if i > 0 and segment_km >= 0.03:
-                current_bearing = movement_bearing(points[i - 1], point)
-                delta = bearing_delta(last_motion_bearing, current_bearing)
-                elapsed = 0.0
-                if points[trip_start].get('reported_at') and point.get('reported_at'):
-                    elapsed = max(0.0, (point['reported_at'] - points[trip_start]['reported_at']).total_seconds())
-                if (
-                    not zones
-                    and last_motion_bearing is not None
-                    and delta >= 125.0
-                    and distance_since_boundary >= 0.35
-                    and elapsed >= 120
-                ):
-                    close_trip(trip_start, i - 1, 'turnaround')
+            if trip_start is None:
+                if moving:
                     trip_start = max(0, i - 1)
                     distance_since_boundary = segment_km
-                last_motion_bearing = current_bearing
-            continue
+                    if i > 0 and segment_km >= 0.03:
+                        last_motion_bearing = movement_bearing(points[i - 1], point)
+                continue
 
-        if stop_start is None:
-            stop_start = i
-        stop_duration = float(point.get('stop_seconds') or 0.0)
-        if stop_duration >= 180:
-            close_trip(trip_start, stop_start, 'stoppage')
-            trip_start = None
-            stop_start = None
-            last_motion_bearing = None
-            distance_since_boundary = 0.0
+            if moving:
+                stop_start = None
+                # Fallback turnaround detection for mines before geofences are mapped.
+                if i > 0 and segment_km >= 0.03:
+                    current_bearing = movement_bearing(points[i - 1], point)
+                    delta = bearing_delta(last_motion_bearing, current_bearing)
+                    elapsed = 0.0
+                    if points[trip_start].get('reported_at') and point.get('reported_at'):
+                        elapsed = max(0.0, (point['reported_at'] - points[trip_start]['reported_at']).total_seconds())
+                    if (
+                        not zones
+                        and last_motion_bearing is not None
+                        and delta >= 125.0
+                        and distance_since_boundary >= 0.35
+                        and elapsed >= 120
+                    ):
+                        close_trip(trip_start, i - 1, 'turnaround')
+                        trip_start = max(0, i - 1)
+                        distance_since_boundary = segment_km
+                    last_motion_bearing = current_bearing
+                continue
 
-    if trip_start is not None:
-        close_trip(trip_start, len(points) - 1, 'range_end')
+            if stop_start is None:
+                stop_start = i
+            stop_duration = float(point.get('stop_seconds') or 0.0)
+            if stop_duration >= 180:
+                close_trip(trip_start, stop_start, 'stoppage')
+                trip_start = None
+                stop_start = None
+                last_motion_bearing = None
+                distance_since_boundary = 0.0
+
+        if trip_start is not None:
+            close_trip(trip_start, len(points) - 1, 'range_end')
 
     raw_count = len(points)
     route_km = cumulative_km
@@ -1109,7 +1257,6 @@ def vehicle_route(
                 selected_indexes.update(candidates)
         points = [points[i] for i in sorted(selected_indexes)[:limit]]
 
-    mapping = db.get(VolvoMapping, vin)
     return {
         'vin': vin,
         'name': vehicle.payload.get('customerVehicleName') or vehicle.payload.get('vehicleName') or vin[-6:],
@@ -1123,8 +1270,14 @@ def vehicle_route(
         'trip_count': len(trips),
         'trips': trips,
         'current_trip_id': current_trip_id,
+        'segmentation_mode': segmentation_mode,
         'points': points,
-        'precision_note': 'Until TIOM Source/Destination GPS zones are configured, trip rows are provisional movement legs split by operating day/shift, stops >=3 minutes, telemetry gaps >=15 minutes and major turnarounds. Once zones are mapped, Source → Destination geofences should become the authoritative trip boundary. The trail is not road-snapped.',
+        'precision_note': (
+            'Trip boundaries come from TIOM site_trip records (vehicle/date/shift/loading/unloading/source/destination). Volvo GPS is used only to draw and measure the path inside each TIOM trip window.'
+            if segmentation_mode == 'TIOM_TRIP'
+            else
+            'No matching TIOM site_trip records were found for this mapped vehicle/date range. These rows are provisional GPS movement legs split by operating day/shift, stops, telemetry gaps and major turnarounds.'
+        ),
     }
 
 
