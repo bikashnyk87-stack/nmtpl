@@ -833,6 +833,15 @@ def open_satellite_image(site_id:str, observation_id:str, request:Request, db:Se
         stac_url=f"https://stac.dataspace.copernicus.eu/v1/collections/sentinel-2-l2a/items/{item_id}"
 
     bbox=None
+    aoi_marker="AOI="
+    if aoi_marker in notes:
+        try:
+            raw_aoi=notes.split(aoi_marker,1)[1].split("|",1)[0].strip()
+            parts=[float(x.strip()) for x in raw_aoi.split(",")]
+            if len(parts)==4 and parts[0] < parts[2] and parts[1] < parts[3]:
+                bbox=parts
+        except (ValueError,TypeError):
+            bbox=None
     image_day=row.image_date
     if stac_url:
         try:
@@ -840,7 +849,7 @@ def open_satellite_image(site_id:str, observation_id:str, request:Request, db:Se
             with urlopen(req,timeout=20) as resp:
                 item=json.load(resp)
             raw_bbox=item.get("bbox") or []
-            if len(raw_bbox) >= 4:
+            if bbox is None and len(raw_bbox) >= 4:
                 bbox=[float(raw_bbox[0]),float(raw_bbox[1]),float(raw_bbox[2]),float(raw_bbox[3])]
             raw_dt=(item.get("properties") or {}).get("datetime")
             if raw_dt:
@@ -856,9 +865,11 @@ def open_satellite_image(site_id:str, observation_id:str, request:Request, db:Se
 
     lon=(bbox[0]+bbox[2])/2
     lat=(bbox[1]+bbox[3])/2
+    span=max(abs(bbox[2]-bbox[0]),abs(bbox[3]-bbox[1]))
+    zoom=14 if span <= 0.03 else 13 if span <= 0.08 else 12 if span <= 0.16 else 11
     day=image_day.isoformat()
     browser_params={
-        "zoom":"14",
+        "zoom":str(zoom),
         "lat":f"{lat:.6f}",
         "lng":f"{lon:.6f}",
         "themeId":"DEFAULT-THEME",
@@ -985,7 +996,7 @@ def discover_satellite(
                 cloud_pct=cloud,
                 image_ref=item_url,
                 status="DISCOVERED",
-                notes=f"CDSE STAC item {item_id}" if item_id else "CDSE STAC discovery",
+                notes=(f"CDSE STAC item {item_id} | AOI={min_lon},{min_lat},{max_lon},{max_lat}" if item_id else f"CDSE STAC discovery | AOI={min_lon},{min_lat},{max_lon},{max_lat}"),
                 created_by=user.login_id,
             )
             db.add(existing)
@@ -995,11 +1006,12 @@ def discover_satellite(
             new_cloud = float(cloud) if cloud is not None else 101.0
             old_ref = str(existing.image_ref or "")
             old_ref_is_metadata = "stac.dataspace.copernicus.eu" in old_ref and "/items/" in old_ref
-            if new_cloud < old_cloud or not existing.image_ref or old_ref_is_metadata:
+            old_notes = str(existing.notes or "")
+            if new_cloud < old_cloud or not existing.image_ref or old_ref_is_metadata or "AOI=" not in old_notes:
                 existing.cloud_pct = cloud
                 existing.image_ref = item_url
                 existing.status = "DISCOVERED"
-                existing.notes = f"CDSE STAC item {item_id}" if item_id else "CDSE STAC discovery"
+                existing.notes = (f"CDSE STAC item {item_id} | AOI={min_lon},{min_lat},{max_lon},{max_lat}" if item_id else f"CDSE STAC discovery | AOI={min_lon},{min_lat},{max_lon},{max_lat}")
                 updated += 1
         output.append({"id": item_id, "imageDate": image_day, "cloudPct": cloud, "itemUrl": item_url})
 
