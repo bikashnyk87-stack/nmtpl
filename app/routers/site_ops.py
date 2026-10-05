@@ -890,8 +890,15 @@ def discover_satellite(
     for image_day, (_, item) in selected:
         props = item.get("properties") or {}
         cloud = props.get("eo:cloud_cover")
-        links = item.get("links") or []
-        item_url = next((x.get("href") for x in links if x.get("rel") in {"self", "alternate"} and x.get("href")), None)
+        assets = item.get("assets") or {}
+        thumbnail = assets.get("thumbnail") or {}
+        item_url = thumbnail.get("href")
+        if not item_url:
+            tci = assets.get("TCI_10m") or assets.get("TCI_20m") or {}
+            item_url = ((tci.get("alternate") or {}).get("https") or {}).get("href")
+        if not item_url:
+            links = item.get("links") or []
+            item_url = next((x.get("href") for x in links if x.get("rel") in {"self", "alternate"} and x.get("href")), None)
         item_id = str(item.get("id") or "")
         existing = db.scalar(select(SiteSatelliteObservation).where(
             SiteSatelliteObservation.site_id == site_id,
