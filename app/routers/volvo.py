@@ -908,14 +908,133 @@ def vehicle_route(
             stop_started_at = None
             point['stop_seconds'] = 0.0
 
+    # Assign configured TIOM GPS zones to route points when available.
+    zones = _location_zones(db)
+    for point in points:
+        wrapper = {'gps': {'latitude': point['latitude'], 'longitude': point['longitude']}}
+        _assign_location(wrapper, zones)
+        point['location_id'] = wrapper.get('location_id')
+        point['location_name'] = wrapper.get('location_name')
+
+    # Split the session into movement trips. Until source/destination geofences are
+    # fully configured, a trip boundary is a >=3 minute stationary period or a
+    # >=15 minute telemetry gap. This is intentionally conservative.
+    trips = []
+    trip_start = None
+    stop_start = None
+
+    def close_trip(start_idx, end_idx):
+        if start_idx is None or end_idx is None or end_idx <= start_idx:
+            return
+        segment = points[start_idx:end_idx + 1]
+        start_at = segment[0].get('reported_at')
+        end_at = segment[-1].get('reported_at')
+        distance_km = 0.0
+        stop_total = 0.0
+        moving_seconds = 0.0
+        for j in range(1, len(segment)):
+            distance_km += _haversine_km(segment[j - 1], segment[j])
+            sec = float(segment[j].get('segment_seconds') or 0.0)
+            stationary = (
+                (segment[j].get('speed_kmh') is not None and float(segment[j]['speed_kmh']) <= 1.0)
+                and float(segment[j].get('segment_km') or 0.0) <= 0.05
+            )
+            if stationary:
+                stop_total += sec
+            else:
+                moving_seconds += sec
+        duration_seconds = max(0.0, (end_at - start_at).total_seconds()) if start_at and end_at else 0.0
+        # Ignore tiny GPS jitter sessions.
+        if distance_km < 0.15 and duration_seconds < 120:
+            return
+        first_fuel = next((p.get('fuel_total_l') for p in segment if p.get('fuel_total_l') is not None), None)
+        last_fuel = next((p.get('fuel_total_l') for p in reversed(segment) if p.get('fuel_total_l') is not None), None)
+        fuel_l = max(0.0, last_fuel - first_fuel) if first_fuel is not None and last_fuel is not None else None
+        configured_locations = [p for p in segment if p.get('location_id')]
+        source_name = configured_locations[0].get('location_name') if configured_locations else None
+        destination_name = configured_locations[-1].get('location_name') if configured_locations else None
+        trip_id = f"T{len(trips) + 1:03d}"
+        trip_cum = 0.0
+        previous = None
+        for p in segment:
+            if previous is not None:
+                trip_cum += _haversine_km(previous, p)
+            p['trip_id'] = trip_id
+            p['trip_cumulative_km'] = round(trip_cum, 3)
+            previous = p
+        trips.append({
+            'trip_id': trip_id,
+            'start_at': start_at,
+            'end_at': end_at,
+            'duration_seconds': round(duration_seconds, 1),
+            'moving_seconds': round(moving_seconds, 1),
+            'stop_seconds': round(stop_total, 1),
+            'distance_km': round(distance_km, 2),
+            'fuel_l': round(fuel_l, 2) if fuel_l is not None else None,
+            'avg_speed_kmh': round(distance_km / (duration_seconds / 3600.0), 1) if duration_seconds > 0 else None,
+            'point_count': len(segment),
+            'source_name': source_name,
+            'destination_name': destination_name,
+            'start_index': start_idx,
+            'end_index': end_idx,
+        })
+
+    for i, point in enumerate(points):
+        moving = (
+            (point.get('speed_kmh') is not None and float(point['speed_kmh']) > 1.0)
+            or float(point.get('segment_km') or 0.0) > 0.05
+        )
+        gap_seconds = float(point.get('segment_seconds') or 0.0)
+        if trip_start is not None and gap_seconds >= 900:
+            close_trip(trip_start, i - 1)
+            trip_start = i if moving else None
+            stop_start = None
+            continue
+        if trip_start is None:
+            if moving:
+                trip_start = max(0, i - 1)
+            continue
+        if moving:
+            stop_start = None
+            continue
+        if stop_start is None:
+            stop_start = i
+        stop_duration = float(point.get('stop_seconds') or 0.0)
+        if stop_duration >= 180:
+            close_trip(trip_start, stop_start)
+            trip_start = None
+            stop_start = None
+
+    if trip_start is not None:
+        close_trip(trip_start, len(points) - 1)
+
     raw_count = len(points)
+    route_km = cumulative_km
+    current_trip_id = trips[-1]['trip_id'] if trips else None
+    if trips and points:
+        last_reported = points[-1].get('reported_at')
+        now_utc = datetime.now(timezone.utc)
+        recent = bool(last_reported and (now_utc - last_reported).total_seconds() <= 600)
+        trips[-1]['is_current'] = recent
+    for trip in trips[:-1]:
+        trip['is_current'] = False
+
+    # Display sampling happens after trip assignment so trip IDs survive.
     if len(points) > limit:
-        step = (len(points) - 1) / (limit - 1)
-        sampled = [points[round(i * step)] for i in range(limit)]
-        points = sampled
-    route_km = 0.0
-    for i in range(1, len(points)):
-        route_km += _haversine_km(points[i - 1], points[i])
+        selected_indexes = {0, len(points) - 1}
+        for trip in trips:
+            selected_indexes.add(trip['start_index'])
+            selected_indexes.add(trip['end_index'])
+        remaining = max(0, limit - len(selected_indexes))
+        if remaining:
+            candidates = [i for i in range(len(points)) if i not in selected_indexes]
+            if len(candidates) > remaining:
+                step = len(candidates) / remaining
+                selected_indexes.update(candidates[min(len(candidates) - 1, int(i * step))] for i in range(remaining))
+            else:
+                selected_indexes.update(candidates)
+        points = [points[i] for i in sorted(selected_indexes)[:limit]]
+
     mapping = db.get(VolvoMapping, vin)
     return {
         'vin': vin,
@@ -927,8 +1046,11 @@ def vehicle_route(
         'point_count': raw_count,
         'returned_points': len(points),
         'route_km': round(route_km, 2),
+        'trip_count': len(trips),
+        'trips': trips,
+        'current_trip_id': current_trip_id,
         'points': points,
-        'precision_note': 'This is the trail between Volvo GNSS reports. It is not road-snapped; precision and route detail depend on GNSS accuracy and the collection/reporting interval.',
+        'precision_note': 'Trips are segmented from Volvo GNSS movement using stops >=3 minutes or telemetry gaps >=15 minutes. Configure TIOM GPS location zones to add reliable Source/Destination labels. The trail is not road-snapped; route precision depends on GNSS/reporting frequency.',
     }
 
 
