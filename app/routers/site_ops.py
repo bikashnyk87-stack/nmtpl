@@ -10,7 +10,7 @@ from urllib.request import Request as UrlRequest, urlopen
 from urllib.error import URLError, HTTPError
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from sqlalchemy import and_, func, or_, select
@@ -803,6 +803,46 @@ def save_map_config(site_id:str,p:SiteMapConfigIn,request:Request,db:Session=Dep
 @router.get("/{site_id}/satellite")
 def list_satellite(site_id:str,request:Request,db:Session=Depends(get_db)):
     user=get_user(db,request); site_id=require_site(db,user,site_id); _require_any(db,user,site_id,"SATELLITE"); rows=db.scalars(select(SiteSatelliteObservation).where(SiteSatelliteObservation.site_id==site_id).order_by(SiteSatelliteObservation.image_date.desc()).limit(200)).all(); return [{"observationId":r.observation_id,"provider":r.provider,"imageDate":r.image_date,"cloudPct":r.cloud_pct,"imageRef":r.image_ref,"previousObservationId":r.previous_observation_id,"changeAreaHa":r.change_area_ha,"status":r.status,"notes":r.notes} for r in rows]
+
+
+@router.get("/{site_id}/satellite/{observation_id}/open")
+def open_satellite_image(site_id:str, observation_id:str, request:Request, db:Session=Depends(get_db)):
+    """Open a viewable Sentinel image, resolving old STAC metadata links on demand."""
+    user=get_user(db,request)
+    site_id=require_site(db,user,site_id)
+    _require_any(db,user,site_id,"SATELLITE")
+    row=db.scalar(select(SiteSatelliteObservation).where(
+        SiteSatelliteObservation.site_id==site_id,
+        SiteSatelliteObservation.observation_id==observation_id,
+    ))
+    if row is None:
+        raise HTTPException(404,"Satellite observation not found.")
+
+    target=str(row.image_ref or "").strip()
+    if not target:
+        raise HTTPException(404,"No satellite image reference is available.")
+
+    if "stac.dataspace.copernicus.eu" in target and "/items/" in target:
+        try:
+            req=UrlRequest(target,headers={"User-Agent":"NMTPL-Central-Operations/1.0"})
+            with urlopen(req,timeout=20) as resp:
+                item=json.load(resp)
+            assets=item.get("assets") or {}
+            thumbnail=assets.get("thumbnail") or {}
+            preview=thumbnail.get("href")
+            if not preview:
+                tci=assets.get("TCI_10m") or assets.get("TCI_20m") or assets.get("TCI_60m") or {}
+                preview=((tci.get("alternate") or {}).get("https") or {}).get("href")
+            if preview:
+                target=preview
+                row.image_ref=preview
+                db.commit()
+        except (HTTPError,URLError,TimeoutError,ValueError,TypeError):
+            db.rollback()
+
+    if not target.startswith(("http://","https://")):
+        raise HTTPException(502,"A browser-viewable Sentinel image URL is not available.")
+    return RedirectResponse(url=target,status_code=302)
 
 
 @router.post("/{site_id}/satellite")
