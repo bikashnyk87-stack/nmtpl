@@ -448,3 +448,169 @@ body.field-mode{
     grid-column:1/-1;
   }
 }
+
+
+/* R7 — slightly smaller desktop sizing for denser software entry */
+@media (min-width:901px){
+  .field-app-shell{
+    grid-template-columns:205px minmax(0,1fr)!important;
+  }
+  .field-nav{
+    padding-left:9px!important;
+    padding-right:9px!important;
+  }
+  .field-nav-section{
+    font-size:8px!important;
+    padding:9px 8px 4px!important;
+  }
+  .field-nav-btn{
+    min-height:36px!important;
+    padding:6px 8px!important;
+    gap:8px!important;
+  }
+  .field-nav-btn span{
+    width:24px!important;
+    height:24px!important;
+    flex-basis:24px!important;
+    font-size:10px!important;
+  }
+  .field-nav-btn b{
+    font-size:11px!important;
+  }
+
+  .software-page-head h1{
+    font-size:17px!important;
+  }
+  .software-page-head p{
+    font-size:10px!important;
+  }
+  .software-page-meta b,.software-page-meta span{
+    padding:4px 7px!important;
+    font-size:9px!important;
+  }
+
+  .field-content{
+    padding:10px 14px 24px!important;
+  }
+
+  .simple-form{
+    padding:8px!important;
+  }
+  .simple-form .field>span,
+  .field-content .field>span{
+    font-size:9px!important;
+  }
+  .simple-form input,
+  .simple-form select,
+  .simple-form textarea,
+  .lookup>input[type=text],
+  .form-grid input,
+  .form-grid select,
+  .form-grid textarea{
+    min-height:32px!important;
+    height:32px;
+    padding:4px 7px!important;
+    font-size:11px!important;
+    border-radius:5px!important;
+  }
+  .simple-form textarea,.form-grid textarea{
+    height:auto!important;
+    min-height:54px!important;
+  }
+
+  .software-entry-grid{
+    min-width:980px!important;
+  }
+  .software-entry-grid thead th{
+    padding:6px 6px!important;
+    font-size:9px!important;
+    line-height:1.1!important;
+  }
+  .software-entry-grid tbody td{
+    padding:4px 5px!important;
+    font-size:10px!important;
+  }
+  .software-entry-grid input,
+  .software-entry-grid select,
+  .software-entry-grid .lookup>input[type=text]{
+    min-height:30px!important;
+    height:30px!important;
+    padding:3px 6px!important;
+    font-size:10px!important;
+  }
+
+  .compact-entry-controls{
+    grid-template-columns:160px 105px minmax(220px,1fr)!important;
+    gap:7px!important;
+  }
+  .batch-hint{
+    min-height:36px!important;
+    padding:5px 8px!important;
+  }
+  .batch-hint b{
+    font-size:10px!important;
+  }
+  .batch-hint span{
+    font-size:9px!important;
+  }
+
+  .simple-actions{
+    padding-top:7px!important;
+    margin-top:7px!important;
+  }
+  .simple-actions .btn,
+  .field-content .btn{
+    min-height:31px!important;
+    padding:5px 9px!important;
+    font-size:10px!important;
+    border-radius:6px!important;
+  }
+
+  .simple-status{
+    font-size:9px!important;
+    padding:3px 6px!important;
+  }
+
+  .simple-daybar>div{
+    padding:8px 10px!important;
+  }
+  .simple-daybar small,
+  .software-kpis small{
+    font-size:8px!important;
+  }
+  .simple-daybar b{
+    font-size:13px!important;
+  }
+  .software-kpis>div{
+    padding:9px 10px!important;
+  }
+  .software-kpis b{
+    font-size:17px!important;
+  }
+
+  .field-home .task-card{
+    min-height:70px!important;
+    padding:9px 10px!important;
+  }
+  .field-home .task-card b{
+    font-size:11px!important;
+  }
+  .field-home .task-card small{
+    font-size:9px!important;
+  }
+
+  .field-content .panel-head{
+    padding:8px 10px!important;
+  }
+  .field-content .panel-head h2{
+    font-size:12px!important;
+  }
+  .field-content .data-table th{
+    padding:6px 7px!important;
+    font-size:9px!important;
+  }
+  .field-content .data-table td{
+    padding:6px 7px!important;
+    font-size:10px!important;
+  }
+}
