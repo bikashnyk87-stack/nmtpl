@@ -115,7 +115,7 @@ function clearSimpleHsdDraft(){localStorage.removeItem(draftKey('HSD'));render()
 
 window.NMTPLClearActiveDrafts=function(){NMTPLNet.clearUserDrafts(simpleUser())};
 function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module))restoreDraft('simpleTripForm',draftKey(state.module));if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));simpleCalcNet()}if(state.module==='HSD'){restoreDraft('simpleHsdForm',draftKey('HSD'));toggleSimpleHsd()}const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
-async async function simpleRender(){
+async function simpleRender(){
   const cfg=SIMPLE[siteId]||{daily:[],review:[],control:[]};
   const visible=new Set(['DASHBOARD',...(cfg.daily||[]),...(cfg.review||[]),...(cfg.control||[])]);
   if(!visible.has(state.module) || (state.module!=='DASHBOARD'&&!authorised(state.module))){
