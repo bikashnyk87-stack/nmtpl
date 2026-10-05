@@ -1426,7 +1426,7 @@ def masters_desk(db,user):
         'wbHeaders':[{'id':str(r.id),'field':r.canonical_field,'header':r.header_alias,'occurrence':r.occurrence,'priority':r.priority,'required':r.required,'active':r.active} for r in db.scalars(select(WbHeaderAlias).order_by(WbHeaderAlias.canonical_field,WbHeaderAlias.priority,WbHeaderAlias.id))],
         'products':[{'id':r.product_id,'name':r.name,'active':r.active} for r in db.scalars(select(Product).order_by(Product.product_id))],
         'activities':[{'id':r.activity,'vehicleRequired':r.vehicle_required,'active':r.active} for r in db.scalars(select(ActivityMaster).order_by(ActivityMaster.activity))],
-        'routes':[{'id':r.route_id,'name':r.route_name,'sourceLocationId':r.source_location_id,'destinationLocationId':r.destination_location_id,'routeMode':r.route_mode,'materialScope':r.material_scope or '','via':r.via_text or '','leadEntries':db.scalar(select(func.count()).select_from(TiomLeadDistance).where(TiomLeadDistance.source_location_id==r.source_location_id,TiomLeadDistance.destination_location_id==r.destination_location_id,TiomLeadDistance.route_mode==r.route_mode,TiomLeadDistance.active.is_(True))) or 0,'active':r.active} for r in db.scalars(select(TiomRouteMaster).order_by(TiomRouteMaster.route_name,TiomRouteMaster.route_id))],
+        'routes':[{'id':r.route_id,'name':r.route_name,'sourceLocationId':r.source_location_id,'destinationLocationId':r.destination_location_id,'routeMode':r.route_mode,'leadBasis':r.lead_basis or 'BENCH_RL','fixedLeadKm':float(r.fixed_lead_km) if r.fixed_lead_km is not None else None,'materialScope':r.material_scope or '','via':r.via_text or '','leadEntries':db.scalar(select(func.count()).select_from(TiomLeadDistance).where(TiomLeadDistance.source_location_id==r.source_location_id,TiomLeadDistance.destination_location_id==r.destination_location_id,TiomLeadDistance.route_mode==r.route_mode,TiomLeadDistance.active.is_(True))) or 0,'active':r.active} for r in db.scalars(select(TiomRouteMaster).order_by(TiomRouteMaster.route_name,TiomRouteMaster.route_id))],
         'leadDistances':[{'id':r.lead_id,'routeId':_tiom_route_key(r.source_location_id,r.destination_location_id,r.route_mode),'sourceLocationId':r.source_location_id,'benchRl':r.bench_rl_m,'destinationLocationId':r.destination_location_id,'routeMode':r.route_mode,'leadKm':float(r.lead_km),'materialScope':r.material_scope or '','active':r.active} for r in db.scalars(select(TiomLeadDistance).order_by(TiomLeadDistance.source_location_id,TiomLeadDistance.destination_location_id,TiomLeadDistance.bench_rl_m,TiomLeadDistance.route_mode))],
         'drillSets':[{'id':r.drill_set_id,'name':r.drill_set_name,'drillMachineId':r.drill_machine_id,'compressorMachineId':r.compressor_machine_id,'notes':r.notes or '','active':r.active} for r in db.scalars(select(TiomDrillSet).order_by(TiomDrillSet.drill_set_name,TiomDrillSet.drill_set_id))],
         'tankers':[{'id':r.tanker_id,'vehicleNo':r.vehicle_no or '','capacity':float(r.capacity_l),'active':r.active} for r in db.scalars(select(HsdTanker).order_by(HsdTanker.tanker_id))]
@@ -1461,6 +1461,14 @@ def save_master_record(db,user,p):
         obj=existing or TiomRouteMaster(route_id=key,route_name='',source_location_id=source_id,destination_location_id=dest_id,route_mode=mode)
         obj.route_name=short(str(r.get('name') or '')).strip() or f'{source_id} → {dest_id}'
         obj.source_location_id=source_id; obj.destination_location_id=dest_id; obj.route_mode=mode
+        basis=str(r.get('leadBasis') or getattr(obj,'lead_basis',None) or 'BENCH_RL').strip().upper()
+        if basis not in {'BENCH_RL','FIXED'}: raise HTTPException(422,'Lead Basis must be BENCH_RL or FIXED.')
+        fixed_raw=r.get('fixedLeadKm')
+        fixed=None if fixed_raw in (None,'') else Decimal(str(fixed_raw))
+        if fixed is not None and (not fixed.is_finite() or fixed<=0): raise HTTPException(422,'Fixed Lead KM must be positive.')
+        if basis=='FIXED' and fixed is None and intent!='create':
+            fixed=obj.fixed_lead_km
+        obj.lead_basis=basis; obj.fixed_lead_km=fixed if basis=='FIXED' else None
         obj.material_scope=short(str(r.get('materialScope') or '')) or None; obj.via_text=short(str(r.get('via') or '')) or None
         obj.active=flag(r.get('active',True)); obj.entered_by=user.login_id; obj.entered_at=now_local(); db.add(obj)
         audit(db,user,'SAVE_MASTER',table,key,{'row':r})
@@ -1469,6 +1477,8 @@ def save_master_record(db,user,p):
     if table == 'LEAD_DISTANCE':
         route_id=short(str(r.get('routeId') or '')).strip(); route=db.get(TiomRouteMaster,route_id)
         if not route or not route.active: raise HTTPException(422,'Choose an active Route Master record.')
+        if str(route.lead_basis or 'BENCH_RL').upper()=='FIXED':
+            raise HTTPException(422,'This is a FIXED route. Enter Lead KM in Route Master; Bench RL is not required.')
         bench=_tiom_parse_bench_rl(r.get('benchRl'))
         if bench is None: raise HTTPException(422,'Bench RL is required.')
         try: lead=Decimal(str(r.get('leadKm')))
@@ -2484,12 +2494,48 @@ def _ensure_tiom_routes_from_leads(db):
             source_location_id=lead.source_location_id,
             destination_location_id=lead.destination_location_id,
             route_mode=mode,
+            lead_basis='BENCH_RL',
+            fixed_lead_km=None,
             material_scope=lead.material_scope or None,
             via_text='Production Weigh Bridge' if mode=='WITH_WB' else 'Direct / Without Production Weigh Bridge',
             active=True,entered_by='SYSTEM',entered_at=now_local()
         ))
         known.add(key)
         created+=1
+    if created:
+        db.flush()
+    return created
+
+
+def _ensure_tiom_routes_from_wb(db, wb_rows, canonical_map):
+    """Auto-register confirmed WB Source → Destination pairs in Route Master.
+
+    WB can prove the route pair but never the distance. Bench-coded mine routes
+    use the Lead Matrix; internal plant/stack routes are created as FIXED with
+    Lead Pending until management enters an approved KM.
+    """
+    existing=list(db.scalars(select(TiomRouteMaster)))
+    known={(str(r.source_location_id or ''),str(r.destination_location_id or ''),str(r.route_mode or '').upper()):r for r in existing}
+    created=0
+    for wb in wb_rows or []:
+        canon=canonical_map.get(wb.movement_key) if canonical_map else None
+        src_id=canon.source_location_id if canon else None
+        dst_id=canon.destination_location_id if canon else None
+        if not src_id or not dst_id or src_id==dst_id:
+            continue
+        key=(str(src_id),str(dst_id),'WITH_WB')
+        if key in known:
+            continue
+        src=db.get(Location,src_id); dst=db.get(Location,dst_id)
+        basis='BENCH_RL' if _tiom_bench_rl_from_location(db,src_id) is not None else 'FIXED'
+        route=TiomRouteMaster(
+            route_id=_tiom_route_key(src_id,dst_id,'WITH_WB'),
+            route_name=f"{src.location_name if src else src_id} → {dst.location_name if dst else dst_id}",
+            source_location_id=src_id,destination_location_id=dst_id,route_mode='WITH_WB',
+            lead_basis=basis,fixed_lead_km=None,material_scope=None,
+            via_text='Production Weigh Bridge',active=True,entered_by='WB_AUTO',entered_at=now_local()
+        )
+        db.add(route); known[key]=route; created+=1
     if created:
         db.flush()
     return created
@@ -2596,8 +2642,12 @@ def _tiom_resolve_lead(db, source_id, bench_rl, dest_id, route_mode=None, wb_lin
     )))
     if not route and not route_rules:
         return {'rule':None,'routeMode':mode,'leadKm':None,'status':'ROUTE_NOT_CONFIGURED'}
+    if route and str(route.lead_basis or 'BENCH_RL').upper()=='FIXED':
+        if route.fixed_lead_km is not None and Decimal(route.fixed_lead_km)>0:
+            return {'rule':None,'route':route,'routeMode':mode,'leadKm':Decimal(route.fixed_lead_km),'status':'OK'}
+        return {'rule':None,'route':route,'routeMode':mode,'leadKm':None,'status':'FIXED_LEAD_NOT_CONFIGURED'}
     if bench_rl is None:
-        return {'rule':None,'routeMode':mode,'leadKm':None,'status':'MISSING_BENCH_RL'}
+        return {'rule':None,'route':route,'routeMode':mode,'leadKm':None,'status':'MISSING_BENCH_RL'}
     rules=[r for r in route_rules if r.bench_rl_m==bench_rl]
     if len(rules)==1:
         r=rules[0]
@@ -3369,7 +3419,8 @@ TIOM_SHIFT_ORDER = {'GENERAL':0,'A':1,'B':2,'C':3}
 def _tiom_shift_report_derive(values):
     out={k:Decimal(str(v or 0)) for k,v in (values or {}).items()}
     out['TOTAL_EXCAVATION']=sum(out.get(k,Decimal('0')) for k in ['ROM','ROM_LUMPS','SUBGRADE_DUMP','SUBGRADE_FEED_PLANT','WASTE'])
-    out['TOTAL_PRODUCTION']=sum(out.get(k,Decimal('0')) for k in ['SCREEN_FINES','SCREEN_5_18','LUMPS_FROM_SCREEN'])
+    # Final saleable/stack production only. Screen lumps are intermediate crusher feed.
+    out['TOTAL_PRODUCTION']=sum(out.get(k,Decimal('0')) for k in ['SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'])
     out['LUMPS_SHIFTED_TO_STOCK']=max(Decimal('0'),out.get('LUMPS_FROM_SCREEN',Decimal('0'))-out.get('LUMPS_FEED_TO_CRUSHER',Decimal('0')))
     out['FIVE_40_FEED_TO_PLANT']=out.get('RE_SCREEN_FINES',Decimal('0'))+out.get('RE_SCREEN_5_18',Decimal('0'))
     return out
