@@ -930,7 +930,8 @@ def map_tile(
             media_type = 'image/png'
     except (urllib.error.URLError, urllib.error.HTTPError, OSError, ValueError):
         raise HTTPException(503, 'Map tiles temporarily unavailable.') from None
-    return Response(raw, media_type=media_type, headers={'Cache-Control': 'private, max-age=86400'})
+    cache_seconds = 300 if layer == 'satellite' else 86400
+    return Response(raw, media_type=media_type, headers={'Cache-Control': f'private, max-age={cache_seconds}'})
 
 
 class LocationZoneInput(BaseModel):
