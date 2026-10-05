@@ -88,10 +88,37 @@ async function renderReports(){
 async function reloadReport(){try{const s=await api(`/api/site-ops/${siteId}/reports/summary?from_date=${$('rpFrom').value}&to_date=${$('rpTo').value}`);toast(`Loaded ${s.trips||0} trips · ${n(s.quantityMt,2)} MT`)}catch(e){toast(e.message,'bad')}}
 function exportReport(){const f=$('rpFrom')?.value||qdate().slice(0,8)+'01',t=$('rpTo')?.value||qdate();location.href=`/api/site-ops/${siteId}/reports/export.xlsx?from_date=${f}&to_date=${t}`}
 
+function mapEmbedUrl(raw){
+  const url=String(raw||'').trim();
+  if(!url)return null;
+  try{
+    const u=new URL(url);
+    if(!/^(https?:)$/.test(u.protocol))return null;
+    if(u.hostname.includes('google.com')){
+      const mid=u.searchParams.get('mid');
+      if(mid && u.pathname.includes('/maps/d/')) return 'https://www.google.com/maps/d/embed?mid='+encodeURIComponent(mid);
+      if(u.pathname.includes('/maps/embed')) return url;
+    }
+    return null;
+  }catch{return null}
+}
 async function renderMap(){
-  const m=await api(`/api/site-ops/${siteId}/map`).catch(()=>({locations:[]})); const tr=(m.locations||[]).map(x=>`<tr><td>${esc(x.code)}</td><td>${esc(x.name)}</td><td>${esc(x.type||'—')}</td><td>${x.distanceKm??'—'}</td><td>${x.latitude??'—'}</td><td>${x.longitude??'—'}</td></tr>`);
+  const m=await api(`/api/site-ops/${siteId}/map`).catch(()=>({locations:[]}));
+  const tr=(m.locations||[]).map(x=>`<tr><td>${esc(x.code)}</td><td>${esc(x.name)}</td><td>${esc(x.type||'—')}</td><td>${x.distanceKm??'—'}</td><td>${x.latitude??'—'}</td><td>${x.longitude??'—'}</td></tr>`);
   const config=formGrid(field('Site Map Link','mapUrl','url',m.mapUrl||''),'<button class="btn primary" onclick="saveMap()">Save Map Link</button>');
-  return pageHead('Site Map','Configure official site map later; location master and coordinate layer are already operational.')+context()+moduleHero('MAP')+panel('Map configuration',config,m.mapUrl?'Configured':'Awaiting link')+panel('Operational points',recentTable(['Code','Location','Type','Distance KM','Latitude','Longitude'],tr),`${tr.length} points`);
+  const embed=mapEmbedUrl(m.mapUrl);
+  const mapView=m.mapUrl?`<div class="site-map-live">
+    <div class="site-map-toolbar">
+      <div><b>Configured Site Map</b><span>${esc(m.mapUrl)}</span></div>
+      <a class="btn primary" href="${esc(m.mapUrl)}" target="_blank" rel="noopener noreferrer">Open Site Map ↗</a>
+    </div>
+    ${embed?`<iframe class="site-map-frame" src="${esc(embed)}" loading="lazy" referrerpolicy="no-referrer-when-downgrade" allowfullscreen></iframe>`:
+      '<div class="site-map-link-note"><b>Map link saved.</b><span>This link does not support safe inline embedding. Use “Open Site Map” above.</span></div>'}
+  </div>`:'<div class="site-map-link-note"><b>No map link configured.</b><span>Paste the official Google Maps / Google My Maps link and save.</span></div>';
+  return pageHead('Site Map','Official site map plus ERP location points.')+context()+moduleHero('MAP')+
+    panel('Map',mapView,m.mapUrl?'Configured':'Not configured')+
+    panel('Map configuration',config,m.mapUrl?'Saved':'Awaiting link')+
+    panel('Operational points',recentTable(['Code','Location','Type','Distance KM','Latitude','Longitude'],tr),`${tr.length} points`);
 }
 async function saveMap(){try{await api(`/api/site-ops/${siteId}/map/config`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({mapUrl:$('mapUrl').value.trim()||null})});toast('Map configuration saved');state.ctx.mapUrl=$('mapUrl').value.trim()||null;await render()}catch(e){toast(e.message,'bad')}}
 
