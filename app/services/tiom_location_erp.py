@@ -277,6 +277,67 @@ def canonicalize_wb(
     return row
 
 
+def _wb_route_id(source_id: str, destination_id: str) -> str:
+    return f"{source_id}|{destination_id}|WITH_WB"[:180]
+
+
+def _source_has_bench_rl(loc: Location | None) -> bool:
+    if not loc:
+        return False
+    text_value=f"{loc.location_id or ''} {loc.location_name or ''}".upper()
+    return bool(re.search(r'(?:^|[/\\\s_.-])RL\s*[-:=]?\s*-?\d{2,4}(?:\D|$)', text_value))
+
+
+def ensure_routes_from_canonical_wb(
+    db: Session,
+    rows: list[WbMovement],
+    canonical_map: dict[str, TiomWbCanonical],
+) -> int:
+    """Persist newly observed WB Source → Destination pairs in TIOM Route Master.
+
+    WB proves that a route pair exists, but it does not prove distance.
+    Mine/bench sources use the Bench-RL Lead Matrix. Internal plant/stack
+    routes are FIXED and remain Lead Pending until an approved KM is entered.
+    """
+    existing=list(db.scalars(select(TiomRouteMaster)))
+    known={
+        (str(x.source_location_id or ""),str(x.destination_location_id or ""),str(x.route_mode or "").upper())
+        for x in existing
+    }
+    locations={x.location_id:x for x in db.scalars(select(Location))}
+    created=0
+    for wb in rows:
+        canon=canonical_map.get(wb.movement_key)
+        if not canon or not canon.source_location_id or not canon.destination_location_id:
+            continue
+        src_id=str(canon.source_location_id); dst_id=str(canon.destination_location_id)
+        if src_id==dst_id:
+            continue
+        key=(src_id,dst_id,"WITH_WB")
+        if key in known:
+            continue
+        src=locations.get(src_id); dst=locations.get(dst_id)
+        basis="BENCH_RL" if _source_has_bench_rl(src) else "FIXED"
+        db.add(TiomRouteMaster(
+            route_id=_wb_route_id(src_id,dst_id),
+            route_name=f"{src.location_name if src else src_id} → {dst.location_name if dst else dst_id}",
+            source_location_id=src_id,
+            destination_location_id=dst_id,
+            route_mode="WITH_WB",
+            lead_basis=basis,
+            fixed_lead_km=None,
+            material_scope=None,
+            via_text="Production Weigh Bridge",
+            active=True,
+            entered_by="WB_AUTO",
+            entered_at=now_local(),
+        ))
+        known.add(key); created+=1
+    if created:
+        db.flush()
+    return created
+
+
 def canonicalize_wb_rows(db: Session, rows: list[WbMovement]) -> dict[str, TiomWbCanonical]:
     out = {}
     ensure_location_master_roles(db)
@@ -292,6 +353,7 @@ def canonicalize_wb_rows(db: Session, rows: list[WbMovement]) -> dict[str, TiomW
             destination_cache=destination_cache,
             material_cache=material_cache,
         )
+    ensure_routes_from_canonical_wb(db, rows, out)
     db.flush()
     return out
 
@@ -320,9 +382,12 @@ def backfill_wb_canonical(db: Session) -> dict:
             destination_missing += 1
         if (wb.material_code or wb.material_name) and not c.material_id:
             material_missing += 1
+    canonical_map={x.movement_key:db.get(TiomWbCanonical,x.movement_key) for x in rows}
+    routes_created=ensure_routes_from_canonical_wb(db, rows, canonical_map)
     db.flush()
     return {
         "wbRows": len(rows),
+        "routesCreated": routes_created,
         "mapped": mapped,
         "sourceUnmapped": source_missing,
         "destinationUnmapped": destination_missing,
