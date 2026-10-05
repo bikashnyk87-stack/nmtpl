@@ -96,7 +96,7 @@ async function refreshVolvoLive(){
     const fleet=volvoApplyLiveFilters(live.rows||[]);
     VOLVO.data.fleet=fleet;VOLVO.data.last_sync=live.last_sync;VOLVO.data.equipment=live.equipment||VOLVO.data.equipment;VOLVO.data.can_map=!!live.can_map;VOLVO.data.operational_count=live.operational_count;VOLVO.data.current_shift=live.current_shift;VOLVO.data.location_zones=live.location_zones||VOLVO.data.location_zones||[];
     const sync=document.getElementById('volvo_sync_text');if(sync)sync.textContent='Last collection: '+volvoDate(live.last_sync)+' · live fleet refresh '+(VOLVO.live?'ON':'OFF');
-    updateVolvoLiveKpis(fleet,live.operational_count,live.current_shift);
+    updateVolvoLiveKpis(fleet,fleet.filter(x=>x.operational).length,live.current_shift);
     renderVolvoMap(fleet,true);
     refreshVolvoFleetTable();
     if(VOLVO.selectedVin&&(Date.now()-VOLVO.lastRouteLoad>60000))loadVolvoRoute(VOLVO.selectedVin,true);
