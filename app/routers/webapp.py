@@ -25,6 +25,7 @@ from app.models import (Person, Equipment, Location, Product, ShiftMaster, Shift
                         HsdTanker, HsdPurchaseLot, HsdIssue, HsdIssueAllocation, AuditLog, WbImportBatch, WbMovement,
                         VehicleAlias, LocationAlias, MaterialAlias, MasterOption, WbHeaderAlias)
 from app.services.time_context import now_local, operating_context, TZ, week_monday
+from app.services.haulage_kpis import reporting_hours
 from app.services.shift_rotation import resolve_rotation_shift
 from app.services.hsd_fifo import apply_fifo_issue
 from app.services.reconcile import auto_reconcile
@@ -532,6 +533,11 @@ def dashboard_desk(db, user, p):
     if selected_shift == 'ALL' and not user.admin and 'ALL' not in user.shifts.split(','):
         allowed_shifts = [x for x in user.shifts.split(',') if x]
 
+    rate_shifts = [s for s in db.scalars(select(ShiftMaster).where(ShiftMaster.active))
+                   if (selected_shift == 'ALL' or s.shift == selected_shift)
+                   and (not allowed_shifts or s.shift in allowed_shifts)]
+    period_hours = reporting_hours(start_day, end_day, rate_shifts, now_local())
+
     def scoped_range(model, first, last, shift_override=None):
         stmt = select(model).where(model.operating_date >= first, model.operating_date <= last)
         sh = selected_shift if shift_override is None else shift_override
@@ -946,7 +952,8 @@ def dashboard_desk(db, user, p):
     ore_tonnes=wb_tonnes-material_buckets['WASTE']-material_buckets['REJECT']
     # Feed quantities use the full authoritative WB period so production KPIs
     # are not distorted by dashboard row filters.
-    crusher_feed=sum(tonnes(w) for w in wb_all if has_token(w.destination_raw,'CRUSH','OCP'))
+    crusher_feed_rows=[w for w in wb_all if has_token(w.destination_raw,'CRUSH','OCP')]
+    crusher_feed=sum(tonnes(w) for w in crusher_feed_rows)
     screen_feed=sum(tonnes(w) for w in wb_all if has_token(w.destination_raw,'SCREEN','MSP-','MSP '))
     crusher_recovery=(float(crusher_final)/crusher_feed*100) if crusher_feed>0 else None
     production_balance=rom_input-final_production
@@ -959,10 +966,13 @@ def dashboard_desk(db, user, p):
         'screenDirectMt':round(float(screen_direct),2),'screenDirectPct':prod_pct(screen_direct),
         'crusherFinalMt':round(float(crusher_final),2),'crusherFinalPct':prod_pct(crusher_final),
         'finalProductionMt':round(float(final_production),2),'finalRecoveryPct':prod_pct(final_production),
-        'crusherFeedMt':round(float(crusher_feed),2),'crusherFeedPct':prod_pct(Decimal(str(crusher_feed))),
+        'crusherFeedMt':round(float(crusher_feed),2) if crusher_feed_rows else None,
+        'crusherFeedPct':prod_pct(Decimal(str(crusher_feed))) if crusher_feed_rows else None,
         'crusherRecoveryPct':round(crusher_recovery,2) if crusher_recovery is not None else None,
         'oldStockExcludedMt':round(float(old_stock_excluded),2),'oldStockTrips':old_stock_trips,
         'oldStockVsRomPct':prod_pct(old_stock_excluded),
+        'otherMovementMt':round(float(production_facts.get('OTHER_PRODUCT_MOVEMENT',Decimal('0'))),2),
+        'otherMovementVsRomPct':prod_pct(production_facts.get('OTHER_PRODUCT_MOVEMENT',Decimal('0'))),
         'balanceMt':round(float(production_balance),2),'balancePct':prod_pct(production_balance),
         'note':'ROM is 100% process input. Final Production = Screen Fines + Screen 5-18 + Crusher Fines + Crusher CLO (5-18). Project Area / PA SRF old-stock fines are excluded.'
     }
@@ -1123,9 +1133,12 @@ def dashboard_desk(db, user, p):
     for r in mis_rows:
         d=mis_details.get(r.row_id)
         if not d: continue
+        if source_filter and d.source_location_id != source_filter: continue
+        if destination_filter and d.destination_location_id != destination_filter: continue
         report=mis_report_map.get(r.report_id)
         prod=mis_products.get(d.material_id) if d.material_id else None
         mat=(prod.name if prod else (d.material_id or r.material_raw or 'Unmapped')).strip()
+        if material_filter and mat != material_filter: continue
         src_obj=location_map.get(d.source_location_id) if d.source_location_id else None
         dst_obj=location_map.get(d.destination_location_id) if d.destination_location_id else None
         src=(src_obj.location_name if src_obj else (d.source_location_id or r.source_raw or 'Unknown')).strip()
@@ -1188,16 +1201,17 @@ def dashboard_desk(db, user, p):
     weighted_avg_lead=(lead_ton_km/lead_covered_qty) if lead_covered_qty>0 else Decimal('0')
 
     # Combined haulage productivity: authoritative WB trips + non-WB form trips.
-    # TPH here intentionally means Trips Per Hour, using active clock-hour buckets.
+    # Fleet/route throughput uses the same elapsed scheduled period, including idle hours.
     haulage_rows=[]
     combined_lead_qty=0.0; combined_ton_km=0.0; combined_trip_km=0.0
     combined_trips=0; combined_lead_missing=0
     for row in haulage_perf.values():
-        active_hours=len(row['hourBins'])
+        active_hours=period_hours
         avg_lead=(row['leadTonKm']/row['leadQty']) if row['leadQty']>0 else None
-        tph=(row['trips']/active_hours) if active_hours>0 else None
-        trip_kmh=(row['leadTripKm']/active_hours) if active_hours>0 and row['leadResolvedTrips']>0 else None
-        ton_kmh=(row['leadTonKm']/active_hours) if active_hours>0 and row['leadResolvedTrips']>0 else None
+        tph=(row['trips']/active_hours) if active_hours and active_hours>0 else None
+        complete_lead=row['leadMissingTrips']==0 and row['leadResolvedTrips']>0
+        trip_kmh=(row['leadTripKm']/active_hours) if active_hours and complete_lead else None
+        ton_kmh=(row['leadTonKm']/active_hours) if active_hours and complete_lead else None
         cycles=row['cycleSamples']
         if row['leadMissingTrips']==0 and row['leadResolvedTrips']>0:
             lead_status='OK'
@@ -1215,16 +1229,18 @@ def dashboard_desk(db, user, p):
             'avgCycleMin':round(sum(cycles)/len(cycles),1) if cycles else None,
             'leadResolvedTrips':row['leadResolvedTrips'],'leadMissingTrips':row['leadMissingTrips'],
             'leadStatus':lead_status,
+            'leadCoveragePct':round(row['leadResolvedTrips']/row['trips']*100,2) if row['trips'] else None,
         })
         combined_trips+=row['trips']; combined_lead_qty+=row['leadQty']
         combined_ton_km+=row['leadTonKm']; combined_trip_km+=row['leadTripKm']
         combined_lead_missing+=row['leadMissingTrips']
     haulage_rows.sort(key=lambda x:(x['trips'],x['tonnes']),reverse=True)
-    combined_active_hours=len(all_haul_hours)
+    combined_active_hours=period_hours
     combined_avg_lead=(combined_ton_km/combined_lead_qty) if combined_lead_qty>0 else None
-    combined_tph=(combined_trips/combined_active_hours) if combined_active_hours>0 else None
-    combined_trip_kmh=(combined_trip_km/combined_active_hours) if combined_active_hours>0 else None
-    combined_ton_kmh=(combined_ton_km/combined_active_hours) if combined_active_hours>0 else None
+    combined_tph=(combined_trips/combined_active_hours) if combined_active_hours and combined_active_hours>0 else None
+    complete_lead=combined_trips>0 and combined_lead_missing==0
+    combined_trip_kmh=(combined_trip_km/combined_active_hours) if combined_active_hours and complete_lead else None
+    combined_ton_kmh=(combined_ton_km/combined_active_hours) if combined_active_hours and complete_lead else None
 
     # Build 7-day MIS/lead trend independently of the currently selected period.
     # This mirrors the existing 7-day WB trend and preserves the selected shift scope.
@@ -1337,6 +1353,8 @@ def dashboard_desk(db, user, p):
             'romInputMt':production_summary['romInputMt'],'finalProductionMt':production_summary['finalProductionMt'],
             'finalRecoveryPct':production_summary['finalRecoveryPct'],'oldStockExcludedMt':production_summary['oldStockExcludedMt'],
             'haulageTrips':combined_trips,'haulageActiveHours':combined_active_hours,
+            'haulageReportingHours':combined_active_hours,
+            'haulLeadCoveragePct':round((combined_trips-combined_lead_missing)/combined_trips*100,2) if combined_trips else None,
             'tripsPerHour':round(combined_tph,2) if combined_tph is not None else None,
             'haulAvgLeadKm':round(combined_avg_lead,3) if combined_avg_lead is not None else None,
             'tripKmPerHour':round(combined_trip_kmh,2) if combined_trip_kmh is not None else None,
@@ -1370,7 +1388,7 @@ def dashboard_desk(db, user, p):
         'notes':[
             'WB remains the authoritative movement source, but total WB tonnes is not the primary production KPI. ROM feed is the 100% process input; final production is Screen Fines + Screen 5-18 + Crusher Fines + Crusher CLO (5-18).',
             'Project Area / PA SRF old-stock fines are re-handling only and are excluded from new-production and recovery KPIs.',
-            'Trips Per Hour means trips divided by active clock-hour buckets. Lead-adjusted haulage also reports Trip-km/hr and Ton-km/hr; unresolved lead is shown, never guessed.',
+            'Trips Per Hour = WB trips + unlinked submitted form trips, divided by elapsed scheduled shift hours (including idle hours). Route rates use the same period. This is fleet throughput, not trips per vehicle running hour. Trip-km/hr and Ton-km/hr require complete lead coverage.',
             'MIS Manual Entry panels use SUBMITTED driver reports only. Draft reports are shown as pending counts and are excluded from production until Submit Shift Report is used.',
             'Lead KM is automatic: Bench RL comes from Face / Bench Setup and route type comes from WB linkage. Source + Destination + Route Master + Lead Master determine Lead KM; unresolved rows are excluded from Ton-km.',
             'MIS operational MT is displayed separately from authoritative WB tonnes. WB-linked MIS rows are evidence only and are never added again to WB production totals; unlinked rows use the approved trip factor.',
@@ -2811,8 +2829,9 @@ def _tiom_resolve_lead(db, source_id, bench_rl, dest_id, route_mode=None, wb_lin
         TiomRouteMaster.source_location_id==source_id,
         TiomRouteMaster.destination_location_id==dest_id,
         TiomRouteMaster.route_mode==mode,
-        TiomRouteMaster.active.is_(True)
     ))
+    if route and not route.active:
+        return {'rule':None,'route':route,'routeMode':mode,'leadKm':None,'status':'ROUTE_INACTIVE'}
     route_rules=list(db.scalars(select(TiomLeadDistance).where(
         TiomLeadDistance.source_location_id==source_id,
         TiomLeadDistance.destination_location_id==dest_id,
@@ -2830,6 +2849,8 @@ def _tiom_resolve_lead(db, source_id, bench_rl, dest_id, route_mode=None, wb_lin
     rules=[r for r in route_rules if r.bench_rl_m==bench_rl]
     if len(rules)==1:
         r=rules[0]
+        if r.lead_km is None or not Decimal(r.lead_km).is_finite() or Decimal(r.lead_km)<=0:
+            return {'rule':r,'routeMode':mode,'leadKm':None,'status':'INVALID_LEAD'}
         return {'rule':r,'routeMode':mode,'leadKm':Decimal(r.lead_km),'status':'OK'}
     if len(rules)>1:
         return {'rule':None,'routeMode':mode,'leadKm':None,'status':'AMBIGUOUS_LEAD'}
