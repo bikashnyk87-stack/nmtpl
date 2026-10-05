@@ -235,7 +235,7 @@ function volvoMainCluster(points){
 function volvoLocationSummary(fleet,zones){
   fleet=fleet||[];zones=zones||[];
   const counts={};fleet.forEach(r=>{const k=r.location_name||'Transit / outside zones';counts[k]=(counts[k]||0)+1;});
-  const chips=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]).map(k=>'<button class="volvo-location-chip" type="button" title="Filter by location" onclick="volvoSelectLocationByName(\''+esc(k).replace(/'/g,"&#39;")+'\')"><b>'+esc(counts[k])+'</b>'+esc(k)+'</button>').join('');
+  const chips=Object.keys(counts).sort((a,b)=>counts[b]-counts[a]).map(k=>'<button class="volvo-location-chip" type="button" title="Filter by location" onclick="volvoSelectLocationByName(decodeURIComponent(\''+encodeURIComponent(k)+'\'))"><b>'+esc(counts[k])+'</b>'+esc(k)+'</button>').join('');
   if(!zones.length)return '<div class="volvo-location-summary warning"><b>Locations not configured:</b> trucks currently show GPS coordinates only. Use <b>Configure locations</b> once for Pit / Crusher / Screening / WB / Stock / Dump.</div>';
   return '<div class="volvo-location-summary"><span class="title">Current truck locations</span>'+chips+'</div>';
 }
