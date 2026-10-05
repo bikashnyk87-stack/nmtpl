@@ -10,7 +10,7 @@ const SIMPLE={
   KOCP:{entry:['TRIP','OB','HSD','HMR_KMR'],setup:['ATTENDANCE','SHIFT_CONTROL'],review:['RECONCILIATION','MCL_FACTOR','MCL_SURVEY','BILLING','DATA_QUALITY'],control:['FLEET','LOADER','EXCAVATOR','REPORTS','MASTERS','MAP','SATELLITE','AUDIT']}
 };
 const MGMT=['FLEET','LOADER','EXCAVATOR','DRIVER','GP_DESTINATION','GPS','DATA_QUALITY','MAP','SATELLITE','MASTERS','AUDIT'];
-const label={DASHBOARD:'Entry Console',ATTENDANCE:'Attendance Entry',SHIFT_CONTROL:'Shift Setup',PRODUCTION:'Production Entry',TRIP:'Trip Entry',OB:'OB Entry',WB:'Weighbridge Entry',HSD:'Fuel / HSD Entry',MECHANICAL:'Mechanical',HMR_KMR:'HMR / KMR Entry',MIS:'Paper Report Review',RECONCILIATION:'Check & Match',REPORTS:'Reports',MCL_FACTOR:'MCL Quantity Rules',MCL_SURVEY:'MCL Certified Quantity',BILLING:'Billing Check'};
+const label={DASHBOARD:'Dashboard',ATTENDANCE:'Attendance Entry',SHIFT_CONTROL:'Shift Setup',PRODUCTION:'Production Entry',TRIP:'Trip Entry',OB:'OB Entry',WB:'Weighbridge Entry',HSD:'Fuel / HSD Entry',MECHANICAL:'Mechanical',HMR_KMR:'HMR / KMR Entry',MIS:'Paper Report Review',RECONCILIATION:'Check & Match',REPORTS:'Reports',MCL_FACTOR:'MCL Quantity Rules',MCL_SURVEY:'MCL Certified Quantity',BILLING:'Billing Check'};
 function isMgmt(){return !!state.bootstrap?.user?.isManagement}
 function authorised(m){return (state.ctx?.modules||[]).includes(m)}
 function simpleShift(){
@@ -79,31 +79,131 @@ function entryFlowCards(mods,startNo=1){
     </button>`;
   }).join('')}</div>`
 }
-function renderSimpleDashboard(){
+
+function dashNum(v,d=0){return Number(v||0).toLocaleString('en-IN',{minimumFractionDigits:0,maximumFractionDigits:d})}
+function dashKpi(label,value,note='',tone=''){
+  return `<div class="ops-kpi ${tone}"><span>${esc(label)}</span><b>${esc(value)}</b><small>${esc(note)}</small></div>`;
+}
+function dashBars(rows,key,unit='',limit=7){
+  const data=(rows||[]).slice(0,limit),max=Math.max(0,...data.map(x=>Number(x[key]||0)));
+  if(!data.length)return '<div class="ops-empty">No data for this period.</div>';
+  return `<div class="ops-bars">${data.map((x,i)=>{const v=Number(x[key]||0),w=max>0?Math.max(3,(v/max)*100):0;return `<div class="ops-bar-row"><div class="ops-bar-label"><b>${esc(x.label||x.id||'—')}</b><span>${dashNum(v,key==='trips'?0:2)}${unit}</span></div><div class="ops-bar-track"><i style="width:${w}%"></i></div><small>${dashNum(x.trips||0)} trips</small></div>`}).join('')}</div>`;
+}
+function dashTrend(rows,key,label,unit=''){
+  const data=rows||[],vals=data.map(x=>Number(x[key]||0)),max=Math.max(1,...vals);
+  if(!data.length)return '<div class="ops-empty">No trend data.</div>';
+  const W=520,H=148,p=14,n=Math.max(1,data.length-1);
+  const pts=data.map((x,i)=>{const px=p+(i/n)*(W-p*2),py=H-p-(Number(x[key]||0)/max)*(H-p*2);return [px,py]}).map(a=>a.join(',')).join(' ');
+  const first=data[0]?.date||'',last=data[data.length-1]?.date||'';
+  return `<div class="ops-line"><div class="ops-chart-head"><b>${esc(label)}</b><span>Peak ${dashNum(max,key==='trips'?0:2)}${unit}</span></div><svg viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-label="${esc(label)}"><line x1="${p}" y1="${H-p}" x2="${W-p}" y2="${H-p}" class="axis"></line><polyline points="${pts}" class="trend"></polyline>${data.map((x,i)=>{if(data.length>20&&i%Math.ceil(data.length/10)!==0&&i!==data.length-1)return'';const a=pts.split(' ')[i].split(',');return `<circle cx="${a[0]}" cy="${a[1]}" r="2.5"><title>${esc(x.date)}: ${dashNum(x[key]||0,key==='trips'?0:2)}${unit}</title></circle>`}).join('')}</svg><div class="ops-axis-labels"><span>${esc(first)}</span><span>${esc(last)}</span></div></div>`;
+}
+function dashDonut(status){
+  const entries=Object.entries(status||{}).filter(([,v])=>Number(v)>0),total=entries.reduce((a,[,v])=>a+Number(v),0);
+  if(!total)return '<div class="ops-empty">Fleet status not updated today.</div>';
+  const colors=['#08766d','#3c90a8','#d39a28','#b94b4b','#6d7f86','#7f66a8'];
+  let acc=0,stops=[];
+  entries.forEach(([k,v],i)=>{const a=acc,b=acc+(Number(v)/total)*100;stops.push(`${colors[i%colors.length]} ${a}% ${b}%`);acc=b});
+  return `<div class="ops-donut-wrap"><div class="ops-donut" style="background:conic-gradient(${stops.join(',')})"><div><b>${total}</b><span>Assets</span></div></div><div class="ops-legend">${entries.map(([k,v],i)=>`<div><i style="background:${colors[i%colors.length]}"></i><span>${esc(k.replaceAll('_',' '))}</span><b>${v}</b></div>`).join('')}</div></div>`;
+}
+function dashShiftCards(rows,site){
+  if(!(rows||[]).length)return '<div class="ops-empty">No shift data.</div>';
+  return `<div class="ops-shifts">${rows.map(x=>`<div><strong>Shift ${esc(x.shift)}</strong><b>${dashNum(x.trips)} trips</b><span>${site==='KOCP'?`${dashNum(x.quantityMt,1)} MT · ${dashNum(x.quantityCum,1)} CuM`:`${dashNum(x.quantityMt,1)} MT`}</span><small>HSD ${dashNum(x.hsdL,1)} L</small></div>`).join('')}</div>`;
+}
+function dashQuickActions(cfg){
+  const mods=(cfg.entry||[]).filter(authorised);
+  return `<div class="ops-quick">${mods.map(m=>{const a=META[m]||['↗',label[m]||m,''];return `<button onclick="openSiteModule('${m}')"><span>${a[0]}</span><b>${esc(label[m]||a[1])}</b><small>Open entry</small></button>`}).join('')}</div>`;
+}
+window.openSiteModule=function(m){if(authorised(m)){state.module=m;render()}};
+window.applySiteDashRange=function(){window.__siteDashFrom=$('opsFrom')?.value||null;window.__siteDashTo=$('opsTo')?.value||null;render()};
+async function renderSimpleDashboard(){
   const cfg=SIMPLE[siteId]||{entry:[],setup:[],review:[],control:[]};
-  const d=state.dash||{};
+  const today=state.ctx.operatingDate;
+  const defFrom=String(today).slice(0,8)+'01';
+  const from=window.__siteDashFrom||defFrom,to=window.__siteDashTo||today;
+  const d=await api(`/api/site-ops/${siteId}/dashboard/operations?from_date=${encodeURIComponent(from)}&to_date=${encodeURIComponent(to)}`).catch(e=>({error:e.message,todayTotals:{},periodTotals:{},shifts:[],trend:[],materials:[],destinations:[],vehicles:[],loaders:[],fleet:{status:{}},reconciliation:{},meters:{},factors:[]}));
+  if(d.error)return `<div class="bad">${esc(d.error)}</div>`;
+  const t=d.todayTotals||{},p=d.periodTotals||{},isK=siteId==='KOCP';
   const draftCount=(cfg.entry||[]).filter(m=>localStorage.getItem(draftKey(m))).length;
-  const setup=(cfg.setup||[]).filter(authorised);
-  const entries=(cfg.entry||[]).filter(authorised);
-  const reviews=(cfg.review||[]).filter(authorised);
-  const siteTitle=siteId==='SOCP'?'SOCP Data Entry Console':'KOCP Data Entry Console';
-  const siteDesc=siteId==='SOCP'
-    ?'Shift-first entry for trips, weighbridge and fuel. Enter many rows together and save once.'
-    :'Shift-first entry for Coal, OB, fuel and machine meters. MCL quantity rules remain automatic.';
-  return `<div class="field-home simple-home software-home entry-console">
-    ${simplePageHead(siteTitle,siteDesc)}
-    <div class="entry-console-strip">
-      <div><small>DATE</small><b>${esc(state.ctx.operatingDate)}</b></div>
-      <div><small>SHIFT</small><b>${esc(simpleShift())}</b></div>
-      <div><small>TRIPS TODAY</small><b>${fmt(d.trips||0)}</b></div>
-      <div><small>DRAFT ENTRY SHEETS</small><b>${draftCount}</b></div>
+  const trendKey=isK?(p.quantityCum>p.quantityMt?'quantityCum':'quantityMt'):(p.wbMt>0?'wbMt':'quantityMt');
+  // WB MT is not daily in trend; SOCP uses trip MT trend, while WB MT remains KPI.
+  const trendMetric=isK?(p.quantityCum>p.quantityMt?'quantityCum':'quantityMt'):'quantityMt';
+  const trendTitle=isK?(trendMetric==='quantityCum'?'OB CuM trend':'Coal MT trend'):'Production MT trend';
+  const trendUnit=trendMetric==='quantityCum'?' CuM':' MT';
+  const materialKey=isK?(p.quantityCum>p.quantityMt?'quantityCum':'quantityMt'):'quantityMt';
+
+  const kpis=isK?[
+    dashKpi('Today Trips',dashNum(t.trips),'Current operating day','primary'),
+    dashKpi('Coal / MT',dashNum(t.quantityMt,1),`Period ${dashNum(p.quantityMt,1)} MT`,'good'),
+    dashKpi('OB / CuM',dashNum(t.quantityCum,1),`Period ${dashNum(p.quantityCum,1)} CuM`,'warn'),
+    dashKpi('HSD Issued',dashNum(t.hsdIssuedL,1)+' L',p.lPerCum?`${dashNum(p.lPerCum,2)} L/CuM period`:'Period fuel',''),
+    dashKpi('Fleet Updated',dashNum(Object.values(d.fleet?.status||{}).reduce((a,b)=>a+Number(b||0),0)),`${dashNum(d.fleet?.assigned||0)} assigned`,''),
+    dashKpi('Open Exceptions',dashNum((d.openDataQuality||0)+(d.missingTripFieldsToday||0)),'Data quality / incomplete','bad')
+  ]:[
+    dashKpi('Today Trips',dashNum(t.trips),'Current operating day','primary'),
+    dashKpi('Trip Qty',dashNum(t.quantityMt,1)+' MT',`Period ${dashNum(p.quantityMt,1)} MT`,'good'),
+    dashKpi('WB Qty',dashNum(t.wbMt,1)+' MT',`${dashNum(t.wbRows)} WB rows today`,'good'),
+    dashKpi('HSD Issued',dashNum(t.hsdIssuedL,1)+' L',p.lPerMt?`${dashNum(p.lPerMt,2)} L/MT period`:'Period fuel',''),
+    dashKpi('Vehicles Used',dashNum(t.vehicles),`${dashNum(d.fleet?.assigned||0)} assigned`,''),
+    dashKpi('Open Exceptions',dashNum((d.openDataQuality||0)+(d.missingTripFieldsToday||0)),'Data quality / incomplete','bad')
+  ];
+
+  const recon=Object.entries(d.reconciliation||{});
+  const reconHtml=recon.length?`<div class="ops-mini-stats">${recon.map(([k,v])=>`<div><span>${esc(k.replaceAll('_',' '))}</span><b>${v}</b></div>`).join('')}</div>`:'<div class="ops-empty">No reconciliation records in this period.</div>';
+  const factorHtml=isK?(d.factors||[]).length?`<div class="ops-factor-grid">${d.factors.map(x=>`<div><span>${esc(x.type.replaceAll('_',' '))}</span><b>${dashNum(x.value,3)} ${esc(x.unit)}</b><small>Shift ${esc(x.shift)}${x.reference?' · '+esc(x.reference):''}</small></div>`).join('')}</div>`:'<div class="ops-empty">No approved MCL factor active today.</div>':'';
+
+  const special=isK?`
+    <section class="ops-panel ops-wide"><div class="ops-panel-head"><div><b>MCL / Billing Control</b><span>Approved operational conversion and latest certification status.</span></div><button onclick="openSiteModule('MCL_FACTOR')">Open MCL Rules</button></div>
+      ${factorHtml}
+      <div class="ops-cert-row">
+        <div><span>Latest Survey</span><b>${d.latestSurvey?dashNum(d.latestSurvey.measuredCum,2)+' CuM':'—'}</b><small>${d.latestSurvey?esc(String(d.latestSurvey.periodEnd))+' · '+esc(d.latestSurvey.status):'No survey recorded'}</small></div>
+        <div><span>Latest Billing Variance</span><b>${d.latestBilling&&d.latestBilling.varianceCum!=null?dashNum(d.latestBilling.varianceCum,2)+' CuM':'—'}</b><small>${d.latestBilling?esc(String(d.latestBilling.periodEnd))+' · '+esc(d.latestBilling.status):'No billing reconciliation'}</small></div>
+        <div><span>Meter Usage</span><b>${dashNum(d.meters?.HMR||0,1)} H</b><small>${dashNum(d.meters?.KMR||0,1)} KM</small></div>
+      </div>
+    </section>`:`
+    <section class="ops-panel ops-wide"><div class="ops-panel-head"><div><b>Weighbridge & Reconciliation</b><span>Period WB control and trip matching status.</span></div><button onclick="openSiteModule('RECONCILIATION')">Open Review</button></div>
+      <div class="ops-cert-row">
+        <div><span>WB Period</span><b>${dashNum(p.wbMt,1)} MT</b><small>${dashNum(p.wbRows)} valid rows</small></div>
+        <div><span>Trip Period</span><b>${dashNum(p.quantityMt,1)} MT</b><small>${dashNum(p.trips)} trips</small></div>
+        <div><span>Difference</span><b>${dashNum((p.wbMt||0)-(p.quantityMt||0),1)} MT</b><small>WB − trip entry</small></div>
+      </div>${reconHtml}
+    </section>`;
+
+  return `<div class="ops-dashboard">
+    <div class="ops-dashboard-top">
+      <div><h1>${siteId} Operations Dashboard</h1><p>${isK?'Coal + OB operational control with MCL, equipment and fuel visibility.':'Dispatch + WB operational control with loader, destination, fleet and fuel visibility.'}</p></div>
+      <div class="ops-range"><label>From<input id="opsFrom" type="date" value="${esc(from)}"></label><label>To<input id="opsTo" type="date" value="${esc(to)}"></label><button onclick="applySiteDashRange()">Apply</button></div>
     </div>
-    ${setup.length?`<section class="entry-console-section"><div class="entry-console-title"><b>A. Shift Setup</b><span>Do once at shift start or update only when something changes.</span></div>${entryFlowCards(setup,1)}</section>`:''}
-    <section class="entry-console-section primary-entry"><div class="entry-console-title"><b>B. Main Data Entry</b><span>Use 10-row sheets by default. Increase to 20 or 30 when required.</span></div>${entryFlowCards(entries,setup.length+1)}</section>
-    ${reviews.length?`<section class="entry-console-section"><div class="entry-console-title"><b>C. Review</b><span>Check mismatch/exception only after entry. No duplicate entry.</span></div>${entryFlowCards(reviews,setup.length+entries.length+1)}</section>`:''}
-    <div class="simple-help-box"><b>Field rule</b><span>Select from masters, use shift defaults for repeated values, enter many rows, then save the batch once. Blank rows are ignored and row errors stay highlighted.</span></div>
+
+    <section class="ops-entry-strip"><div class="ops-strip-head"><div><b>Quick Entry</b><span>Field work stays one click away from the dashboard.</span></div><small>${draftCount} local draft sheet${draftCount===1?'':'s'}</small></div>${dashQuickActions(cfg)}</section>
+
+    <div class="ops-kpis">${kpis.join('')}</div>
+
+    <div class="ops-grid">
+      <section class="ops-panel ops-trend"><div class="ops-panel-head"><div><b>${esc(trendTitle)}</b><span>${esc(from)} → ${esc(to)}</span></div></div>${dashTrend(d.trend,trendMetric,trendTitle,trendUnit)}</section>
+      <section class="ops-panel"><div class="ops-panel-head"><div><b>Shift Performance</b><span>Trips, quantity and fuel by shift.</span></div></div>${dashShiftCards(d.shifts,siteId)}</section>
+
+      <section class="ops-panel"><div class="ops-panel-head"><div><b>Material Mix</b><span>Highest movement materials.</span></div></div>${dashBars(d.materials,materialKey,materialKey==='quantityCum'?' CuM':' MT',7)}</section>
+      <section class="ops-panel"><div class="ops-panel-head"><div><b>Destination Performance</b><span>Where material moved.</span></div></div>${dashBars(d.destinations,materialKey,materialKey==='quantityCum'?' CuM':' MT',8)}</section>
+
+      <section class="ops-panel"><div class="ops-panel-head"><div><b>${isK?'Loader / Excavator':'Loader'} Productivity</b><span>Trips and handled quantity.</span></div></div>${dashBars(d.loaders,materialKey,materialKey==='quantityCum'?' CuM':' MT',8)}</section>
+      <section class="ops-panel"><div class="ops-panel-head"><div><b>Vehicle Productivity</b><span>Top transport units by movement.</span></div></div>${dashBars(d.vehicles,'trips','',8)}</section>
+
+      <section class="ops-panel"><div class="ops-panel-head"><div><b>Fleet Status — Today</b><span>Updated attendance/condition against assigned assets.</span></div></div>${dashDonut(d.fleet?.status||{})}</section>
+      <section class="ops-panel"><div class="ops-panel-head"><div><b>Control Health</b><span>Entry completeness and reconciliation.</span></div><button onclick="openSiteModule('DATA_QUALITY')">Exceptions</button></div>
+        <div class="ops-health">
+          <div><span>Open DQ issues</span><b>${dashNum(d.openDataQuality||0)}</b></div>
+          <div><span>Incomplete trips today</span><b>${dashNum(d.missingTripFieldsToday||0)}</b></div>
+          <div><span>Assigned assets</span><b>${dashNum(d.fleet?.assigned||0)}</b></div>
+          <div><span>Current shift</span><b>${esc(d.currentShift||simpleShift())}</b></div>
+        </div>
+        ${reconHtml}
+      </section>
+
+      ${special}
+    </div>
   </div>`;
 }
+
 renderDashboard=renderSimpleDashboard;window.renderDashboard=renderSimpleDashboard;
 
 async function renderTiomProduction(){const [acts,recent]=await Promise.all([api('/api/site-ops/TIOM/lookups?kind=ACTIVITY&limit=100').catch(()=>[]),api(`/api/site-ops/TIOM/production/simple?operating_date=${state.ctx.operatingDate}&limit=40`).catch(()=>[])]);const rows=recent.map(r=>`<tr><td>${esc(r.shift)}</td><td>${esc(r.machineId)}</td><td>${esc(r.vehicleId||'—')}</td><td>${esc(r.sourceLocationId)}</td><td>${esc(r.destinationLocationId||'—')}</td><td>${esc(r.materialId||'—')}</td><td>${esc(r.loadingAt||'—')}</td><td>${esc(r.unloadingAt||'—')}</td><td>${esc(r.status)}</td></tr>`);const now=dtLocal();return simplePageHead('TIOM Production Entry','Simple completed-trip entry. Attendance and Shift Management are not required for this screen.')+`<div id="tiomSimpleForm" class="simple-form"><div class="simple-entry-grid"><div class="field"><span>Operating Date *</span><input id="spDate" type="date" data-no-draft value="${state.ctx.operatingDate}"></div><div class="field"><span>Shift *</span><select id="spShift">${shiftOpts(simpleShift())}</select></div><div class="field"><span>Loading Time *</span><input id="spLoad" type="datetime-local" value="${now}"></div><div class="field"><span>Unloading Time *</span><input id="spUnload" type="datetime-local"></div><div class="field"><span>Loader / Excavator *</span>${lookupMarkup('spMachine','ASSET','Search loader / excavator','LOADING,LOADER,EXCAVATOR')}</div><div class="field"><span>Vehicle *</span>${lookupMarkup('spVehicle','ASSET','Search registration / door','TRANSPORT,VEHICLE,TIPPER,DUMPER')}</div><div class="field"><span>Source *</span>${lookupMarkup('spSource','LOCATION','Search source')}</div><div class="field"><span>Destination *</span>${lookupMarkup('spDest','LOCATION','Search destination')}</div><div class="field"><span>Material *</span>${lookupMarkup('spMaterial','MATERIAL','Search material')}</div><div class="field"><span>Activity *</span><select id="spActivity">${acts.map(x=>`<option value="${esc(x.id)}" ${String(x.id).toUpperCase()==='LOADING'?'selected':''}>${esc(x.label)}</option>`).join('')}</select></div></div><div class="simple-actions"><button id="spSave" class="btn primary" onclick="saveTiomSimpleProduction()">Save Production Entry</button><button class="btn outline" onclick="clearTiomSimpleDraft()">Clear</button><span class="draft-state">Draft autosaves on this PC</span></div><div class="simple-note">WB remains the authoritative source for production tonnes. This field record supplies vehicle/loader/route/timing evidence for matching.</div></div>${panel('Today’s Entries',recentTable(['Shift','Loader','Vehicle','Source','Destination','Material','Loading','Unloading','Status'],rows),`${recent.length} recent records`)}`}
@@ -442,7 +542,7 @@ async function simpleRender(){
   $('crumbTop').textContent=`NMTPL / ${siteId}`;
   $('crumbTitle').textContent=state.module==='DASHBOARD'?'Data Entry Console':(label[state.module]||a[1]);
   let html=null;
-  if(state.module==='DASHBOARD') html=renderSimpleDashboard();
+  if(state.module==='DASHBOARD') html=await renderSimpleDashboard();
   else if(['TRIP','OB'].includes(state.module)) html=await renderSimpleTrips(state.module);
   else if(state.module==='WB') html=await renderSimpleWB();
   else if(state.module==='HSD') html=await renderSimpleHsd();
