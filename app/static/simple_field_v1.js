@@ -168,13 +168,13 @@ async function renderSimpleDashboard(){
       </div>${reconHtml}
     </section>`;
 
-  return `<div class="ops-dashboard">
+  return `<div class="ops-dashboard ${siteId==='SOCP'?'ops-theme-socp':'ops-theme-kocp'}">
     <div class="ops-dashboard-top">
       <div><h1>${siteId} Operations Dashboard</h1><p>${isK?'Coal + OB operational control with MCL, equipment and fuel visibility.':'Dispatch + WB operational control with loader, destination, fleet and fuel visibility.'}</p></div>
       <div class="ops-range"><label>From<input id="opsFrom" type="date" value="${esc(from)}"></label><label>To<input id="opsTo" type="date" value="${esc(to)}"></label><button onclick="applySiteDashRange()">Apply</button></div>
     </div>
 
-    <section class="ops-entry-strip"><div class="ops-strip-head"><div><b>Quick Entry</b><span>Field work stays one click away from the dashboard.</span></div><small>${draftCount} local draft sheet${draftCount===1?'':'s'}</small></div>${dashQuickActions(cfg)}</section>
+    <section class="ops-entry-strip"><div class="ops-strip-head"><div><b>Entry Workspace</b><span>Same compact field-entry workflow: open sheet → enter multiple rows → save once.</span></div><small>${draftCount} local draft sheet${draftCount===1?'':'s'}</small></div>${dashQuickActions(cfg)}</section>
 
     <div class="ops-kpis">${kpis.join('')}</div>
 
