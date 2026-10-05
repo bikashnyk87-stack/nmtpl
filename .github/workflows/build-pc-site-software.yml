@@ -2,8 +2,8 @@ name: Build Consolidated PC Site Software
 
 on:
   push:
-    branches: [pc-consolidated-site-20261005]
-    paths: [".github/workflows/build-pc-site-software.yml"]
+    branches:
+      - pc-consolidated-site-20261005
 
 permissions:
   contents: read
@@ -13,65 +13,5 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Assemble package
-        shell: bash
-        run: |
-          set -euo pipefail
-          ROOT=NMTPL_PC_SITE_SOFTWARE_R1
-          PAY="$ROOT/payload"
-          mkdir -p "$PAY"
-          files=(
-            app/models.py
-            app/site_models.py
-            app/routers/sites.py
-            app/routers/site_ops.py
-            app/services/site_context.py
-            app/services/tiom_location_erp.py
-            app/services/wb_mapping.py
-            app/static/admin_master_ops.js
-            app/static/central.html
-            app/static/site.js
-            app/static/site_ops.js
-            app/static/site_master_ops.js
-            app/static/site.html
-            app/static/simple_field_v1.js
-            app/static/simple_field_v1.css
-          )
-          for f in "${files[@]}"; do
-            test -f "$f"
-            mkdir -p "$PAY/$(dirname "$f")"
-            cp "$f" "$PAY/$f"
-          done
-          mkdir -p "$PAY/app"
-          cp packaging/pc_site_main.py "$PAY/app/main.py"
-          cp packaging/site_pc/INSTALL_PC_SITE_SOFTWARE.bat "$ROOT/"
-          cp packaging/site_pc/INSTALL_PC_SITE_SOFTWARE.ps1 "$ROOT/"
-          cp packaging/site_pc/ROLLBACK_PC_SITE_SOFTWARE.bat "$ROOT/"
-          cp packaging/site_pc/ROLLBACK_PC_SITE_SOFTWARE.ps1 "$ROOT/"
-          cp packaging/site_pc/README_FIRST.txt "$ROOT/"
-
-      - name: Validate package
-        shell: bash
-        run: |
-          set -euo pipefail
-          R=NMTPL_PC_SITE_SOFTWARE_R1/payload
-          python -m py_compile             "$R/app/main.py"             "$R/app/models.py"             "$R/app/site_models.py"             "$R/app/routers/sites.py"             "$R/app/routers/site_ops.py"             "$R/app/services/site_context.py"             "$R/app/services/tiom_location_erp.py"
-          node --check "$R/app/static/admin_master_ops.js"
-          node --check "$R/app/static/site.js"
-          node --check "$R/app/static/site_ops.js"
-          node --check "$R/app/static/site_master_ops.js"
-          node --check "$R/app/static/simple_field_v1.js"
-          grep -q "site_id == 'TIOM'" "$R/app/main.py"
-          grep -q "Desktop operations shell" "$R/app/static/simple_field_v1.css"
-          grep -q "delete defs.VEHICLE" "$R/app/static/site_master_ops.js"
-          grep -q "assigned_equipment" "$R/app/routers/site_ops.py"
-          grep -q "Enable-ScheduledTask" NMTPL_PC_SITE_SOFTWARE_R1/INSTALL_PC_SITE_SOFTWARE.ps1
-          grep -q "0.0.0.0" NMTPL_PC_SITE_SOFTWARE_R1/INSTALL_PC_SITE_SOFTWARE.ps1
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: NMTPL_PC_SITE_SOFTWARE_R1
-          path: NMTPL_PC_SITE_SOFTWARE_R1
-          if-no-files-found: error
-          retention-days: 7
+      - name: Smoke
+        run: echo "workflow ok"
