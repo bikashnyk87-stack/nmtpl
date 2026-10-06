@@ -2,6 +2,9 @@
 async function request(path, body) {
   const options={};
   if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(body);}
+  // Dashboard is a heavy read-only aggregation. Allow it more time than
+  // transactional entry/save calls while backend optimization keeps it fast.
+  if(path==='rpc' && body && body.method==='getDashboard') options.timeoutMs=60000;
   try{return await NMTPLNet.json('/api/web/'+path,options)}
   catch(error){if(error.status===401){showLogin(false);text('login_status','Session expired. Please sign in again.')}throw error}
 }
