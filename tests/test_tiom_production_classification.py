@@ -2,7 +2,7 @@ import unittest
 from decimal import Decimal
 from types import SimpleNamespace
 
-from app.services.tiom_erp import wb_report_contributions
+from app.services.tiom_erp import wb_report_contributions, allocate_blended_crusher_output
 
 
 def wb(material, source, destination, tonnes):
@@ -20,16 +20,43 @@ def contribution_codes(row):
 
 
 class TiomProductionClassificationTests(unittest.TestCase):
-    def test_screen_clo_10_40_is_intermediate_not_crusher_clo(self):
+    def test_clo_10_40_to_crusher_is_old_stock_blend_not_fresh_product(self):
         codes = contribution_codes(wb(
             "CLO 10-40 mm+58%-60%FeScr.Thakurani",
             "MSP-3",
             "CRUSHER PLANT",
             "261.1",
         ))
-        self.assertIn("LUMPS_FROM_SCREEN", codes)
+        self.assertIn("OLD_STOCK_BLEND_10_40", codes)
+        self.assertIn("PRODUCT_REHANDLED", codes)
+        self.assertIn("CRUSHER_BLEND_FEED", codes)
         self.assertIn("CRUSHER_FEED", codes)
+        self.assertNotIn("LUMPS_FROM_SCREEN", codes)
+        self.assertNotIn("LUMPS_FEED_TO_CRUSHER", codes)
         self.assertNotIn("CRUSHER_5_18", codes)
+
+    def test_real_msp_lumps_to_crusher_remain_fresh_intermediate(self):
+        codes = contribution_codes(wb("LUMPS", "MSP-3", "CRUSHER PLANT", "120"))
+        self.assertIn("LUMPS_FROM_SCREEN", codes)
+        self.assertIn("LUMPS_FEED_TO_CRUSHER", codes)
+        self.assertIn("CRUSHER_FEED", codes)
+        self.assertNotIn("OLD_STOCK_BLEND_10_40", codes)
+
+    def test_spillage_to_same_msp_is_recycle(self):
+        codes = contribution_codes(wb("SPILLAGE", "MSP-4", "MSP-4", "25"))
+        self.assertIn("SPILLAGE_RECYCLE_MSP", codes)
+        self.assertNotIn("CRUSHER_FEED", codes)
+
+    def test_large_spillage_to_crusher_is_fresh_intermediate_feed(self):
+        codes = contribution_codes(wb("SPILLAGE", "MSP-4", "CRUSHER", "18"))
+        self.assertIn("SPILLAGE_TO_CRUSHER", codes)
+        self.assertIn("CRUSHER_FEED", codes)
+        self.assertNotIn("CRUSHER_BLEND_FEED", codes)
+
+    def test_blended_crusher_output_is_allocated_proportionally(self):
+        fresh, blend = allocate_blended_crusher_output(900, 1000, 200)
+        self.assertEqual(fresh, Decimal("720"))
+        self.assertEqual(blend, Decimal("180"))
 
     def test_crusher_clo_5_18_is_crusher_output_only(self):
         codes = contribution_codes(wb(

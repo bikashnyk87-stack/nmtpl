@@ -63,6 +63,9 @@ nav{position:fixed;top:64px;bottom:0;left:0;width:174px;display:flex;flex-direct
 .prod-output em{grid-area:pct;color:#61767e;font-size:9px;font-style:normal}
 .prod-intermediate{margin-top:6px;padding:6px 7px;border-radius:5px;background:#f1e8d7;border:1px solid #d2bc91}
 .prod-intermediate b{display:block;color:#634c24;font-size:9px}.prod-intermediate span{display:block;margin-top:2px;color:#78684a;font-size:8px}
+.prod-excluded-mini{margin-top:6px;padding:6px 7px;border-radius:5px;background:#fbefea;border:1px solid #d7b2a4}
+.prod-excluded-mini b{display:block;color:#713d2f;font-size:9px}.prod-excluded-mini span{display:block;margin-top:2px;color:#85695f;font-size:8px}
+.plant-performance-table{overflow:auto}.plant-performance-table table{min-width:1250px}
 .prod-arrow{display:grid;place-items:center;color:#6a858d;font-size:22px;font-weight:900}
 .prod-exclusion{
   display:grid;grid-template-columns:1fr auto auto;gap:12px;align-items:center;

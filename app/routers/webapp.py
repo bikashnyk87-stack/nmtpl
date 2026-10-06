@@ -35,7 +35,13 @@ from app.services.wb_mapping import (
     expected_movement_date
 )
 from app.services.attendance_automation import auto_close_shift
-from app.services.tiom_erp import authoritative_wb as tiom_authoritative_wb, vehicle_matches as tiom_wb_vehicle_matches, movement_payload as tiom_wb_payload, wb_report_contributions as tiom_wb_report_contributions
+from app.services.tiom_erp import (
+    authoritative_wb as tiom_authoritative_wb,
+    vehicle_matches as tiom_wb_vehicle_matches,
+    movement_payload as tiom_wb_payload,
+    wb_report_contributions as tiom_wb_report_contributions,
+    allocate_blended_crusher_output,
+)
 from app.services.tiom_location_erp import canonicalize_wb_rows, location_options, ensure_location_master_roles
 from app.site_models import (
     TiomSourceDeployment, TiomSourceContext, TiomRouteMaster, TiomDrillSet, TiomDrillingShift,
@@ -680,10 +686,11 @@ def dashboard_desk(db, user, p):
     production_fact_trips={}
     production_fact_rows={}
     excluded_movement_keys=set()
-    excluded_codes={'PROJECT_AREA_FINES_TO_STACK','PRODUCT_REHANDLED','ROM_REHANDLED','ROM_STOCK_TO_STOCK','ROM_STOCK_TO_PLANT_FEED'}
+    excluded_codes={'PROJECT_AREA_FINES_TO_STACK','PRODUCT_REHANDLED','ROM_REHANDLED','ROM_STOCK_TO_STOCK','ROM_STOCK_TO_PLANT_FEED','OLD_STOCK_BLEND_10_40'}
     old_stock_excluded=Decimal('0')
     old_stock_trips=0
     production_hourly={h:{'hour':f'{h:02d}:00','rom':0.0,'final':0.0} for h in range(24)}
+    hourly_process_facts={h:{} for h in range(24)}
     final_output_codes={'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}
 
     def _wb_side_text(row, side):
@@ -721,7 +728,7 @@ def dashboard_desk(db, user, p):
         # Enrich physical plant-feed facts from canonical destination semantics.
         if 'ROM' in mat and any(x in dst_txt for x in ('MSP','SCREEN','PLANT','FEED')) and 'MSP_FEED' not in codes:
             facts.append(('MSP_FEED',qty)); codes.add('MSP_FEED')
-        intermediate={'LUMPS_FROM_SCREEN','LUMPS_FEED_TO_CRUSHER','LUMPS_TO_CRUSHER_FROM_STOCK','SPILLAGE','PRODUCT_REHANDLED'}
+        intermediate={'LUMPS_FROM_SCREEN','LUMPS_FEED_TO_CRUSHER','LUMPS_TO_CRUSHER_FROM_STOCK','SPILLAGE_TO_CRUSHER','PRODUCT_REHANDLED','OLD_STOCK_BLEND_10_40'}
         if codes.intersection(intermediate) and any(x in dst_txt for x in ('CRUSH','OCP')) and 'CRUSHER_FEED' not in codes:
             facts.append(('CRUSHER_FEED',qty))
         return facts
@@ -741,11 +748,19 @@ def dashboard_desk(db, user, p):
             if code not in seen_codes:
                 production_fact_trips[code]=production_fact_trips.get(code,0)+1
                 seen_codes.add(code)
-            if stamp and code in final_output_codes:
-                production_hourly[stamp.hour]['final']+=float(q)
+            if stamp:
+                hour_store=hourly_process_facts[stamp.hour]
+                hour_store[code]=hour_store.get(code,Decimal('0'))+q
             if stamp and code=='ROM':
                 production_hourly[stamp.hour]['rom']+=float(q)
     old_stock_trips=len(excluded_movement_keys)
+    for hour,hfacts in hourly_process_facts.items():
+        screen_hour=hfacts.get('SCREEN_FINES',Decimal('0'))+hfacts.get('SCREEN_5_18',Decimal('0'))
+        crusher_gross_hour=hfacts.get('CRUSHER_FINES',Decimal('0'))+hfacts.get('CRUSHER_5_18',Decimal('0'))
+        crusher_feed_hour=hfacts.get('CRUSHER_FEED',Decimal('0'))
+        crusher_blend_hour=hfacts.get('CRUSHER_BLEND_FEED',Decimal('0'))
+        crusher_fresh_hour,_blend_hour=allocate_blended_crusher_output(crusher_gross_hour,crusher_feed_hour,crusher_blend_hour)
+        production_hourly[hour]['final']=float(screen_hour+crusher_fresh_hour)
 
     # Fresh mine ROM is the 100% production base. MSP feed is deliberately
     # separate because it can contain ROM drawn from prior stock.
@@ -759,14 +774,20 @@ def dashboard_desk(db, user, p):
     crusher_fines=production_facts.get('CRUSHER_FINES',Decimal('0'))
     crusher_clo=production_facts.get('CRUSHER_5_18',Decimal('0'))
     screen_lumps=production_facts.get('LUMPS_FROM_SCREEN',Decimal('0'))
-    screen_spillage=production_facts.get('SPILLAGE',Decimal('0'))
-    screen_intermediate=screen_lumps+screen_spillage
+    spillage_to_crusher=production_facts.get('SPILLAGE_TO_CRUSHER',Decimal('0'))
+    spillage_recycle=production_facts.get('SPILLAGE_RECYCLE_MSP',Decimal('0'))
+    spillage_wip=production_facts.get('SPILLAGE_WIP',Decimal('0'))
+    screen_intermediate=screen_lumps+spillage_to_crusher
     crusher_feed_fact=production_facts.get('CRUSHER_FEED',Decimal('0'))
+    crusher_blend_feed=production_facts.get('CRUSHER_BLEND_FEED',Decimal('0'))
 
-    final_production=screen_fines+screen_518+crusher_fines+crusher_clo
     screen_direct=screen_fines+screen_518
-    screen_accounted=screen_direct+screen_intermediate
+    screen_accounted=screen_direct+screen_intermediate+spillage_wip
     crusher_final=crusher_fines+crusher_clo
+    crusher_fresh_final,crusher_blend_output=allocate_blended_crusher_output(
+        crusher_final,crusher_feed_fact,crusher_blend_feed
+    )
+    final_production=screen_direct+crusher_fresh_final
 
     def prod_pct(value,base=rom_input):
         return round(float(Decimal(value or 0)/base*Decimal('100')),2) if base and base>0 else None
@@ -827,9 +848,12 @@ def dashboard_desk(db, user, p):
 
     msp_feed_rows=_unique_wb_rows(production_fact_rows.get('MSP_FEED',[]))
     screen_final_rows=_unique_wb_rows(production_fact_rows.get('SCREEN_FINES',[]),production_fact_rows.get('SCREEN_5_18',[]))
-    screen_intermediate_rows=_unique_wb_rows(production_fact_rows.get('LUMPS_FROM_SCREEN',[]),production_fact_rows.get('SPILLAGE',[]))
-    screen_output_rows=_unique_wb_rows(screen_final_rows,screen_intermediate_rows)
+    msp_transfer_rows=_unique_wb_rows(production_fact_rows.get('LUMPS_FEED_TO_CRUSHER',[]),production_fact_rows.get('SPILLAGE_TO_CRUSHER',[]))
+    msp_recycle_rows=_unique_wb_rows(production_fact_rows.get('SPILLAGE_RECYCLE_MSP',[]))
+    msp_wip_rows=_unique_wb_rows(production_fact_rows.get('SPILLAGE_WIP',[]))
+    screen_output_rows=_unique_wb_rows(screen_final_rows,msp_transfer_rows,msp_wip_rows)
     crusher_feed_rows=_unique_wb_rows(production_fact_rows.get('CRUSHER_FEED',[]))
+    crusher_blend_rows=_unique_wb_rows(production_fact_rows.get('CRUSHER_BLEND_FEED',[]))
     crusher_output_rows=_unique_wb_rows(production_fact_rows.get('CRUSHER_FINES',[]),production_fact_rows.get('CRUSHER_5_18',[]))
 
     def _msp_plant(row,side):
@@ -874,53 +898,64 @@ def dashboard_desk(db, user, p):
 
     feed_by_msp=_group_by_msp(msp_feed_rows,'DESTINATION')
     final_by_msp=_group_by_msp(screen_final_rows,'SOURCE')
-    intermediate_by_msp=_group_by_msp(screen_intermediate_rows,'SOURCE')
-    msp_labels=sorted(set(feed_by_msp)|set(final_by_msp)|set(intermediate_by_msp),
+    transfer_by_msp=_group_by_msp(msp_transfer_rows,'SOURCE')
+    recycle_by_msp=_group_by_msp(msp_recycle_rows,'DESTINATION')
+    wip_by_msp=_group_by_msp(msp_wip_rows,'SOURCE')
+    msp_labels=sorted(set(feed_by_msp)|set(final_by_msp)|set(transfer_by_msp)|set(recycle_by_msp)|set(wip_by_msp),
                       key=lambda x:(x=='MSP / Unmapped',x))
     plant_performance=[]
     for label in msp_labels:
         feed_rows=_unique_wb_rows(feed_by_msp.get(label,[]))
         final_rows=_unique_wb_rows(final_by_msp.get(label,[]))
-        intermediate_rows=_unique_wb_rows(intermediate_by_msp.get(label,[]))
-        output_rows=_unique_wb_rows(final_rows,intermediate_rows)
+        transfer_rows=_unique_wb_rows(transfer_by_msp.get(label,[]))
+        recycle_rows=_unique_wb_rows(recycle_by_msp.get(label,[]))
+        wip_rows=_unique_wb_rows(wip_by_msp.get(label,[]))
+        output_rows=_unique_wb_rows(final_rows,transfer_rows,wip_rows)
         feed_mt=sum(tonnes(r) for r in feed_rows)
+        recycle_mt=sum(tonnes(r) for r in recycle_rows)
+        gross_throughput=feed_mt+recycle_mt
         final_mt=sum(tonnes(r) for r in final_rows)
-        intermediate_mt=sum(tonnes(r) for r in intermediate_rows)
-        output_mt=sum(tonnes(r) for r in output_rows)
+        transfer_mt=sum(tonnes(r) for r in transfer_rows)
+        wip_mt=sum(tonnes(r) for r in wip_rows)
+        accounted_mt=final_mt+transfer_mt+wip_mt
         run_hours=_plant_run_hours(label)
-        feed_tph=round(feed_mt/run_hours,2) if run_hours and run_hours>0 else None
-        output_tph=round(output_mt/run_hours,2) if run_hours and run_hours>0 else None
-        recovery=round(output_mt/feed_mt*100,2) if feed_mt>0 else None
+        tph=round(gross_throughput/run_hours,2) if run_hours and run_hours>0 else None
+        recovery=round(final_mt/feed_mt*100,2) if feed_mt>0 else None
         plant_performance.append({
-            'plant':label,'feedMt':round(feed_mt,2),'feedTrips':len(feed_rows),
-            'directFinalMt':round(final_mt,2),'intermediateMt':round(intermediate_mt,2),
-            'outputMt':round(output_mt,2),'outputTrips':len(output_rows),
-            'varianceMt':round(feed_mt-output_mt,2),
-            'recoveryPct':recovery,'outputVsFeedPct':recovery,'finalYieldPct':round(final_mt/feed_mt*100,2) if feed_mt>0 else None,
+            'plant':label,'plantType':'MSP',
+            'feedMt':round(feed_mt,2),'freshFeedMt':round(feed_mt,2),'feedTrips':len(feed_rows),
+            'recycleMt':round(recycle_mt,2),'blendFeedMt':0.0,
+            'grossThroughputMt':round(gross_throughput,2),
+            'directFinalMt':round(final_mt,2),'outputMt':round(final_mt,2),'grossOutputMt':round(accounted_mt,2),
+            'transferToCrusherMt':round(transfer_mt,2),'wipMt':round(wip_mt,2),'outputTrips':len(output_rows),
+            'varianceMt':round(feed_mt-accounted_mt,2),
+            'recoveryPct':recovery,'outputVsFeedPct':round(accounted_mt/feed_mt*100,2) if feed_mt>0 else None,
+            'finalYieldPct':recovery,
             'runningHours':round(run_hours,2) if run_hours is not None else None,
-            'feedActiveHours':round(run_hours,2) if run_hours is not None else None,
-            'outputActiveHours':round(run_hours,2) if run_hours is not None else None,
-            'tph':feed_tph,'feedTph':feed_tph,'outputTph':output_tph,
+            'tph':tph,'feedTph':tph,'outputTph':None,
             'runningHoursSource':'EQUIPMENT_HMR' if run_hours is not None else None,
             'avgLeadKm':None,'tripKmPerHour':None,'tonKmPerHour':None,'leadMissingTrips':0,
         })
 
     crusher_feed=crusher_feed_fact
+    crusher_fresh_feed=max(Decimal('0'),crusher_feed-crusher_blend_feed)
     crusher_recovery=(float(crusher_final/crusher_feed*Decimal('100'))) if crusher_feed>0 else None
     crusher_run_hours=_plant_run_hours('Crusher')
     crusher_feed_tph=round(float(crusher_feed)/crusher_run_hours,2) if crusher_run_hours and crusher_run_hours>0 else None
-    crusher_output_tph=round(float(crusher_final)/crusher_run_hours,2) if crusher_run_hours and crusher_run_hours>0 else None
     crusher_recovery_value=round(crusher_recovery,2) if crusher_recovery is not None else None
     plant_performance.append({
-        'plant':'Crusher','feedMt':round(float(crusher_feed),2),'feedTrips':len(crusher_feed_rows),
-        'directFinalMt':round(float(crusher_final),2),'intermediateMt':0.0,
-        'outputMt':round(float(crusher_final),2),'outputTrips':len(crusher_output_rows),
+        'plant':'Crusher','plantType':'CRUSHER',
+        'feedMt':round(float(crusher_fresh_feed),2),'freshFeedMt':round(float(crusher_fresh_feed),2),'feedTrips':len(crusher_feed_rows),
+        'recycleMt':0.0,'blendFeedMt':round(float(crusher_blend_feed),2),'blendTrips':len(crusher_blend_rows),
+        'grossThroughputMt':round(float(crusher_feed),2),
+        'directFinalMt':round(float(crusher_fresh_final),2),'outputMt':round(float(crusher_fresh_final),2),
+        'grossOutputMt':round(float(crusher_final),2),'blendOutputMt':round(float(crusher_blend_output),2),
+        'transferToCrusherMt':0.0,'wipMt':0.0,'outputTrips':len(crusher_output_rows),
         'varianceMt':round(float(crusher_feed-crusher_final),2),
-        'recoveryPct':crusher_recovery_value,'outputVsFeedPct':crusher_recovery_value,'finalYieldPct':crusher_recovery_value,
+        'recoveryPct':crusher_recovery_value,'outputVsFeedPct':crusher_recovery_value,
+        'finalYieldPct':round(float(crusher_fresh_final/crusher_fresh_feed*Decimal('100')),2) if crusher_fresh_feed>0 else None,
         'runningHours':round(crusher_run_hours,2) if crusher_run_hours is not None else None,
-        'feedActiveHours':round(crusher_run_hours,2) if crusher_run_hours is not None else None,
-        'outputActiveHours':round(crusher_run_hours,2) if crusher_run_hours is not None else None,
-        'tph':crusher_feed_tph,'feedTph':crusher_feed_tph,'outputTph':crusher_output_tph,
+        'tph':crusher_feed_tph,'feedTph':crusher_feed_tph,'outputTph':None,
         'runningHoursSource':'EQUIPMENT_HMR' if crusher_run_hours is not None else None,
         'avgLeadKm':None,'tripKmPerHour':None,'tonKmPerHour':None,'leadMissingTrips':0,
     })
@@ -997,6 +1032,7 @@ def dashboard_desk(db, user, p):
     _, month_wb_all = authoritative_wb(month_start, end_day)
     month_material, month_days, month_production_days = {}, {}, {}
     month_process_facts,month_process_trips={},{}
+    month_day_facts={}
     month_excluded_keys=set();month_old_stock_excluded=Decimal('0')
     final_codes={'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}
     for w in month_wb_all:
@@ -1007,15 +1043,21 @@ def dashboard_desk(db, user, p):
         if fact_codes.intersection(excluded_codes) and w.movement_key not in month_excluded_keys:
             month_excluded_keys.add(w.movement_key)
             month_old_stock_excluded+=(w.net_kg or Decimal('0'))/Decimal('1000')
+        day_store=month_day_facts.setdefault(key,{})
         seen_month=set()
         for code,qty in facts:
             q=Decimal(qty or 0)
             month_process_facts[code]=month_process_facts.get(code,Decimal('0'))+q
+            day_store[code]=day_store.get(code,Decimal('0'))+q
             if code not in seen_month:
                 month_process_trips[code]=month_process_trips.get(code,0)+1;seen_month.add(code)
-        final_qty=sum((Decimal(qty or 0) for code,qty in facts if code in final_codes),Decimal('0'))
-        if final_qty:
-            month_production_days[key]=month_production_days.get(key,0.0)+float(final_qty)
+    for key,facts in month_day_facts.items():
+        screen_day=facts.get('SCREEN_FINES',Decimal('0'))+facts.get('SCREEN_5_18',Decimal('0'))
+        crusher_gross_day=facts.get('CRUSHER_FINES',Decimal('0'))+facts.get('CRUSHER_5_18',Decimal('0'))
+        crusher_fresh_day,_blend_day=allocate_blended_crusher_output(
+            crusher_gross_day,facts.get('CRUSHER_FEED',Decimal('0')),facts.get('CRUSHER_BLEND_FEED',Decimal('0'))
+        )
+        month_production_days[key]=float(screen_day+crusher_fresh_day)
     for row in materials.values():
         row['monthTonnes'] = month_material.get(row['label'],0.0)
 
@@ -1144,14 +1186,22 @@ def dashboard_desk(db, user, p):
     trend_start=end_day-timedelta(days=6)
     _, trend_wb=authoritative_wb(trend_start,end_day)
     trend_hsd=scoped_range(HsdIssue,trend_start,end_day)
-    seven={str(trend_start+timedelta(days=i)):{'date':str(trend_start+timedelta(days=i)),'trips':0,'tonnes':0.0,'fuel':0.0,'romInput':0.0,'finalProduction':0.0} for i in range(7)}
+    seven={str(trend_start+timedelta(days=i)):{'date':str(trend_start+timedelta(days=i)),'trips':0,'tonnes':0.0,'fuel':0.0,'romInput':0.0,'finalProduction':0.0,'processFacts':{}} for i in range(7)}
     for w in trend_wb:
         r=seven[str(w.operating_date)];r['trips']+=1;r['tonnes']+=tonnes(w)
         for code,qty in tiom_wb_report_contributions(w):
+            q=Decimal(qty or 0)
+            facts=r['processFacts'];facts[code]=facts.get(code,Decimal('0'))+q
             if code == 'ROM':
-                r['romInput']+=float(qty or 0)
-            if code in {'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}:
-                r['finalProduction']+=float(qty or 0)
+                r['romInput']+=float(q)
+    for r in seven.values():
+        facts=r['processFacts']
+        screen_day=facts.get('SCREEN_FINES',Decimal('0'))+facts.get('SCREEN_5_18',Decimal('0'))
+        crusher_gross_day=facts.get('CRUSHER_FINES',Decimal('0'))+facts.get('CRUSHER_5_18',Decimal('0'))
+        crusher_fresh_day,_blend_day=allocate_blended_crusher_output(
+            crusher_gross_day,facts.get('CRUSHER_FEED',Decimal('0')),facts.get('CRUSHER_BLEND_FEED',Decimal('0'))
+        )
+        r['finalProduction']=float(screen_day+crusher_fresh_day)
     for x in trend_hsd:
         if str(x.operating_date) in seven: seven[str(x.operating_date)]['fuel']+=float(x.litres or 0)
     seven_rows=[dict(r,tonnes=round(r['tonnes'],2),fuel=round(r['fuel'],1)) for r in seven.values()]
@@ -1180,20 +1230,26 @@ def dashboard_desk(db, user, p):
         'screenFinesMt':round(float(screen_fines),2),'screenFinesPct':prod_pct(screen_fines),
         'screen518Mt':round(float(screen_518),2),'screen518Pct':prod_pct(screen_518),
         'screenLumpsMt':round(float(screen_lumps),2),'screenLumpsPct':prod_pct(screen_lumps),
-        'screenSpillageMt':round(float(screen_spillage),2),'screenSpillagePct':prod_pct(screen_spillage),
+        'spillageToCrusherMt':round(float(spillage_to_crusher),2),'spillageToCrusherPct':prod_pct(spillage_to_crusher),
+        'spillageRecycleMt':round(float(spillage_recycle),2),'spillageRecyclePct':prod_pct(spillage_recycle),
+        'spillageWipMt':round(float(spillage_wip),2),'spillageWipPct':prod_pct(spillage_wip),
         'screenIntermediateMt':round(float(screen_intermediate),2),'screenIntermediatePct':prod_pct(screen_intermediate),
         'screenDirectMt':round(float(screen_direct),2),'screenDirectPct':prod_pct(screen_direct),
         'screenAccountedMt':round(float(screen_accounted),2),'screenAccountedPct':prod_pct(screen_accounted),
         'crusherFinesMt':round(float(crusher_fines),2),'crusherFinesPct':prod_pct(crusher_fines),
         'crusherCloMt':round(float(crusher_clo),2),'crusherCloPct':prod_pct(crusher_clo),
-        'crusherFinalMt':round(float(crusher_final),2),'crusherFinalPct':prod_pct(crusher_final),
+        'crusherGrossOutputMt':round(float(crusher_final),2),'crusherGrossOutputPct':prod_pct(crusher_final),
+        'crusherFreshOutputMt':round(float(crusher_fresh_final),2),'crusherFreshOutputPct':prod_pct(crusher_fresh_final),
+        'crusherBlendOutputMt':round(float(crusher_blend_output),2),'crusherBlendOutputPct':prod_pct(crusher_blend_output),
         'finalProductionMt':round(float(final_production),2),'finalRecoveryPct':prod_pct(final_production),
         'crusherFeedMt':round(float(crusher_feed),2),'crusherFeedPct':prod_pct(crusher_feed),
+        'crusherFreshFeedMt':round(float(crusher_fresh_feed),2),'crusherFreshFeedPct':prod_pct(crusher_fresh_feed),
+        'crusherBlendFeedMt':round(float(crusher_blend_feed),2),'crusherBlendFeedPct':prod_pct(crusher_blend_feed),
         'crusherRecoveryPct':round(crusher_recovery,2) if crusher_recovery is not None else None,
         'oldStockExcludedMt':round(float(old_stock_excluded),2),'oldStockTrips':old_stock_trips,
         'oldStockVsRomPct':prod_pct(old_stock_excluded),
         'balanceMt':round(float(production_balance),2),'balancePct':prod_pct(production_balance),
-        'note':'Fresh ROM is the 100% mine-production base. Plant feed is reported separately and may include prior-stock rehandling. Final Production = Screen Fines + Screen 5-18 + Crusher Fines + Crusher CLO (5-18). Screen CLO/Lumps 10-40 and spillage are intermediate streams. RH / old-stock movements are excluded from new production.'
+        'note':'Fresh ROM is the 100% mine-production base. Genuine MSP lumps and large spillage sent to Crusher are fresh intermediate feed. CLO 10-40 is company old-stock blend, not NMTPL production. Crusher gross output is allocated pro-rata between fresh feed and old-stock blend because the mixed final product cannot be traced by feed stream after crushing. Same-MSP spillage is recycle and increases throughput/TPH, not fresh production.'
     }
     fuel_per_tonne=float(hsd_litres)/wb_tonnes if wb_tonnes else 0.0
     fuel_per_trip=float(hsd_litres)/wb_trips if wb_trips else 0.0
@@ -1307,6 +1363,18 @@ def dashboard_desk(db, user, p):
     month_rom_input=month_process_facts.get('ROM',Decimal('0'))
     if month_rom_input<=0:
         month_rom_input=month_process_facts.get('MSP_FEED',Decimal('0'))
+    month_screen_direct=month_process_facts.get('SCREEN_FINES',Decimal('0'))+month_process_facts.get('SCREEN_5_18',Decimal('0'))
+    month_crusher_gross=month_process_facts.get('CRUSHER_FINES',Decimal('0'))+month_process_facts.get('CRUSHER_5_18',Decimal('0'))
+    month_crusher_fresh,month_blend_output=allocate_blended_crusher_output(
+        month_crusher_gross,
+        month_process_facts.get('CRUSHER_FEED',Decimal('0')),
+        month_process_facts.get('CRUSHER_BLEND_FEED',Decimal('0'))
+    )
+    month_final_production=month_screen_direct+month_crusher_fresh
+    old_stock_blend_10_40=production_facts.get('OLD_STOCK_BLEND_10_40',Decimal('0'))
+    month_old_stock_blend_10_40=month_process_facts.get('OLD_STOCK_BLEND_10_40',Decimal('0'))
+    other_old_stock_excluded=max(Decimal('0'),old_stock_excluded-old_stock_blend_10_40)
+    month_other_old_stock_excluded=max(Decimal('0'),month_old_stock_excluded-month_old_stock_blend_10_40)
     period_rom_trips=production_fact_trips.get('ROM',0)
     if not period_rom_trips and rom_basis=='MSP_FEED_FALLBACK':
         period_rom_trips=production_fact_trips.get('MSP_FEED',0)
@@ -1328,17 +1396,26 @@ def dashboard_desk(db, user, p):
         _prod_material_row('Fresh ROM',rom_input,period_rom_trips,month_rom_input,month_rom_trips,100.0 if rom_input>0 else None,'INPUT'),
         _prod_material_row('Screen Fines',screen_fines,production_fact_trips.get('SCREEN_FINES',0),month_process_facts.get('SCREEN_FINES',0),month_process_trips.get('SCREEN_FINES',0)),
         _prod_material_row('Screen 5-18',screen_518,production_fact_trips.get('SCREEN_5_18',0),month_process_facts.get('SCREEN_5_18',0),month_process_trips.get('SCREEN_5_18',0)),
-        _prod_material_row('Screen CLO / Lumps 10-40 (Intermediate)',screen_lumps,production_fact_trips.get('LUMPS_FROM_SCREEN',0),month_process_facts.get('LUMPS_FROM_SCREEN',0),month_process_trips.get('LUMPS_FROM_SCREEN',0),prod_pct(screen_lumps),'INTERMEDIATE'),
-        _prod_material_row('Crusher Fines',crusher_fines,production_fact_trips.get('CRUSHER_FINES',0),month_process_facts.get('CRUSHER_FINES',0),month_process_trips.get('CRUSHER_FINES',0)),
-        _prod_material_row('Crusher CLO (5-18)',crusher_clo,production_fact_trips.get('CRUSHER_5_18',0),month_process_facts.get('CRUSHER_5_18',0),month_process_trips.get('CRUSHER_5_18',0)),
-        _prod_material_row('Final Production',final_production,
-            sum(production_fact_trips.get(c,0) for c in final_output_codes),
-            sum(month_process_facts.get(c,Decimal('0')) for c in final_output_codes),
-            sum(month_process_trips.get(c,0) for c in final_output_codes),
+        _prod_material_row('MSP Lumps → Crusher (Fresh Intermediate)',screen_lumps,production_fact_trips.get('LUMPS_FROM_SCREEN',0),month_process_facts.get('LUMPS_FROM_SCREEN',0),month_process_trips.get('LUMPS_FROM_SCREEN',0),prod_pct(screen_lumps),'INTERMEDIATE'),
+        _prod_material_row('Spillage → Crusher (Fresh Intermediate)',spillage_to_crusher,production_fact_trips.get('SPILLAGE_TO_CRUSHER',0),month_process_facts.get('SPILLAGE_TO_CRUSHER',0),month_process_trips.get('SPILLAGE_TO_CRUSHER',0),prod_pct(spillage_to_crusher),'INTERMEDIATE'),
+        _prod_material_row('Spillage Re-screen / Recycle',spillage_recycle,production_fact_trips.get('SPILLAGE_RECYCLE_MSP',0),month_process_facts.get('SPILLAGE_RECYCLE_MSP',0),month_process_trips.get('SPILLAGE_RECYCLE_MSP',0),prod_pct(spillage_recycle),'INTERMEDIATE'),
+        _prod_material_row('Crusher Fines (Gross Output)',crusher_fines,production_fact_trips.get('CRUSHER_FINES',0),month_process_facts.get('CRUSHER_FINES',0),month_process_trips.get('CRUSHER_FINES',0)),
+        _prod_material_row('Crusher CLO 5-18 (Gross Output)',crusher_clo,production_fact_trips.get('CRUSHER_5_18',0),month_process_facts.get('CRUSHER_5_18',0),month_process_trips.get('CRUSHER_5_18',0)),
+        _prod_material_row('CLO 10-40 Old Stock Blend → Crusher',old_stock_blend_10_40,production_fact_trips.get('OLD_STOCK_BLEND_10_40',0),month_old_stock_blend_10_40,month_process_trips.get('OLD_STOCK_BLEND_10_40',0),prod_pct(old_stock_blend_10_40),'EXCLUDED'),
+        _prod_material_row('Old-Stock Share Allocated in Crusher Output',crusher_blend_output,0,month_blend_output,0,prod_pct(crusher_blend_output),'EXCLUDED'),
+        _prod_material_row('Fresh Crusher Output (Net of Blend)',crusher_fresh_final,
+            production_fact_trips.get('CRUSHER_FINES',0)+production_fact_trips.get('CRUSHER_5_18',0),
+            month_crusher_fresh,
+            month_process_trips.get('CRUSHER_FINES',0)+month_process_trips.get('CRUSHER_5_18',0),
+            prod_pct(crusher_fresh_final),'NET'),
+        _prod_material_row('Final Fresh Production',final_production,
+            production_fact_trips.get('SCREEN_FINES',0)+production_fact_trips.get('SCREEN_5_18',0)+production_fact_trips.get('CRUSHER_FINES',0)+production_fact_trips.get('CRUSHER_5_18',0),
+            month_final_production,
+            month_process_trips.get('SCREEN_FINES',0)+month_process_trips.get('SCREEN_5_18',0)+month_process_trips.get('CRUSHER_FINES',0)+month_process_trips.get('CRUSHER_5_18',0),
             prod_pct(final_production),'TOTAL'),
-        _prod_material_row('RH / Old Stock Movement (Excluded)',old_stock_excluded,old_stock_trips,
-            month_old_stock_excluded,len(month_excluded_keys),
-            prod_pct(old_stock_excluded),'EXCLUDED')
+        _prod_material_row('Other RH / Old Stock Movement (Excluded)',other_old_stock_excluded,max(0,old_stock_trips-production_fact_trips.get('OLD_STOCK_BLEND_10_40',0)),
+            month_other_old_stock_excluded,max(0,len(month_excluded_keys)-month_process_trips.get('OLD_STOCK_BLEND_10_40',0)),
+            prod_pct(other_old_stock_excluded),'EXCLUDED')
     ]
 
     source_rows=[{'label':r['label'],'trips':r['trips'],'tonnes':round(r['tonnes'],2),'avgPayload':round(r['tonnes']/r['trips'],2) if r['trips'] else 0,
@@ -1638,7 +1715,9 @@ def dashboard_desk(db, user, p):
             'weather':'Site weather source/coordinates are not configured.'
         },
         'notes':[
-            'WB remains the authoritative movement source, but total WB tonnes is not the primary production KPI. Fresh ROM is the 100% mine-production base; plant feed is shown separately because it can include prior-stock rehandling.',
+            'WB remains the authoritative movement source, but total WB tonnes is not the primary production KPI. Fresh ROM is the 100% mine-production base; plant throughput and rehandling are reported separately.',
+            'CLO 10-40 is company old-stock blending material. It is included in physical Crusher Feed/TPH but excluded from NMTPL fresh production. Its share of mixed crusher output is allocated pro-rata by feed tonnes.',
+            'Genuine MSP lumps and large spillage sent to Crusher are fresh intermediate feed. Spillage sent back to an MSP is internal recycle: it increases gross plant throughput/TPH but not fresh feed or production.',
             'RH / old-stock movements, including Project Area / PA SRF material and ROM drawn from stock, are excluded from new-production and recovery KPIs.',
             'Trips Per Hour means trips divided by active clock-hour buckets. Lead-adjusted haulage also reports Trip-km/hr and Ton-km/hr; unresolved lead is shown, never guessed.',
             'MIS Manual Entry panels use SUBMITTED driver reports only. Draft reports are shown as pending counts and are excluded from production until Submit Shift Report is used.',
