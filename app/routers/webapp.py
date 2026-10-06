@@ -1208,6 +1208,42 @@ def dashboard_desk(db, user, p):
         mat_rows.append({'label':row['label'],'trips':row['trips'],'tonnes':round(row['tonnes'],2),'monthTonnes':round(row.get('monthTonnes',0),2),
                          'avgPayload':round(row['tonnes']/row['trips'],2) if row['trips'] else 0,
                          'pct':round(row['tonnes']/wb_tonnes*100,1) if wb_tonnes else 0})
+    month_rom_input=month_process_facts.get('MSP_FEED',Decimal('0'))
+    if month_rom_input<=0:
+        month_rom_input=month_process_facts.get('ROM',Decimal('0'))+month_process_facts.get('ROM_STOCK_TO_PLANT_FEED',Decimal('0'))
+    period_rom_trips=production_fact_trips.get('MSP_FEED',0)
+    if not period_rom_trips and rom_basis=='ROM_MOVEMENT_FALLBACK':
+        period_rom_trips=production_fact_trips.get('ROM',0)+production_fact_trips.get('ROM_STOCK_TO_PLANT_FEED',0)
+    month_rom_trips=month_process_trips.get('MSP_FEED',0)
+    if not month_rom_trips:
+        month_rom_trips=month_process_trips.get('ROM',0)+month_process_trips.get('ROM_STOCK_TO_PLANT_FEED',0)
+
+    def _prod_material_row(label,qty,trips,month_qty,month_trips,pct_value=None,kind='OUTPUT'):
+        q=Decimal(qty or 0); mq=Decimal(month_qty or 0)
+        return {
+            'label':label,'kind':kind,'trips':int(trips or 0),'tonnes':round(float(q),2),
+            'monthTonnes':round(float(mq),2),'avgPayload':round(float(q)/trips,2) if trips else 0,
+            'monthTrips':int(month_trips or 0),
+            'pct':pct_value if pct_value is not None else prod_pct(q),
+            'excluded':kind=='EXCLUDED'
+        }
+
+    production_material_rows=[
+        _prod_material_row('ROM Feed (Input)',rom_input,period_rom_trips,month_rom_input,month_rom_trips,100.0 if rom_input>0 else None,'INPUT'),
+        _prod_material_row('Screen Fines',screen_fines,production_fact_trips.get('SCREEN_FINES',0),month_process_facts.get('SCREEN_FINES',0),month_process_trips.get('SCREEN_FINES',0)),
+        _prod_material_row('Screen 5-18',screen_518,production_fact_trips.get('SCREEN_5_18',0),month_process_facts.get('SCREEN_5_18',0),month_process_trips.get('SCREEN_5_18',0)),
+        _prod_material_row('Crusher Fines',crusher_fines,production_fact_trips.get('CRUSHER_FINES',0),month_process_facts.get('CRUSHER_FINES',0),month_process_trips.get('CRUSHER_FINES',0)),
+        _prod_material_row('Crusher CLO (5-18)',crusher_clo,production_fact_trips.get('CRUSHER_5_18',0),month_process_facts.get('CRUSHER_5_18',0),month_process_trips.get('CRUSHER_5_18',0)),
+        _prod_material_row('Final Production',final_production,
+            sum(production_fact_trips.get(c,0) for c in final_output_codes),
+            sum(month_process_facts.get(c,Decimal('0')) for c in final_output_codes),
+            sum(month_process_trips.get(c,0) for c in final_output_codes),
+            prod_pct(final_production),'TOTAL'),
+        _prod_material_row('Old Stock Re-handled (Excluded)',old_stock_excluded,old_stock_trips,
+            month_process_facts.get('PROJECT_AREA_FINES_TO_STACK',0),month_process_trips.get('PROJECT_AREA_FINES_TO_STACK',0),
+            prod_pct(old_stock_excluded),'EXCLUDED')
+    ]
+
     source_rows=[{'label':r['label'],'trips':r['trips'],'tonnes':round(r['tonnes'],2),'avgPayload':round(r['tonnes']/r['trips'],2) if r['trips'] else 0,
                   'pct':round(r['tonnes']/wb_tonnes*100,1) if wb_tonnes else 0} for r in sorted(sources.values(),key=lambda x:x['tonnes'],reverse=True)]
     dest_rows=[{'label':r['label'],'trips':r['trips'],'tonnes':round(r['tonnes'],2),'avgPayload':round(r['tonnes']/r['trips'],2) if r['trips'] else 0,
