@@ -848,9 +848,12 @@ def dashboard_desk(db, user, p):
 
     msp_feed_rows=_unique_wb_rows(production_fact_rows.get('MSP_FEED',[]))
     screen_final_rows=_unique_wb_rows(production_fact_rows.get('SCREEN_FINES',[]),production_fact_rows.get('SCREEN_5_18',[]))
-    screen_intermediate_rows=_unique_wb_rows(production_fact_rows.get('LUMPS_FROM_SCREEN',[]),production_fact_rows.get('SPILLAGE',[]))
-    screen_output_rows=_unique_wb_rows(screen_final_rows,screen_intermediate_rows)
+    msp_transfer_rows=_unique_wb_rows(production_fact_rows.get('LUMPS_FEED_TO_CRUSHER',[]),production_fact_rows.get('SPILLAGE_TO_CRUSHER',[]))
+    msp_recycle_rows=_unique_wb_rows(production_fact_rows.get('SPILLAGE_RECYCLE_MSP',[]))
+    msp_wip_rows=_unique_wb_rows(production_fact_rows.get('SPILLAGE_WIP',[]))
+    screen_output_rows=_unique_wb_rows(screen_final_rows,msp_transfer_rows,msp_wip_rows)
     crusher_feed_rows=_unique_wb_rows(production_fact_rows.get('CRUSHER_FEED',[]))
+    crusher_blend_rows=_unique_wb_rows(production_fact_rows.get('CRUSHER_BLEND_FEED',[]))
     crusher_output_rows=_unique_wb_rows(production_fact_rows.get('CRUSHER_FINES',[]),production_fact_rows.get('CRUSHER_5_18',[]))
 
     def _msp_plant(row,side):
@@ -895,53 +898,64 @@ def dashboard_desk(db, user, p):
 
     feed_by_msp=_group_by_msp(msp_feed_rows,'DESTINATION')
     final_by_msp=_group_by_msp(screen_final_rows,'SOURCE')
-    intermediate_by_msp=_group_by_msp(screen_intermediate_rows,'SOURCE')
-    msp_labels=sorted(set(feed_by_msp)|set(final_by_msp)|set(intermediate_by_msp),
+    transfer_by_msp=_group_by_msp(msp_transfer_rows,'SOURCE')
+    recycle_by_msp=_group_by_msp(msp_recycle_rows,'DESTINATION')
+    wip_by_msp=_group_by_msp(msp_wip_rows,'SOURCE')
+    msp_labels=sorted(set(feed_by_msp)|set(final_by_msp)|set(transfer_by_msp)|set(recycle_by_msp)|set(wip_by_msp),
                       key=lambda x:(x=='MSP / Unmapped',x))
     plant_performance=[]
     for label in msp_labels:
         feed_rows=_unique_wb_rows(feed_by_msp.get(label,[]))
         final_rows=_unique_wb_rows(final_by_msp.get(label,[]))
-        intermediate_rows=_unique_wb_rows(intermediate_by_msp.get(label,[]))
-        output_rows=_unique_wb_rows(final_rows,intermediate_rows)
+        transfer_rows=_unique_wb_rows(transfer_by_msp.get(label,[]))
+        recycle_rows=_unique_wb_rows(recycle_by_msp.get(label,[]))
+        wip_rows=_unique_wb_rows(wip_by_msp.get(label,[]))
+        output_rows=_unique_wb_rows(final_rows,transfer_rows,wip_rows)
         feed_mt=sum(tonnes(r) for r in feed_rows)
+        recycle_mt=sum(tonnes(r) for r in recycle_rows)
+        gross_throughput=feed_mt+recycle_mt
         final_mt=sum(tonnes(r) for r in final_rows)
-        intermediate_mt=sum(tonnes(r) for r in intermediate_rows)
-        output_mt=sum(tonnes(r) for r in output_rows)
+        transfer_mt=sum(tonnes(r) for r in transfer_rows)
+        wip_mt=sum(tonnes(r) for r in wip_rows)
+        accounted_mt=final_mt+transfer_mt+wip_mt
         run_hours=_plant_run_hours(label)
-        feed_tph=round(feed_mt/run_hours,2) if run_hours and run_hours>0 else None
-        output_tph=round(output_mt/run_hours,2) if run_hours and run_hours>0 else None
-        recovery=round(output_mt/feed_mt*100,2) if feed_mt>0 else None
+        tph=round(gross_throughput/run_hours,2) if run_hours and run_hours>0 else None
+        recovery=round(final_mt/feed_mt*100,2) if feed_mt>0 else None
         plant_performance.append({
-            'plant':label,'feedMt':round(feed_mt,2),'feedTrips':len(feed_rows),
-            'directFinalMt':round(final_mt,2),'intermediateMt':round(intermediate_mt,2),
-            'outputMt':round(output_mt,2),'outputTrips':len(output_rows),
-            'varianceMt':round(feed_mt-output_mt,2),
-            'recoveryPct':recovery,'outputVsFeedPct':recovery,'finalYieldPct':round(final_mt/feed_mt*100,2) if feed_mt>0 else None,
+            'plant':label,'plantType':'MSP',
+            'feedMt':round(feed_mt,2),'freshFeedMt':round(feed_mt,2),'feedTrips':len(feed_rows),
+            'recycleMt':round(recycle_mt,2),'blendFeedMt':0.0,
+            'grossThroughputMt':round(gross_throughput,2),
+            'directFinalMt':round(final_mt,2),'outputMt':round(final_mt,2),'grossOutputMt':round(accounted_mt,2),
+            'transferToCrusherMt':round(transfer_mt,2),'wipMt':round(wip_mt,2),'outputTrips':len(output_rows),
+            'varianceMt':round(feed_mt-accounted_mt,2),
+            'recoveryPct':recovery,'outputVsFeedPct':round(accounted_mt/feed_mt*100,2) if feed_mt>0 else None,
+            'finalYieldPct':recovery,
             'runningHours':round(run_hours,2) if run_hours is not None else None,
-            'feedActiveHours':round(run_hours,2) if run_hours is not None else None,
-            'outputActiveHours':round(run_hours,2) if run_hours is not None else None,
-            'tph':feed_tph,'feedTph':feed_tph,'outputTph':output_tph,
+            'tph':tph,'feedTph':tph,'outputTph':None,
             'runningHoursSource':'EQUIPMENT_HMR' if run_hours is not None else None,
             'avgLeadKm':None,'tripKmPerHour':None,'tonKmPerHour':None,'leadMissingTrips':0,
         })
 
     crusher_feed=crusher_feed_fact
+    crusher_fresh_feed=max(Decimal('0'),crusher_feed-crusher_blend_feed)
     crusher_recovery=(float(crusher_final/crusher_feed*Decimal('100'))) if crusher_feed>0 else None
     crusher_run_hours=_plant_run_hours('Crusher')
     crusher_feed_tph=round(float(crusher_feed)/crusher_run_hours,2) if crusher_run_hours and crusher_run_hours>0 else None
-    crusher_output_tph=round(float(crusher_final)/crusher_run_hours,2) if crusher_run_hours and crusher_run_hours>0 else None
     crusher_recovery_value=round(crusher_recovery,2) if crusher_recovery is not None else None
     plant_performance.append({
-        'plant':'Crusher','feedMt':round(float(crusher_feed),2),'feedTrips':len(crusher_feed_rows),
-        'directFinalMt':round(float(crusher_final),2),'intermediateMt':0.0,
-        'outputMt':round(float(crusher_final),2),'outputTrips':len(crusher_output_rows),
+        'plant':'Crusher','plantType':'CRUSHER',
+        'feedMt':round(float(crusher_fresh_feed),2),'freshFeedMt':round(float(crusher_fresh_feed),2),'feedTrips':len(crusher_feed_rows),
+        'recycleMt':0.0,'blendFeedMt':round(float(crusher_blend_feed),2),'blendTrips':len(crusher_blend_rows),
+        'grossThroughputMt':round(float(crusher_feed),2),
+        'directFinalMt':round(float(crusher_fresh_final),2),'outputMt':round(float(crusher_fresh_final),2),
+        'grossOutputMt':round(float(crusher_final),2),'blendOutputMt':round(float(crusher_blend_output),2),
+        'transferToCrusherMt':0.0,'wipMt':0.0,'outputTrips':len(crusher_output_rows),
         'varianceMt':round(float(crusher_feed-crusher_final),2),
-        'recoveryPct':crusher_recovery_value,'outputVsFeedPct':crusher_recovery_value,'finalYieldPct':crusher_recovery_value,
+        'recoveryPct':crusher_recovery_value,'outputVsFeedPct':crusher_recovery_value,
+        'finalYieldPct':round(float(crusher_fresh_final/crusher_fresh_feed*Decimal('100')),2) if crusher_fresh_feed>0 else None,
         'runningHours':round(crusher_run_hours,2) if crusher_run_hours is not None else None,
-        'feedActiveHours':round(crusher_run_hours,2) if crusher_run_hours is not None else None,
-        'outputActiveHours':round(crusher_run_hours,2) if crusher_run_hours is not None else None,
-        'tph':crusher_feed_tph,'feedTph':crusher_feed_tph,'outputTph':crusher_output_tph,
+        'tph':crusher_feed_tph,'feedTph':crusher_feed_tph,'outputTph':None,
         'runningHoursSource':'EQUIPMENT_HMR' if crusher_run_hours is not None else None,
         'avgLeadKm':None,'tripKmPerHour':None,'tonKmPerHour':None,'leadMissingTrips':0,
     })
