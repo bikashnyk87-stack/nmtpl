@@ -1186,14 +1186,22 @@ def dashboard_desk(db, user, p):
     trend_start=end_day-timedelta(days=6)
     _, trend_wb=authoritative_wb(trend_start,end_day)
     trend_hsd=scoped_range(HsdIssue,trend_start,end_day)
-    seven={str(trend_start+timedelta(days=i)):{'date':str(trend_start+timedelta(days=i)),'trips':0,'tonnes':0.0,'fuel':0.0,'romInput':0.0,'finalProduction':0.0} for i in range(7)}
+    seven={str(trend_start+timedelta(days=i)):{'date':str(trend_start+timedelta(days=i)),'trips':0,'tonnes':0.0,'fuel':0.0,'romInput':0.0,'finalProduction':0.0,'processFacts':{}} for i in range(7)}
     for w in trend_wb:
         r=seven[str(w.operating_date)];r['trips']+=1;r['tonnes']+=tonnes(w)
         for code,qty in tiom_wb_report_contributions(w):
+            q=Decimal(qty or 0)
+            facts=r['processFacts'];facts[code]=facts.get(code,Decimal('0'))+q
             if code == 'ROM':
-                r['romInput']+=float(qty or 0)
-            if code in {'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}:
-                r['finalProduction']+=float(qty or 0)
+                r['romInput']+=float(q)
+    for r in seven.values():
+        facts=r['processFacts']
+        screen_day=facts.get('SCREEN_FINES',Decimal('0'))+facts.get('SCREEN_5_18',Decimal('0'))
+        crusher_gross_day=facts.get('CRUSHER_FINES',Decimal('0'))+facts.get('CRUSHER_5_18',Decimal('0'))
+        crusher_fresh_day,_blend_day=allocate_blended_crusher_output(
+            crusher_gross_day,facts.get('CRUSHER_FEED',Decimal('0')),facts.get('CRUSHER_BLEND_FEED',Decimal('0'))
+        )
+        r['finalProduction']=float(screen_day+crusher_fresh_day)
     for x in trend_hsd:
         if str(x.operating_date) in seven: seven[str(x.operating_date)]['fuel']+=float(x.litres or 0)
     seven_rows=[dict(r,tonnes=round(r['tonnes'],2),fuel=round(r['fuel'],1)) for r in seven.values()]
