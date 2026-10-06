@@ -130,10 +130,24 @@ def wb_report_contributions(wb: WbMovement):
     if 'UNSCREEN' in mat and ('5 18' in mat or '5-18' in str(wb.material_name or '')):
         return [('UNSCREENED_5_18', qty)]
 
-    # 5-18 / CLO products. TIOM treats Crusher CLO as the crusher 5-18 final product.
-    is_5_18 = ('5 18' in mat or '5-18' in str(wb.material_name or '') or re.search(r'(^| )CLO( |$)', mat))
+    # Screen CLO 10-40 / lumps are INTERMEDIATE screen output, not Crusher CLO.
+    # If the same movement goes to the crusher it is also an actual crusher-feed movement.
+    raw_name = str(wb.material_name or '').upper()
+    is_clo = bool(re.search(r'(^| )CLO( |$)', mat))
+    is_10_40 = ('10 40' in mat or '10-40' in raw_name)
+    if is_clo and is_10_40:
+        out.append(('LUMPS_FROM_SCREEN', qty))
+        if 'CRUSH' in dst or 'OCP' in dst:
+            out.append(('LUMPS_FEED_TO_CRUSHER', qty))
+            out.append(('CRUSHER_FEED', qty))
+        return out
+
+    # 5-18 products. Source/material suffix decides Screen vs Crusher;
+    # CLO by itself must never imply Crusher.
+    is_5_18 = ('5 18' in mat or '5-18' in raw_name)
     if is_5_18:
-        if 'CRUSH' in src or 'OCP' in src or re.search(r'(^| )CLO( |$)', mat):
+        crusher_origin = ('CRUSH' in src or 'OCP' in src or 'CRUS' in mat)
+        if crusher_origin:
             out.append(('CRUSHER_5_18', qty))
         elif 'RE SCREEN' in src or 'RESCREEN' in src:
             out.append(('RE_SCREEN_5_18', qty))
@@ -158,27 +172,31 @@ def wb_report_contributions(wb: WbMovement):
         return out
 
     if 'LUMP' in mat:
-        if 'STOCK' in src and ('CRUSH' in dst or 'OCP' in dst):
-            return [('LUMPS_TO_CRUSHER_FROM_STOCK', qty)]
-        if 'CRUSH' in dst or 'OCP' in dst:
-            return [('LUMPS_FEED_TO_CRUSHER', qty)]
         # Keep raw ROM lumps from mine/excavation separate from screen output.
         mine_source = any(x in src for x in ('HA','RL','QUARRY','PIT','MINE')) and not any(x in src for x in ('MSP','SCREEN','PLANT','STOCK'))
         if 'ROM' in mat and mine_source:
             return [('ROM_LUMPS', qty)]
+        if 'STOCK' in src and ('CRUSH' in dst or 'OCP' in dst):
+            return [('LUMPS_TO_CRUSHER_FROM_STOCK', qty), ('CRUSHER_FEED', qty)]
+        if 'CRUSH' in dst or 'OCP' in dst:
+            return [('LUMPS_FROM_SCREEN', qty), ('LUMPS_FEED_TO_CRUSHER', qty), ('CRUSHER_FEED', qty)]
         return [('LUMPS_FROM_SCREEN', qty)]
 
     if 'SUBGRADE' in mat or re.search(r'(^| )SG( |$)', mat):
         return [('SUBGRADE_FEED_PLANT' if any(x in dst for x in ('FEED','PLANT','MSP')) else 'SUBGRADE_DUMP', qty)]
 
     if 'ROM' in mat:
-        if 'STOCK' in src and any(x in dst for x in ('PLANT','FEED','MSP')):
-            return [('ROM_STOCK_TO_PLANT_FEED', qty)]
+        if 'STOCK' in src and any(x in dst for x in ('PLANT','FEED','MSP','SCREEN')):
+            return [('ROM_STOCK_TO_PLANT_FEED', qty), ('MSP_FEED', qty)]
         if 'STOCK' in dst:
             return [('ROM_STOCK_YARD', qty)]
+        if any(x in dst for x in ('PLANT','FEED','MSP','SCREEN')):
+            return [('ROM', qty), ('MSP_FEED', qty)]
         return [('ROM', qty)]
 
     if 'SPILL' in mat or 'SPILL' in dst:
+        if 'CRUSH' in dst or 'OCP' in dst:
+            return [('SPILLAGE', qty), ('CRUSHER_FEED', qty)]
         return [('SPILLAGE', qty)]
 
     if '5 40' in mat or '5-40' in str(wb.material_name or ''):
