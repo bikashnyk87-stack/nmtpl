@@ -696,7 +696,7 @@ def dashboard_desk(db, user, p):
         src_txt=_wb_side_text(row,'SOURCE')
         dst_txt=_wb_side_text(row,'DESTINATION')
         source_is_stock=any(x in src_txt for x in ('STOCK','STACK'))
-        source_is_project=('PROJECT' in src_txt or (' PA ' in f' {src_txt} ' and 'FINE' in src_txt))
+        source_is_project=('FINE' in mat and (('PROJECT' in src_txt and 'FINE' in src_txt) or (' PA ' in f' {src_txt} ' and 'FINE' in src_txt)))
 
         # Canonical master semantics override ambiguous raw labels: a movement
         # out of stock/project area is rehandling, never fresh production.
