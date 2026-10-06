@@ -60,6 +60,13 @@ class TiomProductionClassificationTests(unittest.TestCase):
         self.assertIn("MSP_FEED", codes)
         self.assertNotIn("ROM_REHANDLED", codes)
 
+    def test_near_project_area_rom_is_fresh_production_not_rehandling(self):
+        codes = contribution_codes(wb("ROM Thakurani", "NEAR PROJECT AREA/RL-710", "MSP-6", "100"))
+        self.assertIn("ROM", codes)
+        self.assertIn("MSP_FEED", codes)
+        self.assertNotIn("ROM_REHANDLED", codes)
+        self.assertNotIn("PRODUCT_REHANDLED", codes)
+
     def test_fresh_rom_to_stock_still_counts_fresh_rom(self):
         codes = contribution_codes(wb("ROM Thakurani", "BGA/RL-790", "STACK16", "100"))
         self.assertIn("ROM", codes)
