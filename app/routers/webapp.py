@@ -8,6 +8,7 @@ import json
 import re
 import logging
 import base64
+from time import perf_counter
 from email.message import EmailMessage
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, File, Form
@@ -503,6 +504,7 @@ def _money(value):
 
 
 def dashboard_desk(db, user, p):
+    dash_started = perf_counter()
     require(user, 'DASHBOARD')
     live_day, live_shift, _ = operating_context()
     mode = str(p.get('mode') or 'CURRENT_SHIFT').upper()
@@ -583,7 +585,16 @@ def dashboard_desk(db, user, p):
     hsd = scoped_range(HsdIssue, start_day, end_day)
     active_batch, wb_all = authoritative_wb(start_day, end_day)
 
-    wb_canonical_all = canonicalize_wb_rows(db, wb_all)
+    # Dashboard is a read path. Reuse persisted canonical WB mappings in one
+    # query instead of re-canonicalizing every movement on every refresh.
+    wb_keys_all = [w.movement_key for w in wb_all]
+    canonical_rows = list(db.scalars(
+        select(TiomWbCanonical).where(TiomWbCanonical.movement_key.in_(wb_keys_all))
+    )) if wb_keys_all else []
+    wb_canonical_all = {x.movement_key: x for x in canonical_rows}
+    missing_canonical = [w for w in wb_all if w.movement_key not in wb_canonical_all]
+    if missing_canonical:
+        wb_canonical_all.update(canonicalize_wb_rows(db, missing_canonical))
     source_options = location_options(db, 'SOURCE')
     destination_options = location_options(db, 'DESTINATION')
     available_materials = sorted({material_label(w) for w in wb_all})
@@ -1566,6 +1577,10 @@ def dashboard_desk(db, user, p):
     for r in sorted(screen_rows.values(),key=lambda x:x['tonnes'],reverse=True):
         screen_out.append(dict(r,tonnes=round(r['tonnes'],2),recovery=None))
 
+    log.info(
+        'TIOM dashboard built in %.2fs mode=%s period=%s..%s shift=%s wb=%d canonical_missing=%d',
+        perf_counter()-dash_started, mode, start_day, end_day, selected_shift, len(wb_all), len(missing_canonical)
+    )
     return {
         'fromDate':start_day,'toDate':end_day,'shift':selected_shift,'mode':mode,'materialFilter':material_filter,'sourceFilter':source_filter,'destinationFilter':destination_filter,'vehicleFilter':vehicle_filter,'availableMaterials':available_materials,'availableSources':available_sources,'availableDestinations':available_destinations,'availableVehicles':available_vehicles,
         'kpis':{
