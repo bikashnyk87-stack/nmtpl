@@ -146,10 +146,9 @@ function dashProductionMaterialTable(rows){
 function dashPlantPerformanceTable(rows){
   rows=rows||[];if(!rows.length)return'<div class="emptyviz">No plant feed/output data yet.</div>';
   return `<div class="compact-table plant-performance-table"><table><thead><tr>
-    <th>Plant</th><th>Feed T</th><th>Feed Trips</th><th>Feed TPH</th><th>Direct Final T</th><th>Intermediate T</th><th>Total Output T</th><th>Output TPH</th><th>Output / Feed</th><th>Avg Lead KM</th><th>Trip-km/Hr</th><th>Ton-km/Hr</th>
-  </tr></thead><tbody>${rows.map(x=>`<tr><td><b>${esc(x.plant)}</b>${Number(x.leadMissingTrips||0)>0?'<small>'+num(x.leadMissingTrips)+' lead pending</small>':''}</td><td>${num(x.feedMt,1)}</td><td>${num(x.feedTrips)}</td><td>${x.feedTph==null?'—':num(x.feedTph,2)}</td><td>${num(x.directFinalMt,1)}</td><td>${num(x.intermediateMt,1)}</td><td>${num(x.outputMt,1)}</td><td>${x.outputTph==null?'—':num(x.outputTph,2)}</td><td>${x.outputVsFeedPct==null?'—':num(x.outputVsFeedPct,1)+'%'}</td><td>${x.avgLeadKm==null?'—':num(x.avgLeadKm,3)}</td><td>${x.tripKmPerHour==null?'—':num(x.tripKmPerHour,2)}</td><td>${x.tonKmPerHour==null?'—':num(x.tonKmPerHour,1)}</td></tr>`).join('')}</tbody></table></div>`;
+    <th>Plant</th><th>Feed T</th><th>Output T</th><th>Intermediate T</th><th>Variance / WIP T</th><th>Recovery %</th><th>Running Hrs</th><th>TPH</th>
+  </tr></thead><tbody>${rows.map(x=>`<tr><td><b>${esc(x.plant)}</b></td><td>${num(x.feedMt,1)}<small>${num(x.feedTrips)} feed trips</small></td><td>${num(x.outputMt,1)}<small>${num(x.outputTrips)} output movements</small></td><td>${num(x.intermediateMt,1)}</td><td>${num(x.varianceMt,1)}</td><td>${x.recoveryPct==null?'—':num(x.recoveryPct,1)+'%'}</td><td>${x.runningHours==null?'—':num(x.runningHours,2)}</td><td>${x.tph==null?'—':num(x.tph,2)+' TPH'}</td></tr>`).join('')}</tbody></table></div>`;
 }
-
 function dashLocationPanel(rows,title){
   rows=(rows||[]).slice(0,12);return `<div class="split-table-chart"><div class="compact-table">${table(['Location','Trips','Tonnes','Avg Payload'],rows.map(x=>[esc(x.label),num(x.trips),num(x.tonnes,1),num(x.avgPayload,2)]))}</div>${dashBars(rows,'label','tonnes',' t',12)}</div>`;
 }
@@ -198,7 +197,7 @@ loadDashboard=function(){
     const productionActual=Number(p.finalProductionMt||0),achievement=periodTarget?productionActual/periodTarget*100:null,remaining=periodTarget?Math.max(0,periodTarget-productionActual):null;
     const finalFuelIntensity=productionActual>0?Number(k.hsdLitres||0)/productionActual:null;
     const topCards=[
-      ['ROM Input',dashFmt(p.romInputMt,1,' t'),p.romPct==null?'No ROM feed':'100% process input','good'],
+      ['Fresh ROM',dashFmt(p.romInputMt,1,' t'),p.romPct==null?'No fresh ROM':'100% production base','good'],
       ['Screen Fines',dashFmt(p.screenFinesMt,1,' t'),p.screenFinesPct==null?'—':num(p.screenFinesPct,1)+'% of ROM','neutral'],
       ['Screen 5-18',dashFmt(p.screen518Mt,1,' t'),p.screen518Pct==null?'—':num(p.screen518Pct,1)+'% of ROM','neutral'],
       ['Crusher Fines',dashFmt(p.crusherFinesMt,1,' t'),p.crusherFinesPct==null?'—':num(p.crusherFinesPct,1)+'% of ROM','neutral'],
@@ -209,8 +208,8 @@ loadDashboard=function(){
       ['Crusher Feed',dashFmt(p.crusherFeedMt,1,' t'),p.crusherFeedPct==null?'—':num(p.crusherFeedPct,1)+'% of ROM','neutral'],
       ['Crusher Recovery',p.crusherRecoveryPct==null?'—':num(p.crusherRecoveryPct,1)+'%','Crusher output / feed','neutral'],
       ['Process / Timing Balance',dashFmt(p.balanceMt,1,' t'),p.balancePct==null?'—':num(p.balancePct,1)+'% of ROM','neutral'],
-      ['Old Stock Re-handled',dashFmt(p.oldStockExcludedMt,1,' t'),'EXCLUDED · '+(p.oldStockVsRomPct==null?'—':num(p.oldStockVsRomPct,1)+'% vs ROM'),'warning'],
-      ['Trips / Hr (TPH)',k.tripsPerHour==null?'—':num(k.tripsPerHour,2),'Trips per active hour','good'],
+      ['RH / Old Stock',dashFmt(p.oldStockExcludedMt,1,' t'),'EXCLUDED · '+(p.oldStockVsRomPct==null?'—':num(p.oldStockVsRomPct,1)+'% vs ROM'),'warning'],
+      ['Trips / Hr',k.tripsPerHour==null?'—':num(k.tripsPerHour,2),'Haulage trips per active hour','good'],
       ['Avg Lead',k.haulAvgLeadKm==null?'—':num(k.haulAvgLeadKm,3)+' km','Combined haulage','neutral'],
       ['Trip-km / Hr',k.tripKmPerHour==null?'—':num(k.tripKmPerHour,2),'Trips × lead / active hr','neutral'],
       ['Ton-km / Hr',k.tonKmPerHour==null?'—':num(k.tonKmPerHour,1),'Tonnes × lead / active hr','neutral'],
@@ -237,7 +236,8 @@ loadDashboard=function(){
     const materialFilter=d.materialFilter?`<button class="filter-chip" onclick="dashClearMaterial()">Material: ${esc(d.materialFilter)} ×</button>`:'';const extraFilters=[d.sourceFilter&&`Source: ${esc(d.sourceFilter)}`,d.destinationFilter&&`Destination: ${esc(d.destinationFilter)}`,d.vehicleFilter&&`Vehicle: ${esc(d.vehicleFilter)}`].filter(Boolean).map(x=>`<span class="filter-chip">${x}</span>`).join('');
     const hourly=(d.productionHourly||[]).map(x=>({label:x.hour,rom:x.rom,final:x.final}));
     const monthTarget=targets.month,monthAchievement=monthTarget?Number(d.monthly.actual||0)/monthTarget*100:null;
-    const mgmt=[['Final Production',achievement==null?'—':num(achievement,0)+'%','Against final-product target'],['Recovery',p.finalRecoveryPct==null?'—':num(p.finalRecoveryPct,1)+'%','Final output / ROM'],['TPH',k.tripsPerHour==null?'—':num(k.tripsPerHour,2),'Trips per active hour'],['Fuel / Final T',finalFuelIntensity==null?'—':num(finalFuelIntensity,2)+' L/t','Issued HSD / final production']];
+    const crusherPlant=(d.plantPerformance||[]).find(x=>x.plant==='Crusher')||{};
+    const mgmt=[['Final Production',achievement==null?'—':num(achievement,0)+'%','Against final-product target'],['Recovery',p.finalRecoveryPct==null?'—':num(p.finalRecoveryPct,1)+'%','Final output / ROM'],['Crusher TPH',crusherPlant.tph==null?'—':num(crusherPlant.tph,2),'Feed tonnes / actual running hr'],['Fuel / Final T',finalFuelIntensity==null?'—':num(finalFuelIntensity,2)+' L/t','Issued HSD / final production']];
     const crusherTable=table(['Crusher','Material','Trips','Tonnes','Avg Feed','Utilization'],(d.crusher||[]).map(x=>[esc(x.machine),esc(x.material),num(x.trips),num(x.tonnes,1),num(x.avgFeed,2),x.utilization==null?'—':num(x.utilization,1)+'%']));
     const screenTable=table(['Screen','Material','Trips','Tonnes','Recovery'],(d.screens||[]).map(x=>[esc(x.machine),esc(x.material),num(x.trips),num(x.tonnes,1),x.recovery==null?'—':num(x.recovery,1)+'%']));
     const loaderTable=table(['Loader','Trips','Tonnes','Avg Loading','Idle'],(d.loaders||[]).map(x=>[esc(x.machine),num(x.trips),num(x.tonnes,1),dashFmt(x.avgLoadingMin,1,' min'),'—']));
