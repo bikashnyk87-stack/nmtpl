@@ -1032,6 +1032,7 @@ def dashboard_desk(db, user, p):
     _, month_wb_all = authoritative_wb(month_start, end_day)
     month_material, month_days, month_production_days = {}, {}, {}
     month_process_facts,month_process_trips={},{}
+    month_day_facts={}
     month_excluded_keys=set();month_old_stock_excluded=Decimal('0')
     final_codes={'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}
     for w in month_wb_all:
@@ -1042,15 +1043,21 @@ def dashboard_desk(db, user, p):
         if fact_codes.intersection(excluded_codes) and w.movement_key not in month_excluded_keys:
             month_excluded_keys.add(w.movement_key)
             month_old_stock_excluded+=(w.net_kg or Decimal('0'))/Decimal('1000')
+        day_store=month_day_facts.setdefault(key,{})
         seen_month=set()
         for code,qty in facts:
             q=Decimal(qty or 0)
             month_process_facts[code]=month_process_facts.get(code,Decimal('0'))+q
+            day_store[code]=day_store.get(code,Decimal('0'))+q
             if code not in seen_month:
                 month_process_trips[code]=month_process_trips.get(code,0)+1;seen_month.add(code)
-        final_qty=sum((Decimal(qty or 0) for code,qty in facts if code in final_codes),Decimal('0'))
-        if final_qty:
-            month_production_days[key]=month_production_days.get(key,0.0)+float(final_qty)
+    for key,facts in month_day_facts.items():
+        screen_day=facts.get('SCREEN_FINES',Decimal('0'))+facts.get('SCREEN_5_18',Decimal('0'))
+        crusher_gross_day=facts.get('CRUSHER_FINES',Decimal('0'))+facts.get('CRUSHER_5_18',Decimal('0'))
+        crusher_fresh_day,_blend_day=allocate_blended_crusher_output(
+            crusher_gross_day,facts.get('CRUSHER_FEED',Decimal('0')),facts.get('CRUSHER_BLEND_FEED',Decimal('0'))
+        )
+        month_production_days[key]=float(screen_day+crusher_fresh_day)
     for row in materials.values():
         row['monthTonnes'] = month_material.get(row['label'],0.0)
 
