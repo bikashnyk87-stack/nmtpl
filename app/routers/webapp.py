@@ -1517,7 +1517,7 @@ def dashboard_desk(db, user, p):
         },
         'hourly':[dict(x,tonnes=round(x['tonnes'],2)) for x in hourly.values()],
         'productionHourly':[{'hour':x['hour'],'rom':round(x['rom'],2),'final':round(x['final'],2)} for x in production_hourly.values()],
-        'materials':mat_rows,'sources':source_rows[:20],'destinations':dest_rows[:20],'routes':route_rows[:20],
+        'materials':mat_rows,'productionMaterials':production_material_rows,'plantPerformance':plant_performance,'sources':source_rows[:20],'destinations':dest_rows[:20],'routes':route_rows[:20],
         'misMaterials':_mis_rows(mis_materials)[:30],'misSources':_mis_rows(mis_sources)[:30],
         'misDestinations':_mis_rows(mis_destinations)[:30],
         'misVehicles':_mis_rows(mis_vehicles,'vehicle')[:40],'misMachines':_mis_rows(mis_machines,'machine')[:40],
@@ -1533,7 +1533,7 @@ def dashboard_desk(db, user, p):
             'avgQueueTime':'Queue entry/exit timestamps are not captured.',
             'avgBucketCount':'Bucket count is not captured in load_trip.',
             'crusherUtilization':'Crusher run/downtime or throughput hours are not captured against WB movements.',
-            'screenRecovery':'Screen feed/output recovery linkage is not captured.',
+            'plantTelemetry':'Plant feed/output is derived from confirmed WB process movements; dedicated plant run-hour telemetry is not yet captured.',
             'weather':'Site weather source/coordinates are not configured.'
         },
         'notes':[
