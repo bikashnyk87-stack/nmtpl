@@ -662,13 +662,15 @@ def dashboard_desk(db, user, p):
     equipment_map = {e.machine_id: e for e in db.scalars(select(Equipment)).all()}
     location_map = {l.location_id: l for l in db.scalars(select(Location)).all()}
 
-    # TIOM production truth: actual MSP feed is the 100% process-input base.
-    # Final production contains only stackable outputs. Screen CLO/lumps/spillage
-    # are intermediate crusher-feed streams. Project Area / PA SRF old stock is
-    # re-handling only and must never inflate production or recovery.
+    # TIOM production truth: fresh ROM movement is the 100% mine-production base.
+    # Plant feed is a separate physical throughput measure. Rehandling / old stock
+    # may feed a plant but must never increase fresh production or recovery.
     production_facts={}
     production_fact_trips={}
     production_fact_rows={}
+    excluded_movement_keys=set()
+    excluded_codes={'PROJECT_AREA_FINES_TO_STACK','PRODUCT_REHANDLED','ROM_REHANDLED','ROM_STOCK_TO_STOCK','ROM_STOCK_TO_PLANT_FEED'}
+    old_stock_excluded=Decimal('0')
     old_stock_trips=0
     production_hourly={h:{'hour':f'{h:02d}:00','rom':0.0,'final':0.0} for h in range(24)}
     final_output_codes={'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}
@@ -691,19 +693,34 @@ def dashboard_desk(db, user, p):
         if qty<=0:
             return facts
         mat=(' '.join([str(row.material_code or ''),str(row.material_name or '')])).upper()
+        src_txt=_wb_side_text(row,'SOURCE')
         dst_txt=_wb_side_text(row,'DESTINATION')
-        # Enrich raw WB labels with canonical Location Master semantics.
+        source_is_stock=any(x in src_txt for x in ('STOCK','STACK'))
+        source_is_project=('PROJECT' in src_txt or (' PA ' in f' {src_txt} ' and 'FINE' in src_txt))
+
+        # Canonical master semantics override ambiguous raw labels: a movement
+        # out of stock/project area is rehandling, never fresh production.
+        if source_is_stock or source_is_project:
+            facts=[(code,val) for code,val in facts if code not in final_output_codes and code!='ROM']
+            codes={code for code,_qty in facts}
+            rehandle_code='ROM_REHANDLED' if 'ROM' in mat else 'PRODUCT_REHANDLED'
+            if rehandle_code not in codes:
+                facts.append((rehandle_code,qty)); codes.add(rehandle_code)
+
+        # Enrich physical plant-feed facts from canonical destination semantics.
         if 'ROM' in mat and any(x in dst_txt for x in ('MSP','SCREEN','PLANT','FEED')) and 'MSP_FEED' not in codes:
             facts.append(('MSP_FEED',qty)); codes.add('MSP_FEED')
-        intermediate={'LUMPS_FROM_SCREEN','LUMPS_FEED_TO_CRUSHER','LUMPS_TO_CRUSHER_FROM_STOCK','SPILLAGE'}
+        intermediate={'LUMPS_FROM_SCREEN','LUMPS_FEED_TO_CRUSHER','LUMPS_TO_CRUSHER_FROM_STOCK','SPILLAGE','PRODUCT_REHANDLED'}
         if codes.intersection(intermediate) and any(x in dst_txt for x in ('CRUSH','OCP')) and 'CRUSHER_FEED' not in codes:
             facts.append(('CRUSHER_FEED',qty))
         return facts
 
     for row in wb_all:
         facts=_dashboard_process_facts(row)
-        if any(code=='PROJECT_AREA_FINES_TO_STACK' for code,_qty in facts):
-            old_stock_trips+=1
+        fact_codes={code for code,_qty in facts}
+        if fact_codes.intersection(excluded_codes) and row.movement_key not in excluded_movement_keys:
+            excluded_movement_keys.add(row.movement_key)
+            old_stock_excluded+=(row.net_kg or Decimal('0'))/Decimal('1000')
         stamp=aware(row.weigh_at).astimezone(TZ) if row.weigh_at else None
         seen_codes=set()
         for code,qty in facts:
@@ -715,15 +732,16 @@ def dashboard_desk(db, user, p):
                 seen_codes.add(code)
             if stamp and code in final_output_codes:
                 production_hourly[stamp.hour]['final']+=float(q)
-            if stamp and code=='MSP_FEED':
+            if stamp and code=='ROM':
                 production_hourly[stamp.hour]['rom']+=float(q)
+    old_stock_trips=len(excluded_movement_keys)
 
-    # Prefer actual feed-to-MSP movement. Legacy fallback is used only where the
-    # WB location master has not yet identified the MSP/feed route.
+    # Fresh mine ROM is the 100% production base. MSP feed is deliberately
+    # separate because it can contain ROM drawn from prior stock.
     msp_feed=production_facts.get('MSP_FEED',Decimal('0'))
-    rom_fallback=production_facts.get('ROM',Decimal('0'))+production_facts.get('ROM_STOCK_TO_PLANT_FEED',Decimal('0'))
-    rom_input=msp_feed if msp_feed>0 else rom_fallback
-    rom_basis='MSP_FEED' if msp_feed>0 else 'ROM_MOVEMENT_FALLBACK'
+    fresh_rom=production_facts.get('ROM',Decimal('0'))
+    rom_input=fresh_rom if fresh_rom>0 else msp_feed
+    rom_basis='FRESH_ROM' if fresh_rom>0 else 'MSP_FEED_FALLBACK'
 
     screen_fines=production_facts.get('SCREEN_FINES',Decimal('0'))
     screen_518=production_facts.get('SCREEN_5_18',Decimal('0'))
@@ -733,7 +751,6 @@ def dashboard_desk(db, user, p):
     screen_spillage=production_facts.get('SPILLAGE',Decimal('0'))
     screen_intermediate=screen_lumps+screen_spillage
     crusher_feed_fact=production_facts.get('CRUSHER_FEED',Decimal('0'))
-    old_stock_excluded=production_facts.get('PROJECT_AREA_FINES_TO_STACK',Decimal('0'))
 
     final_production=screen_fines+screen_518+crusher_fines+crusher_clo
     screen_direct=screen_fines+screen_518
@@ -798,42 +815,92 @@ def dashboard_desk(db, user, p):
         }
 
     msp_feed_rows=_unique_wb_rows(production_fact_rows.get('MSP_FEED',[]))
-    if not msp_feed_rows and rom_basis=='ROM_MOVEMENT_FALLBACK':
-        msp_feed_rows=_unique_wb_rows(production_fact_rows.get('ROM',[]),production_fact_rows.get('ROM_STOCK_TO_PLANT_FEED',[]))
     screen_final_rows=_unique_wb_rows(production_fact_rows.get('SCREEN_FINES',[]),production_fact_rows.get('SCREEN_5_18',[]))
     screen_intermediate_rows=_unique_wb_rows(production_fact_rows.get('LUMPS_FROM_SCREEN',[]),production_fact_rows.get('SPILLAGE',[]))
     screen_output_rows=_unique_wb_rows(screen_final_rows,screen_intermediate_rows)
     crusher_feed_rows=_unique_wb_rows(production_fact_rows.get('CRUSHER_FEED',[]))
     crusher_output_rows=_unique_wb_rows(production_fact_rows.get('CRUSHER_FINES',[]),production_fact_rows.get('CRUSHER_5_18',[]))
 
-    msp_feed_perf=_plant_lead_stats(msp_feed_rows)
-    crusher_feed_perf=_plant_lead_stats(crusher_feed_rows)
-    msp_output_hours=_wb_active_hours(screen_output_rows)
-    crusher_output_hours=_wb_active_hours(crusher_output_rows)
+    def _msp_plant(row,side):
+        txt=_wb_side_text(row,side)
+        match=re.search(r'\bMSP\s*(?:PLANT\s*)?-?\s*(\d+)\b',txt)
+        return f'MSP-{match.group(1)}' if match else None
+
+    def _plant_run_hours(label):
+        # Actual HMR/run-meter only. WB timestamps are not plant running hours.
+        totals={}
+        for att in ea:
+            if att.run_meter is None:
+                continue
+            eq=equipment_map.get(att.machine_id)
+            eq_txt=' '.join([
+                str(att.machine_id or ''),
+                str(eq.type if eq else ''),
+                str(eq.group if eq else ''),
+                str(eq.make_model if eq else '')
+            ]).upper()
+            matched=False
+            if label.startswith('MSP-'):
+                plant_no=label.split('-',1)[1]
+                matched=bool(re.search(rf'\bMSP\s*(?:PLANT\s*)?-?\s*{re.escape(plant_no)}\b',eq_txt))
+            elif label=='Crusher':
+                matched=('CRUSH' in eq_txt or 'OCP' in eq_txt)
+            if not matched:
+                continue
+            val=float(att.run_meter or 0)
+            if val>=0:
+                totals[att.machine_id]=totals.get(att.machine_id,0.0)+val
+        # Multiple plant components can run in parallel; summing them would
+        # overstate clock hours. Use the longest verified component runtime.
+        return max(totals.values()) if totals else None
+
+    def _group_by_msp(rows,side):
+        grouped={}
+        for row in rows:
+            label=_msp_plant(row,side) or 'MSP / Unmapped'
+            grouped.setdefault(label,[]).append(row)
+        return grouped
+
+    feed_by_msp=_group_by_msp(msp_feed_rows,'DESTINATION')
+    final_by_msp=_group_by_msp(screen_final_rows,'SOURCE')
+    intermediate_by_msp=_group_by_msp(screen_intermediate_rows,'SOURCE')
+    msp_labels=sorted(set(feed_by_msp)|set(final_by_msp)|set(intermediate_by_msp),
+                      key=lambda x:(x=='MSP / Unmapped',x))
+    plant_performance=[]
+    for label in msp_labels:
+        feed_rows=_unique_wb_rows(feed_by_msp.get(label,[]))
+        final_rows=_unique_wb_rows(final_by_msp.get(label,[]))
+        intermediate_rows=_unique_wb_rows(intermediate_by_msp.get(label,[]))
+        output_rows=_unique_wb_rows(final_rows,intermediate_rows)
+        feed_mt=sum(tonnes(r) for r in feed_rows)
+        final_mt=sum(tonnes(r) for r in final_rows)
+        intermediate_mt=sum(tonnes(r) for r in intermediate_rows)
+        output_mt=sum(tonnes(r) for r in output_rows)
+        run_hours=_plant_run_hours(label)
+        plant_performance.append({
+            'plant':label,'feedMt':round(feed_mt,2),'feedTrips':len(feed_rows),
+            'directFinalMt':round(final_mt,2),'intermediateMt':round(intermediate_mt,2),
+            'outputMt':round(output_mt,2),'outputTrips':len(output_rows),
+            'varianceMt':round(feed_mt-output_mt,2),
+            'recoveryPct':round(output_mt/feed_mt*100,2) if feed_mt>0 else None,
+            'runningHours':round(run_hours,2) if run_hours is not None else None,
+            'tph':round(feed_mt/run_hours,2) if run_hours and run_hours>0 else None,
+            'runningHoursSource':'EQUIPMENT_HMR' if run_hours is not None else None,
+        })
+
     crusher_feed=crusher_feed_fact
     crusher_recovery=(float(crusher_final/crusher_feed*Decimal('100'))) if crusher_feed>0 else None
-    plant_performance=[
-        {
-            'plant':'MSP / Screening','feedMt':round(float(rom_input),2),'feedTrips':len(msp_feed_rows),
-            'feedActiveHours':msp_feed_perf['activeHours'],'feedTph':msp_feed_perf['tripsPerHour'],
-            'directFinalMt':round(float(screen_direct),2),'intermediateMt':round(float(screen_intermediate),2),
-            'outputMt':round(float(screen_accounted),2),'outputTrips':len(screen_output_rows),
-            'outputActiveHours':msp_output_hours,'outputTph':round(len(screen_output_rows)/msp_output_hours,2) if msp_output_hours else None,
-            'outputVsFeedPct':prod_pct(screen_accounted),'finalYieldPct':prod_pct(screen_direct),
-            'avgLeadKm':msp_feed_perf['avgLeadKm'],'tripKmPerHour':msp_feed_perf['tripKmPerHour'],
-            'tonKmPerHour':msp_feed_perf['tonKmPerHour'],'leadMissingTrips':msp_feed_perf['leadMissingTrips'],
-        },
-        {
-            'plant':'Crusher','feedMt':round(float(crusher_feed),2),'feedTrips':len(crusher_feed_rows),
-            'feedActiveHours':crusher_feed_perf['activeHours'],'feedTph':crusher_feed_perf['tripsPerHour'],
-            'directFinalMt':round(float(crusher_final),2),'intermediateMt':0.0,
-            'outputMt':round(float(crusher_final),2),'outputTrips':len(crusher_output_rows),
-            'outputActiveHours':crusher_output_hours,'outputTph':round(len(crusher_output_rows)/crusher_output_hours,2) if crusher_output_hours else None,
-            'outputVsFeedPct':round(crusher_recovery,2) if crusher_recovery is not None else None,'finalYieldPct':round(crusher_recovery,2) if crusher_recovery is not None else None,
-            'avgLeadKm':crusher_feed_perf['avgLeadKm'],'tripKmPerHour':crusher_feed_perf['tripKmPerHour'],
-            'tonKmPerHour':crusher_feed_perf['tonKmPerHour'],'leadMissingTrips':crusher_feed_perf['leadMissingTrips'],
-        }
-    ]
+    crusher_run_hours=_plant_run_hours('Crusher')
+    plant_performance.append({
+        'plant':'Crusher','feedMt':round(float(crusher_feed),2),'feedTrips':len(crusher_feed_rows),
+        'directFinalMt':round(float(crusher_final),2),'intermediateMt':0.0,
+        'outputMt':round(float(crusher_final),2),'outputTrips':len(crusher_output_rows),
+        'varianceMt':round(float(crusher_feed-crusher_final),2),
+        'recoveryPct':round(crusher_recovery,2) if crusher_recovery is not None else None,
+        'runningHours':round(crusher_run_hours,2) if crusher_run_hours is not None else None,
+        'tph':round(float(crusher_feed)/crusher_run_hours,2) if crusher_run_hours and crusher_run_hours>0 else None,
+        'runningHoursSource':'EQUIPMENT_HMR' if crusher_run_hours is not None else None,
+    })
 
     haulage_perf={}
     all_haul_hours=set()
@@ -907,11 +974,16 @@ def dashboard_desk(db, user, p):
     _, month_wb_all = authoritative_wb(month_start, end_day)
     month_material, month_days, month_production_days = {}, {}, {}
     month_process_facts,month_process_trips={},{}
+    month_excluded_keys=set();month_old_stock_excluded=Decimal('0')
     final_codes={'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}
     for w in month_wb_all:
         label = material_label(w); month_material[label] = month_material.get(label,0.0) + tonnes(w)
         key=str(w.operating_date); month_days[key]=month_days.get(key,0.0)+tonnes(w)
         facts=tiom_wb_report_contributions(w)
+        fact_codes={code for code,_qty in facts}
+        if fact_codes.intersection(excluded_codes) and w.movement_key not in month_excluded_keys:
+            month_excluded_keys.add(w.movement_key)
+            month_old_stock_excluded+=(w.net_kg or Decimal('0'))/Decimal('1000')
         seen_month=set()
         for code,qty in facts:
             q=Decimal(qty or 0)
@@ -1081,6 +1153,7 @@ def dashboard_desk(db, user, p):
     production_balance=rom_input-final_production
     production_summary={
         'romInputMt':round(float(rom_input),2),'romPct':100.0 if rom_input>0 else None,'romBasis':rom_basis,
+        'plantFeedMt':round(float(msp_feed),2),'plantFeedPct':prod_pct(msp_feed),
         'screenFinesMt':round(float(screen_fines),2),'screenFinesPct':prod_pct(screen_fines),
         'screen518Mt':round(float(screen_518),2),'screen518Pct':prod_pct(screen_518),
         'screenLumpsMt':round(float(screen_lumps),2),'screenLumpsPct':prod_pct(screen_lumps),
@@ -1097,7 +1170,7 @@ def dashboard_desk(db, user, p):
         'oldStockExcludedMt':round(float(old_stock_excluded),2),'oldStockTrips':old_stock_trips,
         'oldStockVsRomPct':prod_pct(old_stock_excluded),
         'balanceMt':round(float(production_balance),2),'balancePct':prod_pct(production_balance),
-        'note':'MSP feed ROM is the 100% process-input base. Final Production = Screen Fines + Screen 5-18 + Crusher Fines + Crusher CLO (5-18). Screen CLO/Lumps 10-40 and spillage are intermediate crusher-feed streams. Project Area / PA SRF old-stock fines are excluded.'
+        'note':'Fresh ROM is the 100% mine-production base. Plant feed is reported separately and may include prior-stock rehandling. Final Production = Screen Fines + Screen 5-18 + Crusher Fines + Crusher CLO (5-18). Screen CLO/Lumps 10-40 and spillage are intermediate streams. RH / old-stock movements are excluded from new production.'
     }
     fuel_per_tonne=float(hsd_litres)/wb_tonnes if wb_tonnes else 0.0
     fuel_per_trip=float(hsd_litres)/wb_trips if wb_trips else 0.0
@@ -1208,15 +1281,15 @@ def dashboard_desk(db, user, p):
         mat_rows.append({'label':row['label'],'trips':row['trips'],'tonnes':round(row['tonnes'],2),'monthTonnes':round(row.get('monthTonnes',0),2),
                          'avgPayload':round(row['tonnes']/row['trips'],2) if row['trips'] else 0,
                          'pct':round(row['tonnes']/wb_tonnes*100,1) if wb_tonnes else 0})
-    month_rom_input=month_process_facts.get('MSP_FEED',Decimal('0'))
+    month_rom_input=month_process_facts.get('ROM',Decimal('0'))
     if month_rom_input<=0:
-        month_rom_input=month_process_facts.get('ROM',Decimal('0'))+month_process_facts.get('ROM_STOCK_TO_PLANT_FEED',Decimal('0'))
-    period_rom_trips=production_fact_trips.get('MSP_FEED',0)
-    if not period_rom_trips and rom_basis=='ROM_MOVEMENT_FALLBACK':
-        period_rom_trips=production_fact_trips.get('ROM',0)+production_fact_trips.get('ROM_STOCK_TO_PLANT_FEED',0)
-    month_rom_trips=month_process_trips.get('MSP_FEED',0)
-    if not month_rom_trips:
-        month_rom_trips=month_process_trips.get('ROM',0)+month_process_trips.get('ROM_STOCK_TO_PLANT_FEED',0)
+        month_rom_input=month_process_facts.get('MSP_FEED',Decimal('0'))
+    period_rom_trips=production_fact_trips.get('ROM',0)
+    if not period_rom_trips and rom_basis=='MSP_FEED_FALLBACK':
+        period_rom_trips=production_fact_trips.get('MSP_FEED',0)
+    month_rom_trips=month_process_trips.get('ROM',0)
+    if not month_rom_trips and month_rom_input>0:
+        month_rom_trips=month_process_trips.get('MSP_FEED',0)
 
     def _prod_material_row(label,qty,trips,month_qty,month_trips,pct_value=None,kind='OUTPUT'):
         q=Decimal(qty or 0); mq=Decimal(month_qty or 0)
@@ -1229,9 +1302,10 @@ def dashboard_desk(db, user, p):
         }
 
     production_material_rows=[
-        _prod_material_row('ROM Feed (Input)',rom_input,period_rom_trips,month_rom_input,month_rom_trips,100.0 if rom_input>0 else None,'INPUT'),
+        _prod_material_row('Fresh ROM',rom_input,period_rom_trips,month_rom_input,month_rom_trips,100.0 if rom_input>0 else None,'INPUT'),
         _prod_material_row('Screen Fines',screen_fines,production_fact_trips.get('SCREEN_FINES',0),month_process_facts.get('SCREEN_FINES',0),month_process_trips.get('SCREEN_FINES',0)),
         _prod_material_row('Screen 5-18',screen_518,production_fact_trips.get('SCREEN_5_18',0),month_process_facts.get('SCREEN_5_18',0),month_process_trips.get('SCREEN_5_18',0)),
+        _prod_material_row('Screen CLO / Lumps 10-40 (Intermediate)',screen_lumps,production_fact_trips.get('LUMPS_FROM_SCREEN',0),month_process_facts.get('LUMPS_FROM_SCREEN',0),month_process_trips.get('LUMPS_FROM_SCREEN',0),prod_pct(screen_lumps),'INTERMEDIATE'),
         _prod_material_row('Crusher Fines',crusher_fines,production_fact_trips.get('CRUSHER_FINES',0),month_process_facts.get('CRUSHER_FINES',0),month_process_trips.get('CRUSHER_FINES',0)),
         _prod_material_row('Crusher CLO (5-18)',crusher_clo,production_fact_trips.get('CRUSHER_5_18',0),month_process_facts.get('CRUSHER_5_18',0),month_process_trips.get('CRUSHER_5_18',0)),
         _prod_material_row('Final Production',final_production,
@@ -1239,8 +1313,8 @@ def dashboard_desk(db, user, p):
             sum(month_process_facts.get(c,Decimal('0')) for c in final_output_codes),
             sum(month_process_trips.get(c,0) for c in final_output_codes),
             prod_pct(final_production),'TOTAL'),
-        _prod_material_row('Old Stock Re-handled (Excluded)',old_stock_excluded,old_stock_trips,
-            month_process_facts.get('PROJECT_AREA_FINES_TO_STACK',0),month_process_trips.get('PROJECT_AREA_FINES_TO_STACK',0),
+        _prod_material_row('RH / Old Stock Movement (Excluded)',old_stock_excluded,old_stock_trips,
+            month_old_stock_excluded,len(month_excluded_keys),
             prod_pct(old_stock_excluded),'EXCLUDED')
     ]
 
@@ -1489,7 +1563,7 @@ def dashboard_desk(db, user, p):
             'hsdPerTonne':round(fuel_per_tonne,2),'fuelPerTrip':round(fuel_per_trip,2),'materials':len(materials),'sources':len(sources),'destinations':len(destinations),
             'oreTonnes':round(max(0,ore_tonnes),2),'wasteTonnes':round(material_buckets['WASTE'],2),'romTonnes':round(material_buckets['ROM'],2),
             'finesTonnes':round(material_buckets['FINES'],2),'cloTonnes':round(material_buckets['CLO'],2),'rejectTonnes':round(material_buckets['REJECT'],2),
-            'crusherFeed':round(float(crusher_feed),2),'screenFeed':round(float(rom_input),2),'avgCycleTime':round(avg_cycle,1) if avg_cycle is not None else None,
+            'crusherFeed':round(float(crusher_feed),2),'screenFeed':round(float(msp_feed),2),'avgCycleTime':round(avg_cycle,1) if avg_cycle is not None else None,
             'avgLoadingTime':round(avg_loading,1) if avg_loading is not None else None,'avgUnloadingTime':None,'avgQueueTime':None,
             'activeCrushers':active_crushers,'activeScreens':active_screens,'runningLoaders':running_loaders,'runningExcavators':running_excavators,
             'runningTippers':running_tippers,'idleEquipment':idle_equipment,'equipmentUtilization':round(equipment_util,1),'tonPerTrip':round(avg_payload,2),
@@ -1537,8 +1611,8 @@ def dashboard_desk(db, user, p):
             'weather':'Site weather source/coordinates are not configured.'
         },
         'notes':[
-            'WB remains the authoritative movement source, but total WB tonnes is not the primary production KPI. ROM feed is the 100% process input; final production is Screen Fines + Screen 5-18 + Crusher Fines + Crusher CLO (5-18).',
-            'Project Area / PA SRF old-stock fines are re-handling only and are excluded from new-production and recovery KPIs.',
+            'WB remains the authoritative movement source, but total WB tonnes is not the primary production KPI. Fresh ROM is the 100% mine-production base; plant feed is shown separately because it can include prior-stock rehandling.',
+            'RH / old-stock movements, including Project Area / PA SRF material and ROM drawn from stock, are excluded from new-production and recovery KPIs.',
             'Trips Per Hour means trips divided by active clock-hour buckets. Lead-adjusted haulage also reports Trip-km/hr and Ton-km/hr; unresolved lead is shown, never guessed.',
             'MIS Manual Entry panels use SUBMITTED driver reports only. Draft reports are shown as pending counts and are excluded from production until Submit Shift Report is used.',
             'Lead KM is automatic: Bench RL comes from Face / Bench Setup and route type comes from WB linkage. Source + Destination + Route Master + Lead Master determine Lead KM; unresolved rows are excluded from Ton-km.',
