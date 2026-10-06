@@ -124,7 +124,7 @@ def wb_report_contributions(wb: WbMovement):
     # Rehandling must never become fresh production.  Stock/stack sources and
     # the Project Area fines source are physical movements of already produced
     # material.  They may still be plant feed when they enter a plant.
-    project_source = 'PROJECT' in src or (bool(re.search(r'(^| )PA( |$)', src)) and 'FINE' in src)
+    project_source = 'FINE' in mat and (('PROJECT' in src and 'FINE' in src) or (bool(re.search(r'(^| )PA( |$)', src)) and 'FINE' in src))
     stock_source = _is_stack(src)
     if 'FINE' in mat and project_source:
         return [('PROJECT_AREA_FINES_TO_STACK', qty), ('PRODUCT_REHANDLED', qty), ('SCREEN_FINES_SHIFTED', qty)]
