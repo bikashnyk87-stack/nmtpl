@@ -103,25 +103,29 @@ function dashProductionFlow(p){
     <div class="prod-node input"><span>MINE PRODUCTION BASE</span><b>Fresh ROM</b><strong>${num(p.romInputMt||0,1)} t</strong><em>${p.romPct==null?'—':'100%'}</em></div>
     <div class="prod-arrow">→</div>
     <div class="prod-stage"><div class="prod-stage-title">SCREEN / MSP</div>
-      <div class="prod-intermediate"><b>Plant Feed</b><span>${num(p.plantFeedMt||0,1)} t · ${pct(p.plantFeedPct)} of ROM</span></div>
+      <div class="prod-intermediate"><b>External Plant Feed</b><span>${num(p.plantFeedMt||0,1)} t · ${pct(p.plantFeedPct)} of ROM</span></div>
       <div class="prod-output"><b>Screen Fines</b><strong>${num(p.screenFinesMt||0,1)} t</strong><em>${pct(p.screenFinesPct)} of ROM</em></div>
       <div class="prod-output"><b>Screen 5-18</b><strong>${num(p.screen518Mt||0,1)} t</strong><em>${pct(p.screen518Pct)} of ROM</em></div>
-      <div class="prod-intermediate"><b>Screen CLO / Lumps 10-40</b><span>${num(p.screenLumpsMt||0,1)} t · ${pct(p.screenLumpsPct)} of ROM</span></div>
-      <div class="prod-intermediate"><b>Spillage</b><span>${num(p.screenSpillageMt||0,1)} t · ${pct(p.screenSpillagePct)} of ROM</span></div>
-      <div class="prod-intermediate total"><b>Intermediate → Crusher</b><span>${num(p.screenIntermediateMt||0,1)} t · ${pct(p.screenIntermediatePct)} of ROM</span></div>
+      <div class="prod-intermediate"><b>MSP Lumps → Crusher</b><span>${num(p.screenLumpsMt||0,1)} t · fresh intermediate</span></div>
+      <div class="prod-intermediate"><b>Spillage → Crusher</b><span>${num(p.spillageToCrusherMt||0,1)} t · large-lump intermediate</span></div>
+      <div class="prod-intermediate"><b>Spillage Re-screen / Recycle</b><span>${num(p.spillageRecycleMt||0,1)} t · internal throughput only</span></div>
+      <div class="prod-intermediate"><b>Spillage / WIP</b><span>${num(p.spillageWipMt||0,1)} t · pending/stock movement</span></div>
     </div>
     <div class="prod-arrow">→</div>
     <div class="prod-stage crusher"><div class="prod-stage-title">CRUSHER</div>
-      <div class="prod-intermediate"><b>Crusher Feed</b><span>${num(p.crusherFeedMt||0,1)} t · ${pct(p.crusherFeedPct)} of ROM</span></div>
-      <div class="prod-output"><b>Crusher Fines</b><strong>${num(p.crusherFinesMt||0,1)} t</strong><em>${pct(p.crusherFinesPct)} of ROM</em></div>
-      <div class="prod-output"><b>Crusher CLO (5-18)</b><strong>${num(p.crusherCloMt||0,1)} t</strong><em>${pct(p.crusherCloPct)} of ROM</em></div>
-      <div class="prod-intermediate total"><b>Crusher Recovery</b><span>${p.crusherRecoveryPct==null?'—':pct(p.crusherRecoveryPct)} of crusher feed</span></div>
+      <div class="prod-intermediate"><b>Fresh Crusher Feed</b><span>${num(p.crusherFreshFeedMt||0,1)} t</span></div>
+      <div class="prod-excluded-mini"><b>Old Stock Blend 10-40</b><span>${num(p.crusherBlendFeedMt||0,1)} t · EXCLUDED from fresh production</span></div>
+      <div class="prod-intermediate total"><b>Total Physical Crusher Feed</b><span>${num(p.crusherFeedMt||0,1)} t</span></div>
+      <div class="prod-output"><b>Gross Crusher Output</b><strong>${num(p.crusherGrossOutputMt||0,1)} t</strong><em>physical output</em></div>
+      <div class="prod-excluded-mini"><b>Allocated Old-Stock Share</b><span>${num(p.crusherBlendOutputMt||0,1)} t · pro-rata accounting</span></div>
+      <div class="prod-output"><b>Fresh Crusher Output</b><strong>${num(p.crusherFreshOutputMt||0,1)} t</strong><em>net of blend</em></div>
+      <div class="prod-intermediate total"><b>Crusher Recovery</b><span>${p.crusherRecoveryPct==null?'—':pct(p.crusherRecoveryPct)} of total crusher feed</span></div>
     </div>
     <div class="prod-arrow">→</div>
-    <div class="prod-node final"><span>STACK / FINAL OUTPUT</span><b>Final Production</b><strong>${num(p.finalProductionMt||0,1)} t</strong><em>Recovery ${pct(p.finalRecoveryPct)}</em></div>
+    <div class="prod-node final"><span>FRESH PRODUCTION</span><b>Final Fresh Production</b><strong>${num(p.finalProductionMt||0,1)} t</strong><em>Recovery ${pct(p.finalRecoveryPct)}</em></div>
   </div>
-  <div class="prod-exclusion"><div><b>RH / Old Stock Movement — Excluded from Production</b><span>Stock/rehandling movement stays visible but does not increase production</span></div><strong>${num(p.oldStockExcludedMt||0,1)} t</strong><em>${pct(p.oldStockVsRomPct)} vs ROM · ${num(p.oldStockTrips||0)} trips</em></div>
-  <div class="prod-balance"><b>Process / Timing Balance</b><span>Fresh ROM − final production = ${num(p.balanceMt||0,1)} t (${pct(p.balancePct)}). ROM stock, plant WIP and intermediate material can remain in this balance; it is not automatically called loss.</span></div>`;
+  <div class="prod-exclusion"><div><b>RH / Old Stock Movement — Excluded from Fresh Production</b><span>Includes company old-stock blend and other rehandling. Blend remains visible in Crusher Feed but does not increase NMTPL fresh production.</span></div><strong>${num(p.oldStockExcludedMt||0,1)} t</strong><em>${pct(p.oldStockVsRomPct)} vs ROM · ${num(p.oldStockTrips||0)} trips</em></div>
+  <div class="prod-balance"><b>Fresh Production / Timing Balance</b><span>Fresh ROM − final fresh production = ${num(p.balanceMt||0,1)} t (${pct(p.balancePct)}). ROM stock, plant WIP and intermediate material can remain in this balance; old-stock blend is excluded separately.</span></div>`;
 }
 function dashTargetChart(d,target){
   if(!target||d.fromDate!==d.toDate)return'<div class="emptyviz">Set a daily final-production target; hourly target comparison is shown for a single day.</div>';
@@ -140,14 +144,19 @@ function dashProductionMaterialTable(rows){
   return `<div class="compact-table"><table><thead><tr><th>Production Material</th><th>Trips</th><th>Today/Period T</th><th>Month T</th><th>Avg Payload</th><th>% of ROM</th></tr></thead><tbody>${rows.map(x=>{
     const cls=x.excluded?'excluded-row':x.kind==='TOTAL'?'total-row':x.kind==='INPUT'?'input-row':'';
     const pctText=x.pct==null?'—':num(x.pct,1)+'%';
-    return `<tr class="${cls}"><td><b>${esc(x.label)}</b>${x.excluded?'<small>Re-handling only · not production</small>':''}<div class="cellbar"><i style="width:${x.excluded?0:Number(x.tonnes||0)/max*100}%"></i></div></td><td>${num(x.trips)}</td><td>${num(x.tonnes,1)}</td><td>${num(x.monthTonnes,1)}</td><td>${num(x.avgPayload,2)}</td><td>${x.excluded?'<b>EXCLUDED</b><small>'+pctText+' vs ROM</small>':pctText}</td></tr>`;
+    return `<tr class="${cls}"><td><b>${esc(x.label)}</b>${x.excluded?'<small>Excluded from fresh production</small>':''}<div class="cellbar"><i style="width:${x.excluded?0:Number(x.tonnes||0)/max*100}%"></i></div></td><td>${num(x.trips)}</td><td>${num(x.tonnes,1)}</td><td>${num(x.monthTonnes,1)}</td><td>${num(x.avgPayload,2)}</td><td>${x.excluded?'<b>EXCLUDED</b><small>'+pctText+' vs ROM</small>':pctText}</td></tr>`;
   }).join('')}</tbody></table></div>`;
 }
 function dashPlantPerformanceTable(rows){
   rows=rows||[];if(!rows.length)return'<div class="emptyviz">No plant feed/output data yet.</div>';
   return `<div class="compact-table plant-performance-table"><table><thead><tr>
-    <th>Plant</th><th>Feed T</th><th>Output T</th><th>Intermediate T</th><th>Variance / WIP T</th><th>Recovery %</th><th>Running Hrs</th><th>TPH</th>
-  </tr></thead><tbody>${rows.map(x=>`<tr><td><b>${esc(x.plant)}</b></td><td>${num(x.feedMt,1)}<small>${num(x.feedTrips)} feed trips</small></td><td>${num(x.outputMt,1)}<small>${num(x.outputTrips)} output movements</small></td><td>${num(x.intermediateMt,1)}</td><td>${num(x.varianceMt,1)}</td><td>${x.recoveryPct==null?'—':num(x.recoveryPct,1)+'%'}</td><td>${x.runningHours==null?'—':num(x.runningHours,2)}</td><td>${x.tph==null?'—':num(x.tph,2)+' TPH'}</td></tr>`).join('')}</tbody></table></div>`;
+    <th>Plant</th><th>Fresh / External Feed</th><th>Recycle</th><th>Old Stock Blend</th><th>Gross Throughput</th><th>Final / Fresh Output</th><th>To Crusher</th><th>WIP / Variance</th><th>Recovery %</th><th>Running Hrs</th><th>TPH</th>
+  </tr></thead><tbody>${rows.map(x=>{
+    const crusher=x.plantType==='CRUSHER';
+    const outputSub=crusher?`Gross ${num(x.grossOutputMt,1)} t · blend share ${num(x.blendOutputMt,1)} t`:`Final screen product`;
+    const varianceSub=crusher?'physical feed − gross output':`WIP ${num(x.wipMt,1)} t`;
+    return `<tr><td><b>${esc(x.plant)}</b></td><td>${num(x.freshFeedMt??x.feedMt,1)}<small>${num(x.feedTrips)} feed trips</small></td><td>${num(x.recycleMt,1)}</td><td>${num(x.blendFeedMt,1)}</td><td><b>${num(x.grossThroughputMt??x.feedMt,1)}</b></td><td>${num(x.outputMt,1)}<small>${outputSub}</small></td><td>${crusher?'—':num(x.transferToCrusherMt,1)}</td><td>${num(x.varianceMt,1)}<small>${varianceSub}</small></td><td>${x.recoveryPct==null?'—':num(x.recoveryPct,1)+'%'}</td><td>${x.runningHours==null?'—':num(x.runningHours,2)}</td><td>${x.tph==null?'—':num(x.tph,2)+' TPH'}</td></tr>`;
+  }).join('')}</tbody></table></div>`;
 }
 function dashLocationPanel(rows,title){
   rows=(rows||[]).slice(0,12);return `<div class="split-table-chart"><div class="compact-table">${table(['Location','Trips','Tonnes','Avg Payload'],rows.map(x=>[esc(x.label),num(x.trips),num(x.tonnes,1),num(x.avgPayload,2)]))}</div>${dashBars(rows,'label','tonnes',' t',12)}</div>`;
@@ -258,7 +267,7 @@ loadDashboard=function(){
       <div class="v2-kpi-grid">${topCards.map(x=>dashCard(...x)).join('')}</div>
       <div class="ops-kpi-strip">${opsCards.map(x=>dashMini(...x)).join('')}</div>
       <section class="panel v2-panel production-truth"><div class="v2-title"><h3>ROM → Final Production</h3><span>Fresh ROM = 100% production base · RH / old stock excluded</span></div>${dashProductionFlow(p)}</section>
-      <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>Material Production</h3><span>Fresh ROM = 100% · Screen and Crusher outputs separate · RH excluded</span></div>${dashProductionMaterialTable(d.productionMaterials)}</section><section class="panel v2-panel"><div class="v2-title"><h3>Plant Feed vs Plant Output</h3><span>Feed/output from confirmed WB · TPH uses actual HMR running hours</span></div>${dashPlantPerformanceTable(d.plantPerformance)}</section></div>
+      <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>Material Production</h3><span>Fresh ROM = 100% · old-stock blend excluded · recycle shown separately</span></div>${dashProductionMaterialTable(d.productionMaterials)}</section><section class="panel v2-panel"><div class="v2-title"><h3>Plant Feed vs Plant Output</h3><span>Feed/output from confirmed WB · TPH uses actual HMR running hours</span></div>${dashPlantPerformanceTable(d.plantPerformance)}</section></div>
       <details class="panel v2-panel"><summary><b>WB Material Movement — Audit</b> · raw WB mix, not production KPI</summary><div class="dashboard-grid two"><div>${dashMaterialTable(d.materials)}</div><div>${dashDonut(d.materials,'label','tonnes',true)}</div></div></details>
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>Loading Location</h3><span>Source WB movement</span></div>${dashLocationPanel(d.sources,'Loading')}</section><section class="panel v2-panel"><div class="v2-title"><h3>Destination</h3><span>Receiving point</span></div>${dashLocationPanel(d.destinations,'Destination')}</section></div>
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>Crusher Wise Production</h3><span>WB CRUSH-classified flow</span></div>${dashStackedMachines(d.crusher)}<details><summary>Crusher table</summary>${crusherTable}</details></section><section class="panel v2-panel"><div class="v2-title"><h3>Screening Machine Dashboard</h3><span>WB SCREEN/MSP-classified flow</span></div>${dashGroupedMachines(d.screens)}<details><summary>Screen table</summary>${screenTable}</details></section></div>
