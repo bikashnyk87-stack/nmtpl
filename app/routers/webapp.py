@@ -756,6 +756,85 @@ def dashboard_desk(db, user, p):
         ctx_stmt=ctx_stmt.where(TiomSourceContext.shift.in_(allowed_shifts))
     source_contexts={(x.operating_date,x.shift,x.source_location_id):x.bench_rl_m for x in db.scalars(ctx_stmt)}
 
+    def _unique_wb_rows(*groups):
+        out=[]; seen=set()
+        for group in groups:
+            for row in group or []:
+                key=row.movement_key
+                if key in seen: continue
+                seen.add(key); out.append(row)
+        return out
+
+    def _wb_active_hours(rows):
+        bins=set()
+        for row in rows:
+            if row.weigh_at:
+                bins.add(aware(row.weigh_at).astimezone(TZ).strftime('%Y-%m-%d %H'))
+        return len(bins)
+
+    def _plant_lead_stats(rows):
+        active_hours=_wb_active_hours(rows)
+        resolved=0; missing=0; qty=0.0; ton_km=0.0; trip_km=0.0
+        for row in rows:
+            canon=wb_canonical_all.get(row.movement_key)
+            src_id=canon.source_location_id if canon else None
+            dst_id=canon.destination_location_id if canon else None
+            bench=_tiom_bench_rl_from_location(db,src_id) if src_id else None
+            if bench is None and src_id:
+                bench=source_contexts.get((row.operating_date,row.shift,src_id))
+            lead=_tiom_resolve_lead(db,src_id,bench,dst_id,'WITH_WB',wb_linked=True)
+            if lead.get('leadKm') is None:
+                missing+=1; continue
+            lk=float(lead['leadKm']); q=tonnes(row)
+            resolved+=1; qty+=q; ton_km+=q*lk; trip_km+=lk
+        avg_lead=(ton_km/qty) if qty>0 else None
+        return {
+            'activeHours':active_hours,
+            'tripsPerHour':round(len(rows)/active_hours,2) if active_hours else None,
+            'avgLeadKm':round(avg_lead,3) if avg_lead is not None else None,
+            'tripKmPerHour':round(trip_km/active_hours,2) if active_hours and resolved else None,
+            'tonKmPerHour':round(ton_km/active_hours,1) if active_hours and resolved else None,
+            'leadResolvedTrips':resolved,'leadMissingTrips':missing,
+        }
+
+    msp_feed_rows=_unique_wb_rows(production_fact_rows.get('MSP_FEED',[]))
+    if not msp_feed_rows and rom_basis=='ROM_MOVEMENT_FALLBACK':
+        msp_feed_rows=_unique_wb_rows(production_fact_rows.get('ROM',[]),production_fact_rows.get('ROM_STOCK_TO_PLANT_FEED',[]))
+    screen_final_rows=_unique_wb_rows(production_fact_rows.get('SCREEN_FINES',[]),production_fact_rows.get('SCREEN_5_18',[]))
+    screen_intermediate_rows=_unique_wb_rows(production_fact_rows.get('LUMPS_FROM_SCREEN',[]),production_fact_rows.get('SPILLAGE',[]))
+    screen_output_rows=_unique_wb_rows(screen_final_rows,screen_intermediate_rows)
+    crusher_feed_rows=_unique_wb_rows(production_fact_rows.get('CRUSHER_FEED',[]))
+    crusher_output_rows=_unique_wb_rows(production_fact_rows.get('CRUSHER_FINES',[]),production_fact_rows.get('CRUSHER_5_18',[]))
+
+    msp_feed_perf=_plant_lead_stats(msp_feed_rows)
+    crusher_feed_perf=_plant_lead_stats(crusher_feed_rows)
+    msp_output_hours=_wb_active_hours(screen_output_rows)
+    crusher_output_hours=_wb_active_hours(crusher_output_rows)
+    crusher_feed=crusher_feed_fact
+    crusher_recovery=(float(crusher_final/crusher_feed*Decimal('100'))) if crusher_feed>0 else None
+    plant_performance=[
+        {
+            'plant':'MSP / Screening','feedMt':round(float(rom_input),2),'feedTrips':len(msp_feed_rows),
+            'feedActiveHours':msp_feed_perf['activeHours'],'feedTph':msp_feed_perf['tripsPerHour'],
+            'directFinalMt':round(float(screen_direct),2),'intermediateMt':round(float(screen_intermediate),2),
+            'outputMt':round(float(screen_accounted),2),'outputTrips':len(screen_output_rows),
+            'outputActiveHours':msp_output_hours,'outputTph':round(len(screen_output_rows)/msp_output_hours,2) if msp_output_hours else None,
+            'outputVsFeedPct':prod_pct(screen_accounted),'finalYieldPct':prod_pct(screen_direct),
+            'avgLeadKm':msp_feed_perf['avgLeadKm'],'tripKmPerHour':msp_feed_perf['tripKmPerHour'],
+            'tonKmPerHour':msp_feed_perf['tonKmPerHour'],'leadMissingTrips':msp_feed_perf['leadMissingTrips'],
+        },
+        {
+            'plant':'Crusher','feedMt':round(float(crusher_feed),2),'feedTrips':len(crusher_feed_rows),
+            'feedActiveHours':crusher_feed_perf['activeHours'],'feedTph':crusher_feed_perf['tripsPerHour'],
+            'directFinalMt':round(float(crusher_final),2),'intermediateMt':0.0,
+            'outputMt':round(float(crusher_final),2),'outputTrips':len(crusher_output_rows),
+            'outputActiveHours':crusher_output_hours,'outputTph':round(len(crusher_output_rows)/crusher_output_hours,2) if crusher_output_hours else None,
+            'outputVsFeedPct':round(crusher_recovery,2) if crusher_recovery is not None else None,'finalYieldPct':round(crusher_recovery,2) if crusher_recovery is not None else None,
+            'avgLeadKm':crusher_feed_perf['avgLeadKm'],'tripKmPerHour':crusher_feed_perf['tripKmPerHour'],
+            'tonKmPerHour':crusher_feed_perf['tonKmPerHour'],'leadMissingTrips':crusher_feed_perf['leadMissingTrips'],
+        }
+    ]
+
     haulage_perf={}
     all_haul_hours=set()
     def add_haulage(source_id,dest_id,source_label,dest_label,route_mode,qty,stamp,
