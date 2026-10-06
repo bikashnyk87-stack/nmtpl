@@ -877,29 +877,41 @@ def dashboard_desk(db, user, p):
         intermediate_mt=sum(tonnes(r) for r in intermediate_rows)
         output_mt=sum(tonnes(r) for r in output_rows)
         run_hours=_plant_run_hours(label)
+        feed_tph=round(feed_mt/run_hours,2) if run_hours and run_hours>0 else None
+        output_tph=round(output_mt/run_hours,2) if run_hours and run_hours>0 else None
+        recovery=round(output_mt/feed_mt*100,2) if feed_mt>0 else None
         plant_performance.append({
             'plant':label,'feedMt':round(feed_mt,2),'feedTrips':len(feed_rows),
             'directFinalMt':round(final_mt,2),'intermediateMt':round(intermediate_mt,2),
             'outputMt':round(output_mt,2),'outputTrips':len(output_rows),
             'varianceMt':round(feed_mt-output_mt,2),
-            'recoveryPct':round(output_mt/feed_mt*100,2) if feed_mt>0 else None,
+            'recoveryPct':recovery,'outputVsFeedPct':recovery,'finalYieldPct':round(final_mt/feed_mt*100,2) if feed_mt>0 else None,
             'runningHours':round(run_hours,2) if run_hours is not None else None,
-            'tph':round(feed_mt/run_hours,2) if run_hours and run_hours>0 else None,
+            'feedActiveHours':round(run_hours,2) if run_hours is not None else None,
+            'outputActiveHours':round(run_hours,2) if run_hours is not None else None,
+            'tph':feed_tph,'feedTph':feed_tph,'outputTph':output_tph,
             'runningHoursSource':'EQUIPMENT_HMR' if run_hours is not None else None,
+            'avgLeadKm':None,'tripKmPerHour':None,'tonKmPerHour':None,'leadMissingTrips':0,
         })
 
     crusher_feed=crusher_feed_fact
     crusher_recovery=(float(crusher_final/crusher_feed*Decimal('100'))) if crusher_feed>0 else None
     crusher_run_hours=_plant_run_hours('Crusher')
+    crusher_feed_tph=round(float(crusher_feed)/crusher_run_hours,2) if crusher_run_hours and crusher_run_hours>0 else None
+    crusher_output_tph=round(float(crusher_final)/crusher_run_hours,2) if crusher_run_hours and crusher_run_hours>0 else None
+    crusher_recovery_value=round(crusher_recovery,2) if crusher_recovery is not None else None
     plant_performance.append({
         'plant':'Crusher','feedMt':round(float(crusher_feed),2),'feedTrips':len(crusher_feed_rows),
         'directFinalMt':round(float(crusher_final),2),'intermediateMt':0.0,
         'outputMt':round(float(crusher_final),2),'outputTrips':len(crusher_output_rows),
         'varianceMt':round(float(crusher_feed-crusher_final),2),
-        'recoveryPct':round(crusher_recovery,2) if crusher_recovery is not None else None,
+        'recoveryPct':crusher_recovery_value,'outputVsFeedPct':crusher_recovery_value,'finalYieldPct':crusher_recovery_value,
         'runningHours':round(crusher_run_hours,2) if crusher_run_hours is not None else None,
-        'tph':round(float(crusher_feed)/crusher_run_hours,2) if crusher_run_hours and crusher_run_hours>0 else None,
+        'feedActiveHours':round(crusher_run_hours,2) if crusher_run_hours is not None else None,
+        'outputActiveHours':round(crusher_run_hours,2) if crusher_run_hours is not None else None,
+        'tph':crusher_feed_tph,'feedTph':crusher_feed_tph,'outputTph':crusher_output_tph,
         'runningHoursSource':'EQUIPMENT_HMR' if crusher_run_hours is not None else None,
+        'avgLeadKm':None,'tripKmPerHour':None,'tonKmPerHour':None,'leadMissingTrips':0,
     })
 
     haulage_perf={}
@@ -1125,7 +1137,7 @@ def dashboard_desk(db, user, p):
     for w in trend_wb:
         r=seven[str(w.operating_date)];r['trips']+=1;r['tonnes']+=tonnes(w)
         for code,qty in tiom_wb_report_contributions(w):
-            if code in {'ROM','ROM_STOCK_TO_PLANT_FEED'}:
+            if code == 'ROM':
                 r['romInput']+=float(qty or 0)
             if code in {'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}:
                 r['finalProduction']+=float(qty or 0)
@@ -1607,7 +1619,7 @@ def dashboard_desk(db, user, p):
             'avgQueueTime':'Queue entry/exit timestamps are not captured.',
             'avgBucketCount':'Bucket count is not captured in load_trip.',
             'crusherUtilization':'Crusher run/downtime or throughput hours are not captured against WB movements.',
-            'plantTelemetry':'Plant feed/output is derived from confirmed WB process movements; dedicated plant run-hour telemetry is not yet captured.',
+            'plantTelemetry':'Plant feed/output is derived from confirmed WB movements. TPH is shown only where actual equipment HMR/run-hours are recorded; otherwise it remains blank.',
             'weather':'Site weather source/coordinates are not configured.'
         },
         'notes':[
