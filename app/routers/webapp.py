@@ -906,11 +906,19 @@ def dashboard_desk(db, user, p):
     month_start = end_day.replace(day=1)
     _, month_wb_all = authoritative_wb(month_start, end_day)
     month_material, month_days, month_production_days = {}, {}, {}
+    month_process_facts,month_process_trips={},{}
     final_codes={'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}
     for w in month_wb_all:
         label = material_label(w); month_material[label] = month_material.get(label,0.0) + tonnes(w)
         key=str(w.operating_date); month_days[key]=month_days.get(key,0.0)+tonnes(w)
-        final_qty=sum((Decimal(qty or 0) for code,qty in tiom_wb_report_contributions(w) if code in final_codes),Decimal('0'))
+        facts=tiom_wb_report_contributions(w)
+        seen_month=set()
+        for code,qty in facts:
+            q=Decimal(qty or 0)
+            month_process_facts[code]=month_process_facts.get(code,Decimal('0'))+q
+            if code not in seen_month:
+                month_process_trips[code]=month_process_trips.get(code,0)+1;seen_month.add(code)
+        final_qty=sum((Decimal(qty or 0) for code,qty in facts if code in final_codes),Decimal('0'))
         if final_qty:
             month_production_days[key]=month_production_days.get(key,0.0)+float(final_qty)
     for row in materials.values():
