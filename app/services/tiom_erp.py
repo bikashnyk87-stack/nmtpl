@@ -121,11 +121,13 @@ def wb_report_contributions(wb: WbMovement):
     if re.search(r'(^| )(OB|WASTE)( |$)', mat):
         return []
 
-    # Project-area fines are rehandling/stacking, not new screen production.
-    # Current TIOM WB uses the source code "PA SRF FINES" for Project Area.
+    # Rehandling must never become fresh production.  Stock/stack sources and
+    # the Project Area fines source are physical movements of already produced
+    # material.  They may still be plant feed when they enter a plant.
     project_source = 'PROJECT' in src or (bool(re.search(r'(^| )PA( |$)', src)) and 'FINE' in src)
+    stock_source = _is_stack(src)
     if 'FINE' in mat and project_source:
-        return [('PROJECT_AREA_FINES_TO_STACK', qty), ('SCREEN_FINES_SHIFTED', qty)]
+        return [('PROJECT_AREA_FINES_TO_STACK', qty), ('PRODUCT_REHANDLED', qty), ('SCREEN_FINES_SHIFTED', qty)]
 
     if 'UNSCREEN' in mat and ('5 18' in mat or '5-18' in str(wb.material_name or '')):
         return [('UNSCREENED_5_18', qty)]
@@ -136,6 +138,12 @@ def wb_report_contributions(wb: WbMovement):
     is_clo = bool(re.search(r'(^| )CLO( |$)', mat))
     is_10_40 = ('10 40' in mat or '10-40' in raw_name)
     if is_clo and is_10_40:
+        if stock_source or project_source:
+            out.append(('PRODUCT_REHANDLED', qty))
+            if 'CRUSH' in dst or 'OCP' in dst:
+                out.append(('LUMPS_TO_CRUSHER_FROM_STOCK', qty))
+                out.append(('CRUSHER_FEED', qty))
+            return out
         out.append(('LUMPS_FROM_SCREEN', qty))
         if 'CRUSH' in dst or 'OCP' in dst:
             out.append(('LUMPS_FEED_TO_CRUSHER', qty))
@@ -146,6 +154,11 @@ def wb_report_contributions(wb: WbMovement):
     # CLO by itself must never imply Crusher.
     is_5_18 = ('5 18' in mat or '5-18' in raw_name)
     if is_5_18:
+        if stock_source or project_source:
+            out.append(('PRODUCT_REHANDLED', qty))
+            if 'CRUSH' in dst or 'OCP' in dst:
+                out.append(('CRUSHER_FEED', qty))
+            return out
         crusher_origin = ('CRUSH' in src or 'OCP' in src or 'CRUS' in mat)
         if crusher_origin:
             out.append(('CRUSHER_5_18', qty))
@@ -159,6 +172,11 @@ def wb_report_contributions(wb: WbMovement):
 
     # Fines products.
     if 'FINE' in mat:
+        if stock_source or project_source:
+            out.append(('PRODUCT_REHANDLED', qty))
+            if 'CRUSH' in dst or 'OCP' in dst:
+                out.append(('CRUSHER_FEED', qty))
+            return out
         if 'CRUSH' in src or 'OCP' in src:
             out.append(('CRUSHER_FINES', qty))
             if _is_stack(dst):
@@ -176,8 +194,8 @@ def wb_report_contributions(wb: WbMovement):
         mine_source = any(x in src for x in ('HA','RL','QUARRY','PIT','MINE')) and not any(x in src for x in ('MSP','SCREEN','PLANT','STOCK'))
         if 'ROM' in mat and mine_source:
             return [('ROM_LUMPS', qty)]
-        if 'STOCK' in src and ('CRUSH' in dst or 'OCP' in dst):
-            return [('LUMPS_TO_CRUSHER_FROM_STOCK', qty), ('CRUSHER_FEED', qty)]
+        if stock_source and ('CRUSH' in dst or 'OCP' in dst):
+            return [('PRODUCT_REHANDLED', qty), ('LUMPS_TO_CRUSHER_FROM_STOCK', qty), ('CRUSHER_FEED', qty)]
         if 'CRUSH' in dst or 'OCP' in dst:
             return [('LUMPS_FROM_SCREEN', qty), ('LUMPS_FEED_TO_CRUSHER', qty), ('CRUSHER_FEED', qty)]
         return [('LUMPS_FROM_SCREEN', qty)]
@@ -186,13 +204,23 @@ def wb_report_contributions(wb: WbMovement):
         return [('SUBGRADE_FEED_PLANT' if any(x in dst for x in ('FEED','PLANT','MSP')) else 'SUBGRADE_DUMP', qty)]
 
     if 'ROM' in mat:
-        if 'STOCK' in src and any(x in dst for x in ('PLANT','FEED','MSP','SCREEN')):
-            return [('ROM_STOCK_TO_PLANT_FEED', qty), ('MSP_FEED', qty)]
-        if 'STOCK' in dst:
-            return [('ROM_STOCK_YARD', qty)]
+        # Fresh ROM is counted once at its mine-origin movement regardless of
+        # whether it goes directly to a plant or first to ROM stock.
+        # ROM leaving stock is rehandling: it can be physical plant feed but
+        # must never increase the fresh-ROM production base.
+        if stock_source:
+            out.append(('ROM_REHANDLED', qty))
+            if any(x in dst for x in ('PLANT','FEED','MSP','SCREEN')):
+                out.extend([('ROM_STOCK_TO_PLANT_FEED', qty), ('MSP_FEED', qty)])
+            elif _is_stack(dst):
+                out.append(('ROM_STOCK_TO_STOCK', qty))
+            return out
+        out.append(('ROM', qty))
         if any(x in dst for x in ('PLANT','FEED','MSP','SCREEN')):
-            return [('ROM', qty), ('MSP_FEED', qty)]
-        return [('ROM', qty)]
+            out.append(('MSP_FEED', qty))
+        if _is_stack(dst):
+            out.append(('ROM_STOCK_YARD', qty))
+        return out
 
     if 'SPILL' in mat or 'SPILL' in dst:
         if 'CRUSH' in dst or 'OCP' in dst:
