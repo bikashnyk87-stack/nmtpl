@@ -1070,27 +1070,26 @@ def dashboard_desk(db, user, p):
     avg_cycle=sum(cycle_samples)/len(cycle_samples) if cycle_samples else None
 
     ore_tonnes=wb_tonnes-material_buckets['WASTE']-material_buckets['REJECT']
-    # Feed quantities use the full authoritative WB period so production KPIs
-    # are not distorted by dashboard row filters.
-    crusher_feed=sum(tonnes(w) for w in wb_all if has_token(w.destination_raw,'CRUSH','OCP'))
-    screen_feed=sum(tonnes(w) for w in wb_all if has_token(w.destination_raw,'SCREEN','MSP-','MSP '))
-    crusher_recovery=(float(crusher_final)/crusher_feed*100) if crusher_feed>0 else None
     production_balance=rom_input-final_production
     production_summary={
-        'romInputMt':round(float(rom_input),2),'romPct':100.0 if rom_input>0 else None,
+        'romInputMt':round(float(rom_input),2),'romPct':100.0 if rom_input>0 else None,'romBasis':rom_basis,
         'screenFinesMt':round(float(screen_fines),2),'screenFinesPct':prod_pct(screen_fines),
         'screen518Mt':round(float(screen_518),2),'screen518Pct':prod_pct(screen_518),
+        'screenLumpsMt':round(float(screen_lumps),2),'screenLumpsPct':prod_pct(screen_lumps),
+        'screenSpillageMt':round(float(screen_spillage),2),'screenSpillagePct':prod_pct(screen_spillage),
+        'screenIntermediateMt':round(float(screen_intermediate),2),'screenIntermediatePct':prod_pct(screen_intermediate),
+        'screenDirectMt':round(float(screen_direct),2),'screenDirectPct':prod_pct(screen_direct),
+        'screenAccountedMt':round(float(screen_accounted),2),'screenAccountedPct':prod_pct(screen_accounted),
         'crusherFinesMt':round(float(crusher_fines),2),'crusherFinesPct':prod_pct(crusher_fines),
         'crusherCloMt':round(float(crusher_clo),2),'crusherCloPct':prod_pct(crusher_clo),
-        'screenDirectMt':round(float(screen_direct),2),'screenDirectPct':prod_pct(screen_direct),
         'crusherFinalMt':round(float(crusher_final),2),'crusherFinalPct':prod_pct(crusher_final),
         'finalProductionMt':round(float(final_production),2),'finalRecoveryPct':prod_pct(final_production),
-        'crusherFeedMt':round(float(crusher_feed),2),'crusherFeedPct':prod_pct(Decimal(str(crusher_feed))),
+        'crusherFeedMt':round(float(crusher_feed),2),'crusherFeedPct':prod_pct(crusher_feed),
         'crusherRecoveryPct':round(crusher_recovery,2) if crusher_recovery is not None else None,
         'oldStockExcludedMt':round(float(old_stock_excluded),2),'oldStockTrips':old_stock_trips,
         'oldStockVsRomPct':prod_pct(old_stock_excluded),
         'balanceMt':round(float(production_balance),2),'balancePct':prod_pct(production_balance),
-        'note':'ROM is 100% process input. Final Production = Screen Fines + Screen 5-18 + Crusher Fines + Crusher CLO (5-18). Project Area / PA SRF old-stock fines are excluded.'
+        'note':'MSP feed ROM is the 100% process-input base. Final Production = Screen Fines + Screen 5-18 + Crusher Fines + Crusher CLO (5-18). Screen CLO/Lumps 10-40 and spillage are intermediate crusher-feed streams. Project Area / PA SRF old-stock fines are excluded.'
     }
     fuel_per_tonne=float(hsd_litres)/wb_tonnes if wb_tonnes else 0.0
     fuel_per_trip=float(hsd_litres)/wb_trips if wb_trips else 0.0
