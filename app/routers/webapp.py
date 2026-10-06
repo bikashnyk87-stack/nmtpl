@@ -35,7 +35,13 @@ from app.services.wb_mapping import (
     expected_movement_date
 )
 from app.services.attendance_automation import auto_close_shift
-from app.services.tiom_erp import authoritative_wb as tiom_authoritative_wb, vehicle_matches as tiom_wb_vehicle_matches, movement_payload as tiom_wb_payload, wb_report_contributions as tiom_wb_report_contributions
+from app.services.tiom_erp import (
+    authoritative_wb as tiom_authoritative_wb,
+    vehicle_matches as tiom_wb_vehicle_matches,
+    movement_payload as tiom_wb_payload,
+    wb_report_contributions as tiom_wb_report_contributions,
+    allocate_blended_crusher_output,
+)
 from app.services.tiom_location_erp import canonicalize_wb_rows, location_options, ensure_location_master_roles
 from app.site_models import (
     TiomSourceDeployment, TiomSourceContext, TiomRouteMaster, TiomDrillSet, TiomDrillingShift,
@@ -680,10 +686,11 @@ def dashboard_desk(db, user, p):
     production_fact_trips={}
     production_fact_rows={}
     excluded_movement_keys=set()
-    excluded_codes={'PROJECT_AREA_FINES_TO_STACK','PRODUCT_REHANDLED','ROM_REHANDLED','ROM_STOCK_TO_STOCK','ROM_STOCK_TO_PLANT_FEED'}
+    excluded_codes={'PROJECT_AREA_FINES_TO_STACK','PRODUCT_REHANDLED','ROM_REHANDLED','ROM_STOCK_TO_STOCK','ROM_STOCK_TO_PLANT_FEED','OLD_STOCK_BLEND_10_40'}
     old_stock_excluded=Decimal('0')
     old_stock_trips=0
     production_hourly={h:{'hour':f'{h:02d}:00','rom':0.0,'final':0.0} for h in range(24)}
+    hourly_process_facts={h:{} for h in range(24)}
     final_output_codes={'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}
 
     def _wb_side_text(row, side):
@@ -721,7 +728,7 @@ def dashboard_desk(db, user, p):
         # Enrich physical plant-feed facts from canonical destination semantics.
         if 'ROM' in mat and any(x in dst_txt for x in ('MSP','SCREEN','PLANT','FEED')) and 'MSP_FEED' not in codes:
             facts.append(('MSP_FEED',qty)); codes.add('MSP_FEED')
-        intermediate={'LUMPS_FROM_SCREEN','LUMPS_FEED_TO_CRUSHER','LUMPS_TO_CRUSHER_FROM_STOCK','SPILLAGE','PRODUCT_REHANDLED'}
+        intermediate={'LUMPS_FROM_SCREEN','LUMPS_FEED_TO_CRUSHER','LUMPS_TO_CRUSHER_FROM_STOCK','SPILLAGE_TO_CRUSHER','PRODUCT_REHANDLED','OLD_STOCK_BLEND_10_40'}
         if codes.intersection(intermediate) and any(x in dst_txt for x in ('CRUSH','OCP')) and 'CRUSHER_FEED' not in codes:
             facts.append(('CRUSHER_FEED',qty))
         return facts
@@ -741,11 +748,19 @@ def dashboard_desk(db, user, p):
             if code not in seen_codes:
                 production_fact_trips[code]=production_fact_trips.get(code,0)+1
                 seen_codes.add(code)
-            if stamp and code in final_output_codes:
-                production_hourly[stamp.hour]['final']+=float(q)
+            if stamp:
+                hour_store=hourly_process_facts[stamp.hour]
+                hour_store[code]=hour_store.get(code,Decimal('0'))+q
             if stamp and code=='ROM':
                 production_hourly[stamp.hour]['rom']+=float(q)
     old_stock_trips=len(excluded_movement_keys)
+    for hour,hfacts in hourly_process_facts.items():
+        screen_hour=hfacts.get('SCREEN_FINES',Decimal('0'))+hfacts.get('SCREEN_5_18',Decimal('0'))
+        crusher_gross_hour=hfacts.get('CRUSHER_FINES',Decimal('0'))+hfacts.get('CRUSHER_5_18',Decimal('0'))
+        crusher_feed_hour=hfacts.get('CRUSHER_FEED',Decimal('0'))
+        crusher_blend_hour=hfacts.get('CRUSHER_BLEND_FEED',Decimal('0'))
+        crusher_fresh_hour,_blend_hour=allocate_blended_crusher_output(crusher_gross_hour,crusher_feed_hour,crusher_blend_hour)
+        production_hourly[hour]['final']=float(screen_hour+crusher_fresh_hour)
 
     # Fresh mine ROM is the 100% production base. MSP feed is deliberately
     # separate because it can contain ROM drawn from prior stock.
@@ -759,14 +774,20 @@ def dashboard_desk(db, user, p):
     crusher_fines=production_facts.get('CRUSHER_FINES',Decimal('0'))
     crusher_clo=production_facts.get('CRUSHER_5_18',Decimal('0'))
     screen_lumps=production_facts.get('LUMPS_FROM_SCREEN',Decimal('0'))
-    screen_spillage=production_facts.get('SPILLAGE',Decimal('0'))
-    screen_intermediate=screen_lumps+screen_spillage
+    spillage_to_crusher=production_facts.get('SPILLAGE_TO_CRUSHER',Decimal('0'))
+    spillage_recycle=production_facts.get('SPILLAGE_RECYCLE_MSP',Decimal('0'))
+    spillage_wip=production_facts.get('SPILLAGE_WIP',Decimal('0'))
+    screen_intermediate=screen_lumps+spillage_to_crusher
     crusher_feed_fact=production_facts.get('CRUSHER_FEED',Decimal('0'))
+    crusher_blend_feed=production_facts.get('CRUSHER_BLEND_FEED',Decimal('0'))
 
-    final_production=screen_fines+screen_518+crusher_fines+crusher_clo
     screen_direct=screen_fines+screen_518
-    screen_accounted=screen_direct+screen_intermediate
+    screen_accounted=screen_direct+screen_intermediate+spillage_wip
     crusher_final=crusher_fines+crusher_clo
+    crusher_fresh_final,crusher_blend_output=allocate_blended_crusher_output(
+        crusher_final,crusher_feed_fact,crusher_blend_feed
+    )
+    final_production=screen_direct+crusher_fresh_final
 
     def prod_pct(value,base=rom_input):
         return round(float(Decimal(value or 0)/base*Decimal('100')),2) if base and base>0 else None
