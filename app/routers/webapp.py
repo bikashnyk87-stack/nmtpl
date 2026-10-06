@@ -662,35 +662,82 @@ def dashboard_desk(db, user, p):
     equipment_map = {e.machine_id: e for e in db.scalars(select(Equipment)).all()}
     location_map = {l.location_id: l for l in db.scalars(select(Location)).all()}
 
-    # TIOM production truth: ROM is the 100% process input. Only final stackable
-    # outputs count as new production. Re-handled Project Area / PA SRF fines
-    # are tracked separately and explicitly excluded from production recovery.
+    # TIOM production truth: actual MSP feed is the 100% process-input base.
+    # Final production contains only stackable outputs. Screen CLO/lumps/spillage
+    # are intermediate crusher-feed streams. Project Area / PA SRF old stock is
+    # re-handling only and must never inflate production or recovery.
     production_facts={}
+    production_fact_trips={}
+    production_fact_rows={}
     old_stock_trips=0
     production_hourly={h:{'hour':f'{h:02d}:00','rom':0.0,'final':0.0} for h in range(24)}
     final_output_codes={'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}
-    rom_input_codes={'ROM','ROM_STOCK_TO_PLANT_FEED'}
+
+    def _wb_side_text(row, side):
+        canon=wb_canonical_all.get(row.movement_key)
+        loc_id=(canon.source_location_id if side=='SOURCE' else canon.destination_location_id) if canon else None
+        loc=location_map.get(loc_id) if loc_id else None
+        raw=row.source_raw if side=='SOURCE' else row.destination_raw
+        return ' '.join([
+            str(raw or ''),str(loc_id or ''),
+            str(loc.location_name if loc else ''),
+            str(loc.location_type if loc else '')
+        ]).upper()
+
+    def _dashboard_process_facts(row):
+        facts=list(tiom_wb_report_contributions(row))
+        codes={code for code,_qty in facts}
+        qty=(row.net_kg or Decimal('0'))/Decimal('1000')
+        if qty<=0:
+            return facts
+        mat=(' '.join([str(row.material_code or ''),str(row.material_name or '')])).upper()
+        dst_txt=_wb_side_text(row,'DESTINATION')
+        # Enrich raw WB labels with canonical Location Master semantics.
+        if 'ROM' in mat and any(x in dst_txt for x in ('MSP','SCREEN','PLANT','FEED')) and 'MSP_FEED' not in codes:
+            facts.append(('MSP_FEED',qty)); codes.add('MSP_FEED')
+        intermediate={'LUMPS_FROM_SCREEN','LUMPS_FEED_TO_CRUSHER','LUMPS_TO_CRUSHER_FROM_STOCK','SPILLAGE'}
+        if codes.intersection(intermediate) and any(x in dst_txt for x in ('CRUSH','OCP')) and 'CRUSHER_FEED' not in codes:
+            facts.append(('CRUSHER_FEED',qty))
+        return facts
+
     for row in wb_all:
-        facts=tiom_wb_report_contributions(row)
+        facts=_dashboard_process_facts(row)
         if any(code=='PROJECT_AREA_FINES_TO_STACK' for code,_qty in facts):
             old_stock_trips+=1
         stamp=aware(row.weigh_at).astimezone(TZ) if row.weigh_at else None
+        seen_codes=set()
         for code,qty in facts:
             q=Decimal(qty or 0)
             production_facts[code]=production_facts.get(code,Decimal('0'))+q
+            production_fact_rows.setdefault(code,[]).append(row)
+            if code not in seen_codes:
+                production_fact_trips[code]=production_fact_trips.get(code,0)+1
+                seen_codes.add(code)
             if stamp and code in final_output_codes:
                 production_hourly[stamp.hour]['final']+=float(q)
-            if stamp and code in rom_input_codes:
+            if stamp and code=='MSP_FEED':
                 production_hourly[stamp.hour]['rom']+=float(q)
 
-    rom_input=production_facts.get('ROM',Decimal('0'))+production_facts.get('ROM_STOCK_TO_PLANT_FEED',Decimal('0'))
+    # Prefer actual feed-to-MSP movement. Legacy fallback is used only where the
+    # WB location master has not yet identified the MSP/feed route.
+    msp_feed=production_facts.get('MSP_FEED',Decimal('0'))
+    rom_fallback=production_facts.get('ROM',Decimal('0'))+production_facts.get('ROM_STOCK_TO_PLANT_FEED',Decimal('0'))
+    rom_input=msp_feed if msp_feed>0 else rom_fallback
+    rom_basis='MSP_FEED' if msp_feed>0 else 'ROM_MOVEMENT_FALLBACK'
+
     screen_fines=production_facts.get('SCREEN_FINES',Decimal('0'))
     screen_518=production_facts.get('SCREEN_5_18',Decimal('0'))
     crusher_fines=production_facts.get('CRUSHER_FINES',Decimal('0'))
     crusher_clo=production_facts.get('CRUSHER_5_18',Decimal('0'))
+    screen_lumps=production_facts.get('LUMPS_FROM_SCREEN',Decimal('0'))
+    screen_spillage=production_facts.get('SPILLAGE',Decimal('0'))
+    screen_intermediate=screen_lumps+screen_spillage
+    crusher_feed_fact=production_facts.get('CRUSHER_FEED',Decimal('0'))
     old_stock_excluded=production_facts.get('PROJECT_AREA_FINES_TO_STACK',Decimal('0'))
+
     final_production=screen_fines+screen_518+crusher_fines+crusher_clo
     screen_direct=screen_fines+screen_518
+    screen_accounted=screen_direct+screen_intermediate
     crusher_final=crusher_fines+crusher_clo
 
     def prod_pct(value,base=rom_input):
