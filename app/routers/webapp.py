@@ -1489,7 +1489,7 @@ def dashboard_desk(db, user, p):
             'hsdPerTonne':round(fuel_per_tonne,2),'fuelPerTrip':round(fuel_per_trip,2),'materials':len(materials),'sources':len(sources),'destinations':len(destinations),
             'oreTonnes':round(max(0,ore_tonnes),2),'wasteTonnes':round(material_buckets['WASTE'],2),'romTonnes':round(material_buckets['ROM'],2),
             'finesTonnes':round(material_buckets['FINES'],2),'cloTonnes':round(material_buckets['CLO'],2),'rejectTonnes':round(material_buckets['REJECT'],2),
-            'crusherFeed':round(crusher_feed,2),'screenFeed':round(screen_feed,2),'avgCycleTime':round(avg_cycle,1) if avg_cycle is not None else None,
+            'crusherFeed':round(float(crusher_feed),2),'screenFeed':round(float(rom_input),2),'avgCycleTime':round(avg_cycle,1) if avg_cycle is not None else None,
             'avgLoadingTime':round(avg_loading,1) if avg_loading is not None else None,'avgUnloadingTime':None,'avgQueueTime':None,
             'activeCrushers':active_crushers,'activeScreens':active_screens,'runningLoaders':running_loaders,'runningExcavators':running_excavators,
             'runningTippers':running_tippers,'idleEquipment':idle_equipment,'equipmentUtilization':round(equipment_util,1),'tonPerTrip':round(avg_payload,2),
