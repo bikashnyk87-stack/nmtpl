@@ -1715,7 +1715,9 @@ def dashboard_desk(db, user, p):
             'weather':'Site weather source/coordinates are not configured.'
         },
         'notes':[
-            'WB remains the authoritative movement source, but total WB tonnes is not the primary production KPI. Fresh ROM is the 100% mine-production base; plant feed is shown separately because it can include prior-stock rehandling.',
+            'WB remains the authoritative movement source, but total WB tonnes is not the primary production KPI. Fresh ROM is the 100% mine-production base; plant throughput and rehandling are reported separately.',
+            'CLO 10-40 is company old-stock blending material. It is included in physical Crusher Feed/TPH but excluded from NMTPL fresh production. Its share of mixed crusher output is allocated pro-rata by feed tonnes.',
+            'Genuine MSP lumps and large spillage sent to Crusher are fresh intermediate feed. Spillage sent back to an MSP is internal recycle: it increases gross plant throughput/TPH but not fresh feed or production.',
             'RH / old-stock movements, including Project Area / PA SRF material and ROM drawn from stock, are excluded from new-production and recovery KPIs.',
             'Trips Per Hour means trips divided by active clock-hour buckets. Lead-adjusted haulage also reports Trip-km/hr and Ton-km/hr; unresolved lead is shown, never guessed.',
             'MIS Manual Entry panels use SUBMITTED driver reports only. Draft reports are shown as pending counts and are excluded from production until Submit Shift Report is used.',
