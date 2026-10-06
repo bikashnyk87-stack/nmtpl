@@ -132,22 +132,24 @@ def wb_report_contributions(wb: WbMovement):
     if 'UNSCREEN' in mat and ('5 18' in mat or '5-18' in str(wb.material_name or '')):
         return [('UNSCREENED_5_18', qty)]
 
-    # Screen CLO 10-40 / lumps are INTERMEDIATE screen output, not Crusher CLO.
-    # If the same movement goes to the crusher it is also an actual crusher-feed movement.
+    # TIOM business rule: CLO 10-40 is COMPANY OLD STOCK used as a quality
+    # blending stream. It is not NMTPL fresh production even if a WB source
+    # label happens to mention an MSP. When it enters the crusher it remains
+    # physical crusher feed but is tagged separately so its share can be
+    # excluded from fresh-production accounting.
     raw_name = str(wb.material_name or '').upper()
     is_clo = bool(re.search(r'(^| )CLO( |$)', mat))
     is_10_40 = ('10 40' in mat or '10-40' in raw_name)
     if is_clo and is_10_40:
-        if stock_source or project_source:
-            out.append(('PRODUCT_REHANDLED', qty))
-            if 'CRUSH' in dst or 'OCP' in dst:
-                out.append(('LUMPS_TO_CRUSHER_FROM_STOCK', qty))
-                out.append(('CRUSHER_FEED', qty))
-            return out
-        out.append(('LUMPS_FROM_SCREEN', qty))
+        out.extend([
+            ('PRODUCT_REHANDLED', qty),
+            ('OLD_STOCK_BLEND_10_40', qty),
+        ])
         if 'CRUSH' in dst or 'OCP' in dst:
-            out.append(('LUMPS_FEED_TO_CRUSHER', qty))
-            out.append(('CRUSHER_FEED', qty))
+            out.extend([
+                ('CRUSHER_BLEND_FEED', qty),
+                ('CRUSHER_FEED', qty),
+            ])
         return out
 
     # 5-18 products. Source/material suffix decides Screen vs Crusher;
@@ -223,12 +225,39 @@ def wb_report_contributions(wb: WbMovement):
         return out
 
     if 'SPILL' in mat or 'SPILL' in dst:
+        # Spillage is either internal recycle, crusher feed, or WIP.
         if 'CRUSH' in dst or 'OCP' in dst:
-            return [('SPILLAGE', qty), ('CRUSHER_FEED', qty)]
-        return [('SPILLAGE', qty)]
+            return [('SPILLAGE_TO_CRUSHER', qty), ('CRUSHER_FEED', qty)]
+        if any(x in dst for x in ('MSP', 'SCREEN')):
+            return [('SPILLAGE_RECYCLE_MSP', qty)]
+        return [('SPILLAGE_WIP', qty)]
 
     if '5 40' in mat or '5-40' in str(wb.material_name or ''):
         if 'TANKURA' in dst:
             return [('SHIFT_5_40_TANKURA', qty)]
 
     return []
+
+def allocate_blended_crusher_output(gross_output, total_feed, blend_feed):
+    """Allocate mixed crusher output between fresh feed and old-stock blend.
+
+    Crusher products are physically mixed after processing, so exact tonnes
+    cannot be traced back to each feed stream from WB alone. Management
+    accounting therefore allocates gross output pro-rata to fresh vs blend
+    feed. This preserves actual crusher recovery while preventing old stock
+    from inflating fresh production.
+    """
+    gross = Decimal(str(gross_output or 0))
+    feed = Decimal(str(total_feed or 0))
+    blend = Decimal(str(blend_feed or 0))
+    if gross <= 0:
+        return Decimal('0'), Decimal('0')
+    if feed <= 0:
+        return gross, Decimal('0')
+    if blend < 0:
+        blend = Decimal('0')
+    if blend > feed:
+        blend = feed
+    blend_output = gross * blend / feed
+    fresh_output = gross - blend_output
+    return fresh_output, blend_output
