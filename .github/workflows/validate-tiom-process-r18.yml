@@ -1,0 +1,29 @@
+name: Validate TIOM Process R18
+
+on:
+  push:
+    branches:
+      - validate-tiom-process-r18-20261006
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python syntax
+        run: python -m py_compile app/services/tiom_erp.py app/routers/webapp.py
+      - name: JavaScript syntax
+        run: node --check app/static/workspace.js
+      - name: Process logic checks
+        run: |
+          grep -q "MSP_FEED" app/services/tiom_erp.py
+          grep -q "CRUSHER_FEED" app/services/tiom_erp.py
+          grep -q "is_10_40" app/services/tiom_erp.py
+          grep -q "productionMaterials" app/routers/webapp.py
+          grep -q "plantPerformance" app/routers/webapp.py
+          grep -q "dashProductionMaterialTable" app/static/workspace.js
+          grep -q "dashPlantPerformanceTable" app/static/workspace.js
+          grep -q "tiom-process-r18" app/static/index.html
