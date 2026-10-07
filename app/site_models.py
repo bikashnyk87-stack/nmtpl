@@ -936,6 +936,28 @@ class TiomHsdIssueDetail(Base):
     entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
 
 
+class TiomHsdStockCheck(Base):
+    """Physical/dip stock check against the calculated FIFO book balance."""
+    __tablename__ = "tiom_hsd_stock_check"
+
+    check_id: Mapped[str] = mapped_column(String(70), primary_key=True)
+    operating_date: Mapped[date] = mapped_column(Date, index=True)
+    shift: Mapped[str] = mapped_column(String(20), index=True)
+    tanker_id: Mapped[str] = mapped_column(ForeignKey("hsd_tanker.tanker_id"), index=True)
+    checked_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    book_litres: Mapped[Decimal] = mapped_column(Numeric(16, 3))
+    physical_litres: Mapped[Decimal] = mapped_column(Numeric(16, 3))
+    variance_litres: Mapped[Decimal] = mapped_column(Numeric(16, 3))
+    remarks: Mapped[str | None] = mapped_column(String(300))
+    entered_by: Mapped[str] = mapped_column(String(60))
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+
+    __table_args__ = (
+        UniqueConstraint("operating_date", "shift", "tanker_id", name="uq_tiom_hsd_stock_check_shift"),
+        Index("ix_tiom_hsd_stock_check_period", "operating_date", "shift"),
+    )
+
+
 class TiomMisReconciliation(Base):
     __tablename__ = "tiom_mis_reconciliation"
 
@@ -997,6 +1019,7 @@ MULTISITE_TABLES = [
     TiomMisTripLead,
     TiomHsdReceiptDetail,
     TiomHsdIssueDetail,
+    TiomHsdStockCheck,
     TiomMisReconciliation,
     SiteAuditLog,
 ]
