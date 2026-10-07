@@ -346,6 +346,99 @@ async def lifespan(app):
                 ORDER BY shift,checked_at
             """),{"d":d}).mappings().all()])
 
+        raw_json_date=os.getenv("TIOM_TEMP_RAW_JSON_DATE", "").strip()
+        if raw_json_date:
+            def _emit_json(name, rows):
+                raw=json.dumps(rows,sort_keys=True,default=str,separators=(",",":"))
+                chunk_size=5000
+                total=(len(raw)+chunk_size-1)//chunk_size
+                for idx in range(total):
+                    part=raw[idx*chunk_size:(idx+1)*chunk_size]
+                    print(f"TIOM_TEMP_RAW_JSON|{name}|{idx+1}|{total}|{part}",flush=True)
+                print(f"TIOM_TEMP_RAW_JSON_COUNT|{name}|{len(rows)}",flush=True)
+
+            jd=raw_json_date
+            _emit_json("WB_BATCHES",[dict(r) for r in db.execute(text("""
+                SELECT * FROM wb_import_batch
+                WHERE operating_date=CAST(:d AS date)
+                ORDER BY shift,batch_id
+            """),{"d":jd}).mappings().all()])
+            _emit_json("WB_MOVEMENTS",[dict(r) for r in db.execute(text("""
+                SELECT w.*,c.source_location_id AS canonical_source_location_id,
+                       c.destination_location_id AS canonical_destination_location_id,
+                       c.material_id AS canonical_material_id,
+                       c.mapping_status AS canonical_mapping_status,
+                       c.normalized_at AS canonical_normalized_at
+                FROM wb_movement w
+                LEFT JOIN tiom_wb_canonical c ON c.movement_key=w.movement_key
+                WHERE w.operating_date=CAST(:d AS date)
+                ORDER BY CASE w.shift WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 ELSE 9 END,
+                         w.weigh_at,w.movement_no
+            """),{"d":jd}).mappings().all()])
+            _emit_json("MIS_REPORTS",[dict(r) for r in db.execute(text("""
+                SELECT * FROM tiom_mis_report
+                WHERE operating_date=CAST(:d AS date)
+                ORDER BY CASE shift WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 ELSE 9 END,
+                         vehicle_id,report_id
+            """),{"d":jd}).mappings().all()])
+            _emit_json("MIS_TRIPS",[dict(r) for r in db.execute(text("""
+                SELECT h.operating_date,h.shift,h.vehicle_id,h.operator_id,h.status AS report_status,
+                       r.*,d.machine_id AS mapped_machine_id,d.material_id AS mapped_material_id,
+                       d.source_location_id AS mapped_source_location_id,
+                       d.destination_location_id AS mapped_destination_location_id,
+                       d.factor_mt_per_trip,d.calculated_qty_mt,
+                       l.bench_rl_m,l.route_mode,l.lead_km,l.lead_rule_id,l.lead_status,
+                       q.field_trip_id,q.wb_movement_key,q.match_status,q.confidence,
+                       q.reason AS reconciliation_reason
+                FROM tiom_mis_trip_row r
+                JOIN tiom_mis_report h ON h.report_id=r.report_id
+                LEFT JOIN tiom_mis_trip_detail d ON d.row_id=r.row_id
+                LEFT JOIN tiom_mis_trip_lead l ON l.row_id=r.row_id
+                LEFT JOIN tiom_mis_reconciliation q ON q.row_id=r.row_id
+                WHERE h.operating_date=CAST(:d AS date)
+                ORDER BY CASE h.shift WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 ELSE 9 END,
+                         h.vehicle_id,r.row_no
+            """),{"d":jd}).mappings().all()])
+            _emit_json("PRODUCTION_REPORTS",[dict(r) for r in db.execute(text("""
+                SELECT * FROM tiom_shift_production_report
+                WHERE operating_date=CAST(:d AS date)
+                ORDER BY shift,report_id
+            """),{"d":jd}).mappings().all()])
+            _emit_json("PRODUCTION_MOVEMENTS",[dict(r) for r in db.execute(text("""
+                SELECT m.* FROM tiom_shift_production_movement m
+                JOIN tiom_shift_production_report h ON h.report_id=m.report_id
+                WHERE h.operating_date=CAST(:d AS date)
+                ORDER BY h.shift,m.row_no
+            """),{"d":jd}).mappings().all()])
+            _emit_json("HSD_ISSUES",[dict(r) for r in db.execute(text("""
+                SELECT i.*,x.previous_meter_reading,x.usage,x.efficiency,x.efficiency_unit,
+                       x.entered_by AS detail_entered_by,x.entered_at AS detail_entered_at
+                FROM hsd_issue i
+                LEFT JOIN tiom_hsd_issue_detail x ON x.issue_id=i.issue_id
+                WHERE i.operating_date=CAST(:d AS date)
+                ORDER BY i.issued_at,i.issue_id
+            """),{"d":jd}).mappings().all()])
+            _emit_json("HSD_ALLOCATIONS",[dict(r) for r in db.execute(text("""
+                SELECT a.* FROM hsd_issue_allocation a
+                JOIN hsd_issue i ON i.issue_id=a.issue_id
+                WHERE i.operating_date=CAST(:d AS date)
+                ORDER BY i.issued_at,a.id
+            """),{"d":jd}).mappings().all()])
+            _emit_json("HSD_RECEIPT_CONTEXT",[dict(r) for r in db.execute(text("""
+                SELECT l.*,x.operating_date,x.shift,x.receipt_type,x.discount_per_l,
+                       x.net_amount,x.remarks,x.entered_by,x.entered_at
+                FROM hsd_purchase_lot l
+                LEFT JOIN tiom_hsd_receipt_detail x ON x.lot_id=l.lot_id
+                WHERE x.operating_date<=CAST(:d AS date)
+                  AND (l.litres_received<>0 OR l.litres_remaining<>0)
+                ORDER BY x.operating_date,l.received_at,l.lot_id
+            """),{"d":jd}).mappings().all()])
+            _emit_json("HSD_STOCK_CHECKS",[dict(r) for r in db.execute(text("""
+                SELECT * FROM tiom_hsd_stock_check
+                WHERE operating_date=CAST(:d AS date)
+                ORDER BY shift,checked_at
+            """),{"d":jd}).mappings().all()])
+
         if os.getenv("TIOM_TEMP_SELFTEST", "").strip().lower() in {"1","true","yes","on"}:
             admin_user=next((x for x in users if x.active and x.admin),None)
             if not admin_user:
