@@ -202,8 +202,11 @@ def read_changes(db: Session, after_id: int, limit: int) -> dict:
             "changedAt": r["changed_at"],
         }
         for r in rows
+        if r["operation"] != "R"
     ]
-    last_id = payload[-1]["changeId"] if payload else after_id
+    # Internal reset records are intentionally not replicated, but the PC
+    # watermark still advances past them so they are not polled forever.
+    last_id = int(rows[-1]["change_id"]) if rows else after_id
     return {
         "changes": payload,
         "lastChangeId": last_id,
