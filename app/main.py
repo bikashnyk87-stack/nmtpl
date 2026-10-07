@@ -198,6 +198,25 @@ async def lifespan(app):
             print("TIOM_TEMP_DIAG_HSD="+json.dumps(hsd_diag,sort_keys=True,default=str),flush=True)
 
             raw_diag={
+                "productionReports":[dict(r) for r in db.execute(text("""
+                    SELECT report_id,shift,status,remarks,entered_by,entered_at,submitted_by,submitted_at,version
+                    FROM tiom_shift_production_report
+                    WHERE operating_date=CAST(:d AS date)
+                    ORDER BY CASE shift WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 ELSE 9 END
+                """),{"d":diag_date}).mappings().all()],
+                "productionMovements":[dict(r) for r in db.execute(text("""
+                    SELECT h.shift,h.status,m.row_no,m.movement_code,
+                           m.source_location_id,m.destination_location_id,
+                           m.trips,m.qty_mt,m.remarks,m.entered_at
+                    FROM tiom_shift_production_movement m
+                    JOIN tiom_shift_production_report h ON h.report_id=m.report_id
+                    WHERE h.operating_date=CAST(:d AS date)
+                    ORDER BY CASE h.shift WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 ELSE 9 END,m.row_no
+                """),{"d":diag_date}).mappings().all()],
+                "productionCalculated":{
+                    sh:webapp._tiom_shift_report_data(db,date.fromisoformat(diag_date),sh,True)
+                    for sh in ("A","B","C")
+                },
                 "wbBatches":[dict(r) for r in db.execute(text("""
                     SELECT shift,status,COUNT(*) AS batches,
                            MAX(confirmed_at) AS latest_confirmed
