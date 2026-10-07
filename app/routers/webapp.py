@@ -4233,6 +4233,37 @@ def _tiom_hsd_previous_meter(db,machine_id,before):
     return Decimal(issue.meter_reading) if issue and issue.meter_reading is not None else None
 
 
+def _tiom_hsd_context_anchor(day, definition):
+    now=now_local()
+    start=datetime.combine(day,definition.start_time,TZ)
+    end=datetime.combine(day,definition.end_time,TZ)
+    if definition.end_time <= definition.start_time:
+        end += timedelta(days=1)
+    if start <= now <= end:
+        return now
+    return end
+
+
+def tiom_hsd_previous_meter_info(db,user,p):
+    require(user,'HSD'); p=p or {}; day,sh,definition=_tiom_context(db,user,p)
+    machine=active_resource(db,Equipment,str(p.get('machineId') or '').strip())
+    event=_tiom_shift_date_time(db,day,sh,p.get('time')) or _tiom_hsd_context_anchor(day,definition)
+    issue=db.scalar(select(HsdIssue).where(
+        HsdIssue.machine_id==machine.machine_id,
+        HsdIssue.meter_reading.is_not(None),
+        HsdIssue.issued_at<event
+    ).order_by(HsdIssue.issued_at.desc()).limit(1))
+    return {
+        'machineId':machine.machine_id,
+        'meterType':_tiom_meter_type(machine),
+        'previousMeter':float(issue.meter_reading) if issue and issue.meter_reading is not None else None,
+        'previousDate':str(issue.operating_date) if issue else None,
+        'previousShift':issue.shift if issue else None,
+        'previousTime':time_text(issue.issued_at) if issue else None,
+        'previousLitres':float(issue.litres) if issue else None,
+    }
+
+
 def save_tiom_hsd_receipt(db,user,p):
     require(user,'HSD'); p=p or {}; day,sh,_=_tiom_context(db,user,p); request_id=str(p.get('requestId') or '').strip()
     if not request_id: request_id='tiom-hsd-r-'+uuid4().hex
@@ -4265,7 +4296,9 @@ def save_tiom_hsd_issue(db,user,p):
     except: raise HTTPException(422,'Enter valid HSD litres and current meter.')
     if litres<=0: raise HTTPException(422,'HSD litres must be greater than zero.')
     event=_tiom_shift_date_time(db,day,sh,p.get('time')) or datetime.combine(day,dtime(12,0),TZ)
-    prev_raw=p.get('previousMeter'); prev=Decimal(str(prev_raw)) if prev_raw not in (None,'') else _tiom_hsd_previous_meter(db,machine.machine_id,event)
+    # Previous HMR/KMR is authoritative from the immediately preceding saved
+    # HSD entry. Never trust a manually supplied previous reading.
+    prev=_tiom_hsd_previous_meter(db,machine.machine_id,event)
     if prev is not None and current<prev: raise HTTPException(422,'Current meter cannot be below previous meter.')
     usage=(current-prev) if prev is not None else None; meter_type=_tiom_meter_type(machine)
     efficiency=None; unit='KMPL' if meter_type=='KMR' else 'HSD/HR'
@@ -4274,9 +4307,12 @@ def save_tiom_hsd_issue(db,user,p):
     issue=HsdIssue(issue_id=str(uuid4()),operating_date=day,shift=sh,tanker_id=tanker.tanker_id,machine_id=machine.machine_id,litres=litres,amount=Decimal('0'),location_id=None,meter_type=meter_type,meter_reading=current,recipient_employee_id=None,reference=short(str(p.get('reference') or '')) or None,issued_at=event,request_id=request_id)
     try: allocations,total=apply_fifo_issue(db,issue)
     except ValueError as exc: raise HTTPException(409,str(exc))
+    entry_source=str(p.get('entrySource') or 'OFFICE_MIS').strip().upper()
+    if entry_source not in {'OFFICE_MIS','FIELD_SUPERVISOR'}:
+        entry_source='OFFICE_MIS'
     db.add(TiomHsdIssueDetail(issue_id=issue.issue_id,previous_meter_reading=prev,usage=usage,efficiency=efficiency,efficiency_unit=unit,entered_by=user.login_id,entered_at=now_local()))
-    audit(db,user,'TIOM_HSD_FILL','hsd_issue',issue.issue_id,{'date':str(day),'shift':sh,'machine':machine.machine_id,'litres':str(litres),'meterType':meter_type,'previous':str(prev) if prev is not None else None,'current':str(current),'usage':str(usage) if usage is not None else None,'efficiency':str(efficiency) if efficiency is not None else None})
-    return {'ok':True,'message':'HSD filling saved.','issueId':issue.issue_id,'previousMeter':float(prev) if prev is not None else None,'usage':float(usage) if usage is not None else None,'efficiency':float(efficiency) if efficiency is not None else None,'efficiencyUnit':unit,'amount':float(total)}
+    audit(db,user,'TIOM_HSD_FILL','hsd_issue',issue.issue_id,{'date':str(day),'shift':sh,'machine':machine.machine_id,'litres':str(litres),'meterType':meter_type,'previous':str(prev) if prev is not None else None,'current':str(current),'usage':str(usage) if usage is not None else None,'efficiency':str(efficiency) if efficiency is not None else None,'entrySource':entry_source})
+    return {'ok':True,'message':'HSD filling saved.','issueId':issue.issue_id,'previousMeter':float(prev) if prev is not None else None,'usage':float(usage) if usage is not None else None,'efficiency':float(efficiency) if efficiency is not None else None,'efficiencyUnit':unit,'amount':float(total),'entrySource':entry_source}
 
 
 def save_tiom_hsd_issue_batch(db,user,p):
@@ -4293,7 +4329,7 @@ def save_tiom_hsd_issue_batch(db,user,p):
         if not machine_id and current in (None,'') and litres in (None,''): continue
         if not machine_id: raise HTTPException(422,f'Row {idx}: select equipment.')
         item=dict(row)
-        item.update({'date':p.get('date'),'shift':p.get('shift'),'tankerId':tanker_id,'requestId':f'{base_request}-{idx:03d}'})
+        item.update({'date':p.get('date'),'shift':p.get('shift'),'tankerId':tanker_id,'requestId':f'{base_request}-{idx:03d}','entrySource':p.get('entrySource') or 'OFFICE_MIS'})
         try:
             result=save_tiom_hsd_issue(db,user,item)
         except HTTPException as exc:
@@ -4452,20 +4488,53 @@ def save_tiom_drilling_shift(db,user,p):
 
 
 def tiom_hsd_desk(db,user,p):
-    require(user,'HSD'); p=p or {}; day,sh,_=_tiom_context(db,user,p)
+    require(user,'HSD'); p=p or {}; day,sh,definition=_tiom_context(db,user,p)
     report_from=_parse_ui_date_v2(p.get('reportFrom'),'report from date') if p.get('reportFrom') else day.replace(day=1)
     report_to=_parse_ui_date_v2(p.get('reportTo'),'report to date') if p.get('reportTo') else day
     if report_to < report_from: raise HTTPException(422,'Report To date cannot be before From date.')
     tankers=list(db.scalars(select(HsdTanker).where(HsdTanker.active).order_by(HsdTanker.tanker_id)))
     equipment=list(db.scalars(select(Equipment).where(Equipment.active).order_by(Equipment.machine_id)))
     stock={t.tanker_id:db.scalar(select(func.coalesce(func.sum(HsdPurchaseLot.litres_remaining),0)).where(HsdPurchaseLot.tanker_id==t.tanker_id)) for t in tankers}
+
+    # Prefill Previous HMR/KMR from the last saved HSD issue before the selected
+    # shift context. Exact row time is rechecked again on save.
+    anchor=_tiom_hsd_context_anchor(day,definition)
     prev={}
     for e in equipment:
-        issue=db.scalar(select(HsdIssue).where(HsdIssue.machine_id==e.machine_id,HsdIssue.meter_reading.is_not(None)).order_by(HsdIssue.issued_at.desc()).limit(1))
+        issue=db.scalar(select(HsdIssue).where(
+            HsdIssue.machine_id==e.machine_id,
+            HsdIssue.meter_reading.is_not(None),
+            HsdIssue.issued_at<anchor
+        ).order_by(HsdIssue.issued_at.desc()).limit(1))
         prev[e.machine_id]=float(issue.meter_reading) if issue and issue.meter_reading is not None else None
+
+    day_start=datetime.combine(day,dtime.min,TZ); day_end=day_start+timedelta(days=1)
+    opening_receipts=db.scalar(select(func.coalesce(func.sum(HsdPurchaseLot.litres_received),0)).where(HsdPurchaseLot.received_at<day_start)) or Decimal('0')
+    opening_issues=db.scalar(select(func.coalesce(func.sum(HsdIssue.litres),0)).where(HsdIssue.issued_at<day_start)) or Decimal('0')
+    opening_book=Decimal(opening_receipts)-Decimal(opening_issues)
+
+    day_lots=list(db.scalars(select(HsdPurchaseLot).where(HsdPurchaseLot.received_at>=day_start,HsdPurchaseLot.received_at<day_end)))
+    day_lot_ids=[x.lot_id for x in day_lots]
+    day_details={x.lot_id:x for x in db.scalars(select(TiomHsdReceiptDetail).where(TiomHsdReceiptDetail.lot_id.in_(day_lot_ids)))} if day_lot_ids else {}
+    opening_set=sum((Decimal(x.litres_received) for x in day_lots if day_details.get(x.lot_id) and day_details[x.lot_id].receipt_type=='OPENING'),Decimal('0'))
+    received=sum((Decimal(x.litres_received) for x in day_lots if not day_details.get(x.lot_id) or day_details[x.lot_id].receipt_type!='OPENING'),Decimal('0'))
+    issued_day=db.scalar(select(func.coalesce(func.sum(HsdIssue.litres),0)).where(HsdIssue.operating_date==day)) or Decimal('0')
+    issued_shift=db.scalar(select(func.coalesce(func.sum(HsdIssue.litres),0)).where(HsdIssue.operating_date==day,HsdIssue.shift==sh)) or Decimal('0')
+    available_now=sum((Decimal(stock[t.tanker_id] or 0) for t in tankers),Decimal('0'))
+    closing_book=opening_book+opening_set+received-Decimal(issued_day)
+
+    recent=list(db.scalars(select(HsdIssue).where(
+        HsdIssue.operating_date==day,HsdIssue.shift==sh
+    ).order_by(HsdIssue.issued_at.desc()).limit(12)))
+    recent_details={x.issue_id:x for x in db.scalars(select(TiomHsdIssueDetail).where(
+        TiomHsdIssueDetail.issue_id.in_([r.issue_id for r in recent])
+    ))} if recent else {}
+
     return {'date':str(day),'shift':sh,'reportFrom':str(report_from),'reportTo':str(report_to),
             'tankers':[{'id':t.tanker_id,'label':f'{t.tanker_id}'+(f' · {t.vehicle_no}' if t.vehicle_no else ''),'stock':float(stock[t.tanker_id] or 0)} for t in tankers],
             'equipment':[{'id':e.machine_id,'label':_tiom_asset_label(e),'category':_tiom_hsd_category(e),'meterType':_tiom_meter_type(e),'previousMeter':prev.get(e.machine_id)} for e in equipment],
+            'entrySummary':{'openingBook':float(opening_book),'openingSet':float(opening_set),'received':float(received),'issuedDay':float(issued_day),'issuedShift':float(issued_shift),'closingBook':float(closing_book),'availableNow':float(available_now)},
+            'recentIssues':[{'issueId':x.issue_id,'time':time_text(x.issued_at),'machineId':x.machine_id,'tankerId':x.tanker_id,'litres':float(x.litres),'meterType':x.meter_type or '','meter':float(x.meter_reading) if x.meter_reading is not None else None,'previousMeter':float(recent_details[x.issue_id].previous_meter_reading) if x.issue_id in recent_details and recent_details[x.issue_id].previous_meter_reading is not None else None,'enteredBy':recent_details[x.issue_id].entered_by if x.issue_id in recent_details else ''} for x in recent],
             'managementRecipients':_tiom_management_recipients(db),
             'report':_tiom_hsd_report(db,day,report_from,report_to)}
 
@@ -4474,7 +4543,7 @@ def tiom_hsd_desk(db,user,p):
 def rpc(p: RPC, request: Request, db: Session = Depends(get_db)):
     csrf(request)
     user = get_user(db, request)
-    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'getTiomWbSuggestions', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk'}
+    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'getTiomWbSuggestions', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
     if p.method not in read_methods:
         lock(db)
     try:
@@ -4531,6 +4600,7 @@ def dispatch(db, user, method, args):
     if method == 'getTiomShiftProductionDesk': return get_tiom_shift_production_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomDrillingDesk': return tiom_drilling_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomHsdDesk': return tiom_hsd_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
+    if method == 'getTiomHsdPreviousMeter': return tiom_hsd_previous_meter_info(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getHsdDesk': return hsd_desk(db,user)
     if method == 'getMastersDesk': return masters_desk(db,user)
     if method == 'getWbMonitor': return wb_monitor_v3(db, user, args[0] if args and isinstance(args[0], dict) else {})
