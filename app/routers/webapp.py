@@ -4244,6 +4244,16 @@ def _tiom_hsd_context_anchor(day, definition):
     return end
 
 
+def _tiom_hsd_event_time(db,day,shift,value):
+    exact=_tiom_shift_date_time(db,day,shift,value)
+    if exact is not None:
+        return exact
+    live_day,live_shift,_now=operating_context()
+    if day==live_day and shift==live_shift:
+        return now_local()
+    raise HTTPException(422,'Filling / receipt time is required for a previous date or previous shift entry.')
+
+
 def tiom_hsd_previous_meter_info(db,user,p):
     require(user,'HSD'); p=p or {}; day,sh,definition=_tiom_context(db,user,p)
     machine=active_resource(db,Equipment,str(p.get('machineId') or '').strip())
@@ -4280,7 +4290,7 @@ def save_tiom_hsd_receipt(db,user,p):
     supplier=short(str(p.get('supplier') or ('OPENING STOCK' if receipt_type=='OPENING' else '')).strip())
     if not supplier: raise HTTPException(422,'Supplier is required.')
     gross=(litres*rate).quantize(Decimal('0.01')); net=(litres*(rate-discount)).quantize(Decimal('0.01'))
-    event=_tiom_shift_date_time(db,day,sh,p.get('time')) or datetime.combine(day,dtime(12,0),TZ)
+    event=_tiom_hsd_event_time(db,day,sh,p.get('time'))
     lot=HsdPurchaseLot(lot_id=str(uuid4()),tanker_id=tanker.tanker_id,received_at=event,supplier=supplier,invoice_no=short(str(p.get('invoiceNo') or '')) or None,pump_location=short(str(p.get('pumpLocation') or '')) or None,litres_received=litres,litres_remaining=litres,rate_per_l=rate,amount=gross,request_id=request_id)
     db.add(lot); db.flush(); db.add(TiomHsdReceiptDetail(lot_id=lot.lot_id,operating_date=day,shift=sh,receipt_type=receipt_type,discount_per_l=discount,net_amount=net,remarks=short(str(p.get('remarks') or '')),entered_by=user.login_id,entered_at=now_local()))
     audit(db,user,'TIOM_HSD_RECEIPT','hsd_purchase_lot',lot.lot_id,{'date':str(day),'type':receipt_type,'litres':str(litres),'rate':str(rate),'discount':str(discount),'net':str(net)})
@@ -4295,7 +4305,7 @@ def save_tiom_hsd_issue(db,user,p):
     try: litres=Decimal(str(p.get('litres'))); current=Decimal(str(p.get('currentMeter')))
     except: raise HTTPException(422,'Enter valid HSD litres and current meter.')
     if litres<=0: raise HTTPException(422,'HSD litres must be greater than zero.')
-    event=_tiom_shift_date_time(db,day,sh,p.get('time')) or datetime.combine(day,dtime(12,0),TZ)
+    event=_tiom_hsd_event_time(db,day,sh,p.get('time'))
     # Previous HMR/KMR is authoritative from the immediately preceding saved
     # HSD entry. Never trust a manually supplied previous reading.
     prev=_tiom_hsd_previous_meter(db,machine.machine_id,event)
