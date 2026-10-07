@@ -33,7 +33,7 @@ SYNC_TABLES = (
     "tiom_shift_production_movement", "tiom_shift_report_baseline",
     "tiom_mis_report", "tiom_mis_trip_row", "tiom_trip_factor",
     "tiom_mis_trip_detail", "tiom_hsd_receipt_detail",
-    "tiom_hsd_issue_detail", "tiom_mis_reconciliation",
+    "tiom_hsd_issue_detail", "tiom_hsd_stock_check", "tiom_mis_reconciliation",
     "maintenance_breakdown", "maintenance_job_card", "maintenance_service_plan",
     "maintenance_service_history", "maintenance_component_master",
     "equipment_component_schedule", "component_change_history",
