@@ -128,6 +128,96 @@ async def lifespan(app):
                 u.modules = ','.join(sorted(MODULES))
                 u.shifts = 'ALL'
         db.commit()
+        diag_date=os.getenv("TIOM_TEMP_DIAG_DATE", "").strip()
+        if diag_date:
+            admin_user=next((x for x in users if x.active and x.admin),None)
+            if not admin_user:
+                raise RuntimeError("TIOM temp diagnostic requires an active admin user.")
+            dash=webapp.dashboard_desk(db,admin_user,{"mode":"TODAY","toDate":diag_date,"shift":"ALL"})
+            dk=dash.get("kpis",{})
+            prod_diag={
+                "date":diag_date,
+                "kpis":{k:dk.get(k) for k in (
+                    "wbTrips","wbTonnes","avgPayload","fieldTrips","matched","likely",
+                    "wbUnmatched","tripNoWb","matchRate","misReports","misTrips",
+                    "misOperationalQty","misObTrips","misObQty","misRomTrips","misRomQty",
+                    "romInputMt","finalProductionMt","finalRecoveryPct","oldStockExcludedMt",
+                    "crusherFeed","screenFeed","hsdLitres","hsdPerTonne"
+                )},
+                "production":dash.get("production"),
+                "productionMaterials":dash.get("productionMaterials"),
+                "plantPerformance":dash.get("plantPerformance"),
+                "exceptions":dash.get("exceptions"),
+                "shiftComparison":dash.get("shiftComparison"),
+            }
+            print("TIOM_TEMP_DIAG_PRODUCTION="+json.dumps(prod_diag,sort_keys=True,default=str),flush=True)
+
+            hsd_diag={"date":diag_date,"shifts":{}}
+            for sh in ("A","B","C"):
+                desk=webapp.tiom_hsd_desk(db,admin_user,{
+                    "date":diag_date,"shift":sh,"reportFrom":diag_date,"reportTo":diag_date
+                })
+                hsd_diag["shifts"][sh]={
+                    "entrySummary":desk.get("entrySummary"),
+                    "recentIssues":desk.get("recentIssues"),
+                    "stockChecks":desk.get("stockChecks"),
+                    "tankers":desk.get("tankers"),
+                }
+            hsd_diag["issues"]= [
+                dict(r) for r in db.execute(text("""
+                    SELECT i.shift,i.machine_id,i.tanker_id,i.litres,i.meter_type,
+                           i.meter_reading,i.reference,i.issued_at,
+                           d.previous_meter_reading,d.usage,d.efficiency,d.efficiency_unit,d.entered_by
+                    FROM hsd_issue i
+                    LEFT JOIN tiom_hsd_issue_detail d ON d.issue_id=i.issue_id
+                    WHERE i.operating_date=CAST(:d AS date)
+                    ORDER BY i.issued_at
+                """),{"d":diag_date}).mappings().all()
+            ]
+            hsd_diag["receipts"]=[
+                dict(r) for r in db.execute(text("""
+                    SELECT d.operating_date,d.shift,d.receipt_type,l.tanker_id,
+                           l.litres_received,l.litres_remaining,l.rate_per_l,l.amount,
+                           l.received_at,l.supplier,l.invoice_no,d.discount_per_l,d.net_amount,
+                           d.remarks,d.entered_by
+                    FROM hsd_purchase_lot l
+                    LEFT JOIN tiom_hsd_receipt_detail d ON d.lot_id=l.lot_id
+                    WHERE d.operating_date=CAST(:d AS date)
+                    ORDER BY l.received_at
+                """),{"d":diag_date}).mappings().all()
+            ]
+            hsd_diag["stockChecks"]=[
+                dict(r) for r in db.execute(text("""
+                    SELECT shift,tanker_id,checked_at,book_litres,physical_litres,
+                           variance_litres,remarks,entered_by
+                    FROM tiom_hsd_stock_check
+                    WHERE operating_date=CAST(:d AS date)
+                    ORDER BY checked_at
+                """),{"d":diag_date}).mappings().all()
+            ]
+            print("TIOM_TEMP_DIAG_HSD="+json.dumps(hsd_diag,sort_keys=True,default=str),flush=True)
+
+            raw_diag={
+                "wbBatches":[dict(r) for r in db.execute(text("""
+                    SELECT shift,status,COUNT(*) AS batches,
+                           MAX(confirmed_at) AS latest_confirmed
+                    FROM wb_import_batch
+                    WHERE operating_date=CAST(:d AS date)
+                    GROUP BY shift,status ORDER BY shift,status
+                """),{"d":diag_date}).mappings().all()],
+                "wbMaterials":[dict(r) for r in db.execute(text("""
+                    SELECT b.shift,COALESCE(w.material_name,w.material_code,'Unmapped') AS material,
+                           COUNT(*) AS trips,ROUND(SUM(COALESCE(w.net_kg,0))/1000.0,2) AS tonnes
+                    FROM wb_movement w
+                    JOIN wb_import_batch b ON b.batch_id=w.batch_id
+                    WHERE b.operating_date=CAST(:d AS date)
+                      AND b.status='CONFIRMED'
+                      AND w.row_status='VALID'
+                    GROUP BY b.shift,COALESCE(w.material_name,w.material_code,'Unmapped')
+                    ORDER BY b.shift,tonnes DESC
+                """),{"d":diag_date}).mappings().all()],
+            }
+            print("TIOM_TEMP_DIAG_RAW="+json.dumps(raw_diag,sort_keys=True,default=str),flush=True)
         if os.getenv("TIOM_TEMP_SELFTEST", "").strip().lower() in {"1","true","yes","on"}:
             admin_user=next((x for x in users if x.active and x.admin),None)
             if not admin_user:
