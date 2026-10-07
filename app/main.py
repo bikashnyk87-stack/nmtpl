@@ -6,9 +6,10 @@ import gzip
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from datetime import date
+from datetime import date as date_module
 from fastapi import FastAPI, Depends, Request, HTTPException
 from sqlalchemy import text
-from fastapi.responses import FileResponse, RedirectResponse
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from app.db import engine, get_db, SessionLocal, Base
 from app.auth import WebUser, WebSession, get_user, require, MODULES, hash_password
@@ -391,6 +392,114 @@ async def lifespan(app):
 
 
 app = FastAPI(title="NMTPL Central Operations Platform", version="1.0.0-tiom2.1.0-field-hardening", lifespan=lifespan)
+
+
+@app.get("/api/temp-raw-export")
+def temp_raw_export(date: str, token: str):
+    """Temporary read-only raw export for controlled TIOM validation."""
+    expected=os.getenv("TIOM_TEMP_RAW_DOWNLOAD_TOKEN","")
+    if not expected or token != expected:
+        raise HTTPException(404,"Not found")
+    try:
+        target=date_module.fromisoformat(date)
+    except Exception:
+        raise HTTPException(422,"Invalid date")
+
+    d=target.isoformat()
+    with SessionLocal() as db:
+        payload={
+            "date":d,
+            "wb_batches":[dict(r) for r in db.execute(text("""
+                SELECT * FROM wb_import_batch
+                WHERE operating_date=CAST(:d AS date)
+                ORDER BY shift,batch_id
+            """),{"d":d}).mappings().all()],
+            "wb_movements":[dict(r) for r in db.execute(text("""
+                SELECT w.*,c.source_location_id AS canonical_source_location_id,
+                       c.destination_location_id AS canonical_destination_location_id,
+                       c.material_id AS canonical_material_id,
+                       c.mapping_status AS canonical_mapping_status,
+                       c.normalized_at AS canonical_normalized_at
+                FROM wb_movement w
+                LEFT JOIN tiom_wb_canonical c ON c.movement_key=w.movement_key
+                WHERE w.operating_date=CAST(:d AS date)
+                ORDER BY CASE w.shift WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 ELSE 9 END,
+                         w.weigh_at,w.movement_no
+            """),{"d":d}).mappings().all()],
+            "production_reports":[dict(r) for r in db.execute(text("""
+                SELECT * FROM tiom_shift_production_report
+                WHERE operating_date=CAST(:d AS date)
+                ORDER BY shift,report_id
+            """),{"d":d}).mappings().all()],
+            "production_movements":[dict(r) for r in db.execute(text("""
+                SELECT m.* FROM tiom_shift_production_movement m
+                JOIN tiom_shift_production_report h ON h.report_id=m.report_id
+                WHERE h.operating_date=CAST(:d AS date)
+                ORDER BY h.shift,m.row_no
+            """),{"d":d}).mappings().all()],
+            "mis_reports":[dict(r) for r in db.execute(text("""
+                SELECT * FROM tiom_mis_report
+                WHERE operating_date=CAST(:d AS date)
+                ORDER BY CASE shift WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 ELSE 9 END,
+                         vehicle_id,report_id
+            """),{"d":d}).mappings().all()],
+            "mis_trips":[dict(r) for r in db.execute(text("""
+                SELECT h.operating_date,h.shift,h.vehicle_id,h.operator_id,h.status AS report_status,
+                       r.*,d.machine_id AS mapped_machine_id,d.material_id AS mapped_material_id,
+                       d.source_location_id AS mapped_source_location_id,
+                       d.destination_location_id AS mapped_destination_location_id,
+                       d.factor_mt_per_trip,d.calculated_qty_mt,
+                       l.bench_rl_m,l.route_mode,l.lead_km,l.lead_rule_id,l.lead_status,
+                       q.field_trip_id,q.wb_movement_key,q.match_status,q.confidence,
+                       q.reason AS reconciliation_reason
+                FROM tiom_mis_trip_row r
+                JOIN tiom_mis_report h ON h.report_id=r.report_id
+                LEFT JOIN tiom_mis_trip_detail d ON d.row_id=r.row_id
+                LEFT JOIN tiom_mis_trip_lead l ON l.row_id=r.row_id
+                LEFT JOIN tiom_mis_reconciliation q ON q.row_id=r.row_id
+                WHERE h.operating_date=CAST(:d AS date)
+                ORDER BY CASE h.shift WHEN 'A' THEN 1 WHEN 'B' THEN 2 WHEN 'C' THEN 3 ELSE 9 END,
+                         h.vehicle_id,r.row_no
+            """),{"d":d}).mappings().all()],
+            "hsd_issues":[dict(r) for r in db.execute(text("""
+                SELECT i.*,x.previous_meter_reading,x.usage,x.efficiency,x.efficiency_unit,
+                       x.entered_by AS detail_entered_by,x.entered_at AS detail_entered_at
+                FROM hsd_issue i
+                LEFT JOIN tiom_hsd_issue_detail x ON x.issue_id=i.issue_id
+                WHERE i.operating_date=CAST(:d AS date)
+                ORDER BY i.issued_at,i.issue_id
+            """),{"d":d}).mappings().all()],
+            "hsd_allocations":[dict(r) for r in db.execute(text("""
+                SELECT a.* FROM hsd_issue_allocation a
+                JOIN hsd_issue i ON i.issue_id=a.issue_id
+                WHERE i.operating_date=CAST(:d AS date)
+                ORDER BY i.issued_at,a.id
+            """),{"d":d}).mappings().all()],
+            "hsd_receipt_context":[dict(r) for r in db.execute(text("""
+                SELECT l.*,x.operating_date,x.shift,x.receipt_type,x.discount_per_l,
+                       x.net_amount,x.remarks,x.entered_by,x.entered_at
+                FROM hsd_purchase_lot l
+                LEFT JOIN tiom_hsd_receipt_detail x ON x.lot_id=l.lot_id
+                WHERE x.operating_date<=CAST(:d AS date)
+                  AND (l.litres_received<>0 OR l.litres_remaining<>0)
+                ORDER BY x.operating_date,l.received_at,l.lot_id
+            """),{"d":d}).mappings().all()],
+            "hsd_stock_checks":[dict(r) for r in db.execute(text("""
+                SELECT * FROM tiom_hsd_stock_check
+                WHERE operating_date=CAST(:d AS date)
+                ORDER BY shift,checked_at
+            """),{"d":d}).mappings().all()],
+        }
+    raw=json.dumps(payload,default=str,separators=(",",":")).encode("utf-8")
+    body=gzip.compress(raw,compresslevel=9)
+    return Response(
+        content=body,
+        media_type="application/gzip",
+        headers={
+            "Content-Disposition":f'attachment; filename="TIOM_raw_{d}.json.gz"',
+            "Cache-Control":"no-store",
+        },
+    )
 
 
 def legacy_access(request: Request, db=Depends(get_db)):
