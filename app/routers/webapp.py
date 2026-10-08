@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import get_db
+from app.maintenance_models import MaintenanceBreakdown
 from app.auth import (WebUser, WebSession, MODULES, COOKIE, csrf, get_user, require,
                       hash_password, check_password, issue_session, digest_token, utcnow, aware)
 from app.models import (Person, Equipment, Location, Product, ShiftMaster, ShiftRotation, ActivityMaster, PersonAttendance,
@@ -514,7 +515,7 @@ def dashboard_desk(db, user, p):
     require(user, 'DASHBOARD')
     live_day, live_shift, _ = operating_context()
     mode = str(p.get('mode') or 'CURRENT_SHIFT').upper()
-    if mode not in {'CURRENT_SHIFT', 'TODAY', '7D', 'MTD', 'CUSTOM'}:
+    if mode not in {'CURRENT_SHIFT', 'TODAY', 'YESTERDAY', '7D', 'MTD', 'CUSTOM'}:
         raise HTTPException(422, 'Choose a valid dashboard period.')
     selected_shift = str(p.get('shift') or ('ALL' if mode != 'CURRENT_SHIFT' else live_shift)).upper()
     if selected_shift != 'ALL':
@@ -526,6 +527,8 @@ def dashboard_desk(db, user, p):
         start_day = end_day = live_day; selected_shift = live_shift; require(user, shift=selected_shift)
     elif mode == 'TODAY':
         start_day = end_day = _date_param(p.get('toDate') or live_day, 'date')
+    elif mode == 'YESTERDAY':
+        start_day = end_day = live_day - timedelta(days=1)
     elif mode == '7D':
         end_day = _date_param(p.get('toDate') or live_day, 'end date'); start_day = end_day - timedelta(days=6)
     elif mode == 'MTD':
@@ -726,7 +729,7 @@ def dashboard_desk(db, user, p):
                 facts.append((rehandle_code,qty)); codes.add(rehandle_code)
 
         # Enrich physical plant-feed facts from canonical destination semantics.
-        if 'ROM' in mat and any(x in dst_txt for x in ('MSP','SCREEN','PLANT','FEED')) and 'MSP_FEED' not in codes:
+        if 'ROM' in mat and any(x in dst_txt for x in ('MSP','SCREEN')) and 'MSP_FEED' not in codes:
             facts.append(('MSP_FEED',qty)); codes.add('MSP_FEED')
         intermediate={'LUMPS_FROM_SCREEN','LUMPS_FEED_TO_CRUSHER','LUMPS_TO_CRUSHER_FROM_STOCK','SPILLAGE_TO_CRUSHER','PRODUCT_REHANDLED','OLD_STOCK_BLEND_10_40'}
         if codes.intersection(intermediate) and any(x in dst_txt for x in ('CRUSH','OCP')) and 'CRUSHER_FEED' not in codes:
@@ -788,6 +791,13 @@ def dashboard_desk(db, user, p):
         crusher_final,crusher_feed_fact,crusher_blend_feed
     )
     final_production=screen_direct+crusher_fresh_final
+    # Keep physical gross-output evidence distinct from an unverified fresh share.
+    # A missing crusher-feed quantity must never silently prove 100% fresh output.
+    allocation_pending=(crusher_final>0 and (crusher_feed_fact<=0 or crusher_blend_feed>crusher_feed_fact))
+    allocation_status=('CRUSHER_FEED_TONNAGE_MISSING' if crusher_final>0 and crusher_feed_fact<=0
+                       else 'BLEND_FEED_EXCEEDS_TOTAL' if crusher_blend_feed>crusher_feed_fact
+                       else 'PROPORTIONAL_ALLOCATION' if crusher_blend_feed>0
+                       else 'NO_RECORDED_BLEND')
 
     def prod_pct(value,base=rom_input):
         return round(float(Decimal(value or 0)/base*Decimal('100')),2) if base and base>0 else None
@@ -804,6 +814,15 @@ def dashboard_desk(db, user, p):
     elif allowed_shifts:
         ctx_stmt=ctx_stmt.where(TiomSourceContext.shift.in_(allowed_shifts))
     source_contexts={(x.operating_date,x.shift,x.source_location_id):x.bench_rl_m for x in db.scalars(ctx_stmt)}
+    # One approved master lookup per distinct path/bench for dashboard WB + MIS.
+    # This avoids re-querying Route and Lead Masters for every trip of a large shift.
+    dashboard_lead_cache={}
+    def dashboard_lead(source_id, bench_rl, dest_id, mode='WITH_WB', wb_linked=False):
+        key=(source_id,bench_rl,dest_id,mode,bool(wb_linked))
+        if key not in dashboard_lead_cache:
+            dashboard_lead_cache[key]=_tiom_resolve_lead(
+                db,source_id,bench_rl,dest_id,mode,wb_linked=wb_linked)
+        return dashboard_lead_cache[key]
 
     def _unique_wb_rows(*groups):
         out=[]; seen=set()
@@ -831,7 +850,7 @@ def dashboard_desk(db, user, p):
             bench=_tiom_bench_rl_from_location(db,src_id) if src_id else None
             if bench is None and src_id:
                 bench=source_contexts.get((row.operating_date,row.shift,src_id))
-            lead=_tiom_resolve_lead(db,src_id,bench,dst_id,'WITH_WB',wb_linked=True)
+            lead=dashboard_lead(src_id,bench,dst_id,'WITH_WB',wb_linked=True)
             if lead.get('leadKm') is None:
                 missing+=1; continue
             lk=float(lead['leadKm']); q=tonnes(row)
@@ -1008,7 +1027,7 @@ def dashboard_desk(db, user, p):
         bench_rl=_tiom_bench_rl_from_location(db,src_id) if src_id else None
         if bench_rl is None and src_id:
             bench_rl=source_contexts.get((w.operating_date,w.shift,src_id))
-        lead_result=_tiom_resolve_lead(db,src_id,bench_rl,dst_id,'WITH_WB',wb_linked=True)
+        lead_result=dashboard_lead(src_id,bench_rl,dst_id,'WITH_WB',wb_linked=True)
         add_haulage(src_id,dst_id,src,dst,'WITH_WB',t,stamp,lead_result.get('leadKm'),lead_result.get('status'))
         vk = (w.vehicle_id or w.vehicle_raw or 'Unknown').strip(); vr = add_metric(vehicles, vk, t); vr['vehicle']=vk
         u = label.upper()
@@ -1239,16 +1258,21 @@ def dashboard_desk(db, user, p):
         'crusherFinesMt':round(float(crusher_fines),2),'crusherFinesPct':prod_pct(crusher_fines),
         'crusherCloMt':round(float(crusher_clo),2),'crusherCloPct':prod_pct(crusher_clo),
         'crusherGrossOutputMt':round(float(crusher_final),2),'crusherGrossOutputPct':prod_pct(crusher_final),
-        'crusherFreshOutputMt':round(float(crusher_fresh_final),2),'crusherFreshOutputPct':prod_pct(crusher_fresh_final),
+        'crusherFreshOutputMt':None if allocation_pending else round(float(crusher_fresh_final),2),
+        'crusherFreshOutputPct':None if allocation_pending else prod_pct(crusher_fresh_final),
+        'allocationStatus':allocation_status,'allocationPending':allocation_pending,
         'crusherBlendOutputMt':round(float(crusher_blend_output),2),'crusherBlendOutputPct':prod_pct(crusher_blend_output),
-        'finalProductionMt':round(float(final_production),2),'finalRecoveryPct':prod_pct(final_production),
+        'finalProductionMt':None if allocation_pending else round(float(final_production),2),
+        'finalRecoveryPct':None if allocation_pending else prod_pct(final_production),
+        'provisionalOutputMt':round(float(final_production),2) if allocation_pending else None,
         'crusherFeedMt':round(float(crusher_feed),2),'crusherFeedPct':prod_pct(crusher_feed),
         'crusherFreshFeedMt':round(float(crusher_fresh_feed),2),'crusherFreshFeedPct':prod_pct(crusher_fresh_feed),
         'crusherBlendFeedMt':round(float(crusher_blend_feed),2),'crusherBlendFeedPct':prod_pct(crusher_blend_feed),
         'crusherRecoveryPct':round(crusher_recovery,2) if crusher_recovery is not None else None,
         'oldStockExcludedMt':round(float(old_stock_excluded),2),'oldStockTrips':old_stock_trips,
         'oldStockVsRomPct':prod_pct(old_stock_excluded),
-        'balanceMt':round(float(production_balance),2),'balancePct':prod_pct(production_balance),
+        'balanceMt':None if allocation_pending else round(float(production_balance),2),
+        'balancePct':None if allocation_pending else prod_pct(production_balance),
         'note':'Fresh ROM is the 100% mine-production base. Genuine MSP lumps and large spillage sent to Crusher are fresh intermediate feed. CLO 10-40 is company old-stock blend, not NMTPL production. Crusher gross output is allocated pro-rata between fresh feed and old-stock blend because the mixed final product cannot be traced by feed stream after crushing. Same-MSP spillage is recycle and increases throughput/TPH, not fresh production.'
     }
     fuel_per_tonne=float(hsd_litres)/wb_tonnes if wb_tonnes else 0.0
@@ -1417,6 +1441,19 @@ def dashboard_desk(db, user, p):
             month_other_old_stock_excluded,max(0,len(month_excluded_keys)-month_process_trips.get('OLD_STOCK_BLEND_10_40',0)),
             prod_pct(other_old_stock_excluded),'EXCLUDED')
     ]
+    if allocation_pending:
+        # Retain gross crusher product measurements but suppress unsupported
+        # NET and TOTAL fresh production rows until feed evidence is complete.
+        for item in production_material_rows:
+            if item['kind'] in {'NET','TOTAL'}:
+                item['tonnes']=None
+                item['pct']=None
+                item['status']='ALLOCATION_PENDING'
+        for item in plant_performance:
+            if item.get('plantType')=='CRUSHER':
+                item['outputMt']=None
+                item['finalYieldPct']=None
+                item['allocationStatus']=allocation_status
 
     source_rows=[{'label':r['label'],'trips':r['trips'],'tonnes':round(r['tonnes'],2),'avgPayload':round(r['tonnes']/r['trips'],2) if r['trips'] else 0,
                   'pct':round(r['tonnes']/wb_tonnes*100,1) if wb_tonnes else 0} for r in sorted(sources.values(),key=lambda x:x['tonnes'],reverse=True)]
@@ -1462,6 +1499,7 @@ def dashboard_desk(db, user, p):
     mis_total_qty=Decimal('0'); mis_wb_linked=0; mis_factor_trips=0
     lead_resolved_trips=0; lead_missing_trips=0; lead_with_wb=0; lead_without_wb=0
     lead_covered_qty=Decimal('0'); lead_ton_km=Decimal('0')
+    lead_review=[]; qty_pending=[]
     mis_materials={}; mis_sources={}; mis_destinations={}; mis_vehicles={}; mis_machines={}; lead_routes={}
     for r in mis_rows:
         d=mis_details.get(r.row_id)
@@ -1476,6 +1514,10 @@ def dashboard_desk(db, user, p):
         vehicle=(report.vehicle_id if report else 'Unknown') or 'Unknown'
         machine=d.machine_id or 'Unknown'
         qty=Decimal(d.calculated_qty_mt or 0)
+        if d.calculated_qty_mt is None and not (mis_recs.get(r.row_id) and mis_recs[r.row_id].wb_movement_key):
+            qty_pending.append({'rowId':r.row_id,'date':str(report.operating_date) if report else '',
+                                'shift':report.shift if report else '','vehicle':vehicle,'material':mat,
+                                'source':src,'destination':dst,'reason':'NO_WEIGHT_OR_APPROVED_FACTOR'})
         mis_total_qty+=qty
         add_metric(mis_materials,mat,float(qty))
         add_metric(mis_sources,src,float(qty))
@@ -1484,9 +1526,25 @@ def dashboard_desk(db, user, p):
         add_metric(mis_machines,machine,float(qty))
         rec=mis_recs.get(r.row_id)
         lead=mis_leads.get(r.row_id)
+        # Resolve from CURRENT approved masters without writing historical rows.
+        # Old snapshots may be missing despite a valid area/bench lead master.
+        bench_rl=(lead.bench_rl_m if lead else None)
+        if bench_rl is None and d.source_location_id:
+            bench_rl=_tiom_bench_rl_from_location(db,d.source_location_id)
+        mode_for_lead='WITH_WB' if rec and rec.wb_movement_key else 'WITHOUT_WB'
+        fresh_lead=dashboard_lead(
+            d.source_location_id,bench_rl,d.destination_location_id,mode_for_lead,
+            wb_linked=bool(rec and rec.wb_movement_key))
+        resolved_km=(fresh_lead.get('leadKm') if fresh_lead.get('status')=='OK' else None)
+        lead_status=fresh_lead.get('status') or 'ROUTE_NOT_CONFIGURED'
+        if resolved_km is None:
+            lead_review.append({'rowId':r.row_id,'date':str(report.operating_date) if report else '',
+                                'shift':report.shift if report else '','vehicle':vehicle,
+                                'source':src,'destination':dst,'benchRl':bench_rl,
+                                'routeMode':mode_for_lead,'reason':lead_status})
         if rec and rec.wb_movement_key: mis_wb_linked+=1
         else: mis_factor_trips+=1
-        route_mode=(lead.route_mode if lead else None) or ('WITH_WB' if rec and rec.wb_movement_key else 'WITHOUT_WB')
+        route_mode=mode_for_lead
         # WB-linked MIS is evidence only; authoritative WB already contributed
         # that trip to haulage performance. Non-WB rows (OB/internal haulage)
         # join the same route KPI using their form timestamps and snapshotted lead.
@@ -1495,14 +1553,14 @@ def dashboard_desk(db, user, p):
             add_haulage(
                 d.source_location_id,d.destination_location_id,src,dst,route_mode,float(qty),
                 r.loading_at or r.unloading_at,
-                Decimal(lead.lead_km) if lead and lead.lead_status=='OK' and lead.lead_km is not None else None,
-                lead.lead_status if lead else 'NOT_CAPTURED',
+                resolved_km,
+                lead_status,
                 cycle
             )
         if route_mode=='WITH_WB': lead_with_wb+=1
         elif route_mode=='WITHOUT_WB': lead_without_wb+=1
-        if lead and lead.lead_status=='OK' and lead.lead_km is not None:
-            lead_km=Decimal(lead.lead_km)
+        if resolved_km is not None:
+            lead_km=Decimal(resolved_km)
             ton_km=qty*lead_km
             lead_resolved_trips+=1; lead_covered_qty+=qty; lead_ton_km+=ton_km
             rk=(src,dst,route_mode or 'UNSPECIFIED')
@@ -1647,12 +1705,64 @@ def dashboard_desk(db, user, p):
     exceptions.append({'label':'WB source unmapped to Location Master','value':wb_source_unmapped,'severity':'warn' if wb_source_unmapped else 'ok'})
     exceptions.append({'label':'WB destination unmapped to Location Master','value':wb_destination_unmapped,'severity':'warn' if wb_destination_unmapped else 'ok'})
     exceptions.append({'label':'MIS rows missing lead','value':lead_missing_trips,'severity':'warn' if lead_missing_trips else 'ok'})
+    exceptions.append({'label':'MIS trips awaiting tonnage','value':len(qty_pending),'severity':'warn' if qty_pending else 'ok'})
     crusher_out=[]
     for r in sorted(crusher_rows.values(),key=lambda x:x['tonnes'],reverse=True):
         crusher_out.append(dict(r,tonnes=round(r['tonnes'],2),avgFeed=round(r['tonnes']/r['trips'],2) if r['trips'] else 0,utilization=None))
     screen_out=[]
     for r in sorted(screen_rows.values(),key=lambda x:x['tonnes'],reverse=True):
         screen_out.append(dict(r,tonnes=round(r['tonnes'],2),recovery=None))
+
+    # Mechanical is the single breakdown ledger. Clip each event against the
+    # requested, permission-scoped shift windows, including overnight shifts.
+    active_shifts={x.shift:x for x in db.scalars(
+        select(ShiftMaster).where(ShiftMaster.active.is_(True)))}
+    scoped_shifts=([selected_shift] if selected_shift!='ALL'
+                   else [name for name in active_shifts
+                         if not allowed_shifts or name in allowed_shifts])
+    shift_windows=[]
+    day_cursor=start_day
+    while day_cursor<=end_day:
+        for name in scoped_shifts:
+            definition=active_shifts.get(name)
+            if not definition: continue
+            begin=datetime.combine(day_cursor,definition.start_time,TZ)
+            finish=datetime.combine(day_cursor,definition.end_time,TZ)
+            if finish<=begin: finish+=timedelta(days=1)
+            shift_windows.append((begin,finish))
+        day_cursor+=timedelta(days=1)
+    breakdown_rows=[]
+    active_breakdowns=0
+    breakdown_hours=0.0
+    if shift_windows:
+        min_window=min(x[0] for x in shift_windows)
+        max_window=max(x[1] for x in shift_windows)
+        bd_query=select(MaintenanceBreakdown).where(
+            MaintenanceBreakdown.site_id=='TIOM',
+            MaintenanceBreakdown.reported_at<max_window,
+            (MaintenanceBreakdown.released_at.is_(None)) |
+            (MaintenanceBreakdown.released_at>min_window)
+        )
+        reference_now=now_local()
+        for bd in db.scalars(bd_query):
+            event_start=aware(bd.reported_at)
+            event_end=aware(bd.released_at) if bd.released_at else reference_now
+            if event_end<=event_start: continue
+            overlap=sum(max(0.0,(min(event_end,stop)-max(event_start,start)).total_seconds())
+                        for start,stop in shift_windows)
+            if overlap<=0: continue
+            hours=round(overlap/3600,2)
+            breakdown_hours+=hours
+            open_event=bd.status in {'OPEN','IN_PROGRESS'} and not bd.released_at
+            active_breakdowns+=int(open_event)
+            breakdown_rows.append({
+                'id':bd.breakdown_id,'machine':bd.asset_id,'fault':bd.problem,
+                'category':bd.problem_category,'status':bd.status,
+                'reportedAt':bd.reported_at.isoformat() if bd.reported_at else None,
+                'releasedAt':bd.released_at.isoformat() if bd.released_at else None,
+                'periodDowntimeHours':hours,'isOpen':open_event
+            })
+    breakdown_rows.sort(key=lambda x:(x['isOpen'],x['periodDowntimeHours']),reverse=True)
 
     log.info(
         'TIOM dashboard built in %.2fs mode=%s period=%s..%s shift=%s wb=%d canonical_missing=%d',
@@ -1700,6 +1810,11 @@ def dashboard_desk(db, user, p):
         'misDestinations':_mis_rows(mis_destinations)[:30],
         'misVehicles':_mis_rows(mis_vehicles,'vehicle')[:40],'misMachines':_mis_rows(mis_machines,'machine')[:40],
         'leadRoutes':lead_route_rows[:50],'haulagePerformance':haulage_rows[:100],
+        'exceptionDetails':{'lead':lead_review[:500],'tonnage':qty_pending[:500],
+                            'leadTotal':len(lead_review),'tonnageTotal':len(qty_pending)},
+        'breakdowns':{'rows':breakdown_rows[:200],
+                      'totalEvents':len(breakdown_rows),'activeEvents':active_breakdowns,
+                      'periodDowntimeHours':round(breakdown_hours,2)},
         'production':production_summary,'drilling':drilling,
         'crusher':crusher_out[:30],'screens':screen_out[:30],'loaders':loader_rows[:20],'excavators':excavator_rows[:20],
         'vehicles':vehicle_rows[:30],'fuelByEquipment':fuel_rows[:30],'shiftComparison':shift_comp_rows,'sevenDay':seven_rows,'monthTrend':month_rows,'monthly':monthly,
@@ -3149,6 +3264,68 @@ def _tiom_drilling_summary(db,from_day,to_day,shift='ALL'):
     return {'fromDate':str(from_day),'toDate':str(to_day),'shift':shift,'rows':out,'totals':totals}
 
 
+def _tiom_area_key(location_text):
+    """Normalize recognised mine-area names, e.g. 3HA/RL-840 and 3_HA.
+
+    Do not merge arbitrary unrelated locations just because the text resembles
+    one another. Only a recognised <number>HA mine area is eligible.
+    """
+    m = re.search(r'(?<![A-Z0-9])(\d+)\s*[_ -]*HA(?=[^A-Z0-9]|$)',
+                  str(location_text or '').upper())
+    return f'{int(m.group(1))}HA' if m else None
+
+
+def _tiom_area_route_fallback(db, source_id, dest_id, mode, bench_rl):
+    """Resolve one exact area+destination+mode+bench Lead Master candidate.
+
+    Never substitute an unapproved distance, a different WB mode, or a
+    different bench. Conflicts stay unresolved; this function is read-only.
+    """
+    location = db.get(Location, str(source_id))
+    source_area = (_tiom_area_key(source_id) or
+                   _tiom_area_key(location.location_name if location else None))
+    if not source_area:
+        return None
+    candidates = []
+    routes = list(db.scalars(select(TiomRouteMaster).where(
+        TiomRouteMaster.destination_location_id == dest_id,
+        TiomRouteMaster.route_mode == mode,
+        TiomRouteMaster.active.is_(True)
+    )))
+    for route in routes:
+        if route.source_location_id == source_id:
+            continue
+        master_source = db.get(Location, route.source_location_id)
+        master_area = (_tiom_area_key(route.source_location_id) or
+                       _tiom_area_key(master_source.location_name if master_source else None))
+        if master_area != source_area:
+            continue
+        basis = str(route.lead_basis or 'BENCH_RL').upper()
+        if basis == 'FIXED':
+            if route.fixed_lead_km is not None and Decimal(route.fixed_lead_km) > 0:
+                candidates.append((route, None, Decimal(route.fixed_lead_km)))
+        elif bench_rl is not None:
+            rules = list(db.scalars(select(TiomLeadDistance).where(
+                TiomLeadDistance.source_location_id == route.source_location_id,
+                TiomLeadDistance.destination_location_id == dest_id,
+                TiomLeadDistance.route_mode == mode,
+                TiomLeadDistance.bench_rl_m == bench_rl,
+                TiomLeadDistance.active.is_(True)
+            )))
+            for rule in rules:
+                if rule.lead_km is not None and Decimal(rule.lead_km) > 0:
+                    candidates.append((route, rule, Decimal(rule.lead_km)))
+    if len(candidates) == 1:
+        route, rule, km = candidates[0]
+        return {'rule': rule, 'route': route, 'routeMode': mode,
+                'leadKm': km, 'status': 'OK', 'sourceBasis': 'AREA_BENCH_MASTER',
+                'masterSourceLocationId': route.source_location_id}
+    if len(candidates) > 1:
+        return {'rule': None, 'routeMode': mode, 'leadKm': None,
+                'status': 'AMBIGUOUS_AREA_ROUTE'}
+    return None
+
+
 def _tiom_resolve_lead(db, source_id, bench_rl, dest_id, route_mode=None, wb_linked=False):
     if not source_id or not dest_id:
         return {'rule':None,'routeMode':'WITH_WB' if wb_linked else _tiom_route_mode(route_mode),
@@ -3169,7 +3346,8 @@ def _tiom_resolve_lead(db, source_id, bench_rl, dest_id, route_mode=None, wb_lin
         TiomLeadDistance.active.is_(True)
     )))
     if not route and not route_rules:
-        return {'rule':None,'routeMode':mode,'leadKm':None,'status':'ROUTE_NOT_CONFIGURED'}
+        fallback=_tiom_area_route_fallback(db,source_id,dest_id,mode,bench_rl)
+        return fallback or {'rule':None,'routeMode':mode,'leadKm':None,'status':'ROUTE_NOT_CONFIGURED'}
     if route and str(route.lead_basis or 'BENCH_RL').upper()=='FIXED':
         if route.fixed_lead_km is not None and Decimal(route.fixed_lead_km)>0:
             return {'rule':None,'route':route,'routeMode':mode,'leadKm':Decimal(route.fixed_lead_km),'status':'OK'}
@@ -3182,7 +3360,10 @@ def _tiom_resolve_lead(db, source_id, bench_rl, dest_id, route_mode=None, wb_lin
         return {'rule':r,'routeMode':mode,'leadKm':Decimal(r.lead_km),'status':'OK'}
     if len(rules)>1:
         return {'rule':None,'routeMode':mode,'leadKm':None,'status':'AMBIGUOUS_LEAD'}
-    return {'rule':None,'routeMode':mode,'leadKm':None,'status':'LEAD_NOT_CONFIGURED'}
+    # A bench-specific location may have a placeholder route without a KM;
+    # fall back to an approved area master only when exactly one rule matches.
+    fallback=_tiom_area_route_fallback(db,source_id,dest_id,mode,bench_rl)
+    return fallback or {'rule':None,'routeMode':mode,'leadKm':None,'status':'LEAD_NOT_CONFIGURED'}
 
 def _tiom_asset_label(e):
     bits=[e.machine_id]
