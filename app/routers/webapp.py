@@ -1465,6 +1465,7 @@ def dashboard_desk(db, user, p):
     lead_resolved_trips=0; lead_missing_trips=0; lead_with_wb=0; lead_without_wb=0
     lead_covered_qty=Decimal('0'); lead_ton_km=Decimal('0')
     lead_review=[]; qty_pending=[]
+    lead_lookup={}
     mis_materials={}; mis_sources={}; mis_destinations={}; mis_vehicles={}; mis_machines={}; lead_routes={}
     for r in mis_rows:
         d=mis_details.get(r.row_id)
@@ -1497,9 +1498,12 @@ def dashboard_desk(db, user, p):
         if bench_rl is None and d.source_location_id:
             bench_rl=_tiom_bench_rl_from_location(db,d.source_location_id)
         mode_for_lead='WITH_WB' if rec and rec.wb_movement_key else 'WITHOUT_WB'
-        fresh_lead=_tiom_resolve_lead(db,d.source_location_id,bench_rl,
-                                      d.destination_location_id,mode_for_lead,
-                                      wb_linked=bool(rec and rec.wb_movement_key))
+        lead_key=(d.source_location_id,bench_rl,d.destination_location_id,mode_for_lead)
+        if lead_key not in lead_lookup:
+            lead_lookup[lead_key]=_tiom_resolve_lead(
+                db,d.source_location_id,bench_rl,d.destination_location_id,
+                mode_for_lead,wb_linked=bool(rec and rec.wb_movement_key))
+        fresh_lead=lead_lookup[lead_key]
         resolved_km=(fresh_lead.get('leadKm') if fresh_lead.get('status')=='OK' else None)
         lead_status=fresh_lead.get('status') or 'ROUTE_NOT_CONFIGURED'
         if resolved_km is None:
@@ -3180,7 +3184,7 @@ def _tiom_area_key(location_text):
     Do not merge arbitrary unrelated locations just because the text resembles
     one another. Only a recognised <number>HA mine area is eligible.
     """
-    m = re.search(r'(?<![A-Z0-9])(\\d+)\\s*[_ -]*HA(?=[^A-Z0-9]|$)',
+    m = re.search(r'(?<![A-Z0-9])(\d+)\s*[_ -]*HA(?=[^A-Z0-9]|$)',
                   str(location_text or '').upper())
     return f'{int(m.group(1))}HA' if m else None
 
