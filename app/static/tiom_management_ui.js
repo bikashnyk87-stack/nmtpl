@@ -111,6 +111,7 @@
       '<label id="mc_to_label" hidden>To<input id="mc_to" type="date" value="'+today+'"></label>'+
       '<select id="mc_shift" aria-label="Shift" onchange="tiomOwnerLoad()"><option value="ALL">All shifts</option>'+
       opt(S.boot.masters.shifts,x=>x,x=>x)+'</select>'+
+      '<label>Material<input id="mc_material" placeholder="All materials" size="12"></label><label>Source<input id="mc_source" placeholder="All sources" size="12"></label><label>Destination<input id="mc_destination" placeholder="All destinations" size="12"></label><label>Vehicle<input id="mc_vehicle" placeholder="All vehicles" size="12"></label>'+ 
       '<button class="btn secondary small" onclick="tiomOwnerLoad()">Refresh</button>'+
       '<button class="btn primary small" onclick="render('+"'DASHBOARD'"+')">Detailed Dashboard →</button></div></div>'+
       '<div id="owner_body" class="mc-loading">Loading management figures…</div></div>');
@@ -131,7 +132,7 @@
           ()=>{}).getTiomHsdDesk({date:String(d.toDate),shift:S.boot.shift,reportFrom:String(d.fromDate),reportTo:String(d.toDate)});
       }
     },e=>html('owner_body','<div class="panel bad">'+E(e.message)+' <button class="btn secondary" onclick="tiomOwnerLoad()">Retry</button></div>')).getDashboard({
-      mode,fromDate:v('mc_from'),toDate:v('mc_to'),shift:v('mc_shift')||'ALL'
+      mode,fromDate:v('mc_from'),toDate:v('mc_to'),shift:v('mc_shift')||'ALL',materialFilter:v('mc_material'),sourceFilter:v('mc_source'),destinationFilter:v('mc_destination'),vehicleFilter:v('mc_vehicle')
     });
   };
   window.renderHome=setupOwner;
