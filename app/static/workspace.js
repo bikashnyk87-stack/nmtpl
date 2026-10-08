@@ -155,7 +155,7 @@ function dashPlantPerformanceTable(rows){
     const crusher=x.plantType==='CRUSHER';
     const outputSub=crusher?`Gross ${num(x.grossOutputMt,1)} t · blend share ${num(x.blendOutputMt,1)} t`:`Final screen product`;
     const varianceSub=crusher?'physical feed − gross output':`WIP ${num(x.wipMt,1)} t`;
-    return `<tr><td><b>${esc(x.plant)}</b></td><td>${num(x.freshFeedMt??x.feedMt,1)}<small>${num(x.feedTrips)} feed trips</small></td><td>${num(x.recycleMt,1)}</td><td>${num(x.blendFeedMt,1)}</td><td><b>${num(x.grossThroughputMt??x.feedMt,1)}</b></td><td>${num(x.outputMt,1)}<small>${outputSub}</small></td><td>${crusher?'—':num(x.transferToCrusherMt,1)}</td><td>${num(x.varianceMt,1)}<small>${varianceSub}</small></td><td>${x.recoveryPct==null?'—':num(x.recoveryPct,1)+'%'}</td><td>${x.runningHours==null?'—':num(x.runningHours,2)}</td><td>${x.tph==null?'—':num(x.tph,2)+' TPH'}</td></tr>`;
+    return `<tr><td><b>${esc(x.plant)}</b></td><td>${num(x.freshFeedMt??x.feedMt,1)}<small>${num(x.feedTrips)} feed trips</small></td><td>${num(x.recycleMt,1)}</td><td>${num(x.blendFeedMt,1)}</td><td><b>${num(x.grossThroughputMt??x.feedMt,1)}</b></td><td>${x.outputMt==null?'<b>Allocation pending</b>':num(x.outputMt,1)}<small>${outputSub}</small></td><td>${crusher?'—':num(x.transferToCrusherMt,1)}</td><td>${num(x.varianceMt,1)}<small>${varianceSub}</small></td><td>${x.recoveryPct==null?'—':num(x.recoveryPct,1)+'%'}</td><td>${x.runningHours==null?'—':num(x.runningHours,2)}</td><td>${x.tph==null?'—':num(x.tph,2)+' TPH'}</td></tr>`;
   }).join('')}</tbody></table></div>`;
 }
 function dashLocationPanel(rows,title){
