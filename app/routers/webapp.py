@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import get_db
+from app.maintenance_models import MaintenanceBreakdown
 from app.auth import (WebUser, WebSession, MODULES, COOKIE, csrf, get_user, require,
                       hash_password, check_password, issue_session, digest_token, utcnow, aware)
 from app.models import (Person, Equipment, Location, Product, ShiftMaster, ShiftRotation, ActivityMaster, PersonAttendance,
@@ -1707,6 +1708,57 @@ def dashboard_desk(db, user, p):
     for r in sorted(screen_rows.values(),key=lambda x:x['tonnes'],reverse=True):
         screen_out.append(dict(r,tonnes=round(r['tonnes'],2),recovery=None))
 
+    # Mechanical is the single breakdown ledger. Clip each event against the
+    # requested, permission-scoped shift windows, including overnight shifts.
+    active_shifts={x.shift:x for x in db.scalars(
+        select(ShiftMaster).where(ShiftMaster.active.is_(True)))}
+    scoped_shifts=([selected_shift] if selected_shift!='ALL'
+                   else [name for name in active_shifts
+                         if not allowed_shifts or name in allowed_shifts])
+    shift_windows=[]
+    day_cursor=start_day
+    while day_cursor<=end_day:
+        for name in scoped_shifts:
+            definition=active_shifts.get(name)
+            if not definition: continue
+            begin=datetime.combine(day_cursor,definition.start_time,TZ)
+            finish=datetime.combine(day_cursor,definition.end_time,TZ)
+            if finish<=begin: finish+=timedelta(days=1)
+            shift_windows.append((begin,finish))
+        day_cursor+=timedelta(days=1)
+    breakdown_rows=[]
+    active_breakdowns=0
+    breakdown_hours=0.0
+    if shift_windows:
+        min_window=min(x[0] for x in shift_windows)
+        max_window=max(x[1] for x in shift_windows)
+        bd_query=select(MaintenanceBreakdown).where(
+            MaintenanceBreakdown.site_id=='TIOM',
+            MaintenanceBreakdown.reported_at<max_window,
+            (MaintenanceBreakdown.released_at.is_(None)) |
+            (MaintenanceBreakdown.released_at>min_window)
+        )
+        reference_now=now_local()
+        for bd in db.scalars(bd_query):
+            event_start=aware(bd.reported_at)
+            event_end=aware(bd.released_at) if bd.released_at else reference_now
+            if event_end<=event_start: continue
+            overlap=sum(max(0.0,(min(event_end,stop)-max(event_start,start)).total_seconds())
+                        for start,stop in shift_windows)
+            if overlap<=0: continue
+            hours=round(overlap/3600,2)
+            breakdown_hours+=hours
+            open_event=bd.status in {'OPEN','IN_PROGRESS'} and not bd.released_at
+            active_breakdowns+=int(open_event)
+            breakdown_rows.append({
+                'id':bd.breakdown_id,'machine':bd.asset_id,'fault':bd.problem,
+                'category':bd.problem_category,'status':bd.status,
+                'reportedAt':bd.reported_at.isoformat() if bd.reported_at else None,
+                'releasedAt':bd.released_at.isoformat() if bd.released_at else None,
+                'periodDowntimeHours':hours,'isOpen':open_event
+            })
+    breakdown_rows.sort(key=lambda x:(x['isOpen'],x['periodDowntimeHours']),reverse=True)
+
     log.info(
         'TIOM dashboard built in %.2fs mode=%s period=%s..%s shift=%s wb=%d canonical_missing=%d',
         perf_counter()-dash_started, mode, start_day, end_day, selected_shift, len(wb_all), len(missing_canonical)
@@ -1753,7 +1805,11 @@ def dashboard_desk(db, user, p):
         'misDestinations':_mis_rows(mis_destinations)[:30],
         'misVehicles':_mis_rows(mis_vehicles,'vehicle')[:40],'misMachines':_mis_rows(mis_machines,'machine')[:40],
         'leadRoutes':lead_route_rows[:50],'haulagePerformance':haulage_rows[:100],
-        'exceptionDetails':{'lead':lead_review[:500],'tonnage':qty_pending[:500]},
+        'exceptionDetails':{'lead':lead_review[:500],'tonnage':qty_pending[:500],
+                            'leadTotal':len(lead_review),'tonnageTotal':len(qty_pending)},
+        'breakdowns':{'rows':breakdown_rows[:200],
+                      'totalEvents':len(breakdown_rows),'activeEvents':active_breakdowns,
+                      'periodDowntimeHours':round(breakdown_hours,2)},
         'production':production_summary,'drilling':drilling,
         'crusher':crusher_out[:30],'screens':screen_out[:30],'loaders':loader_rows[:20],'excavators':excavator_rows[:20],
         'vehicles':vehicle_rows[:30],'fuelByEquipment':fuel_rows[:30],'shiftComparison':shift_comp_rows,'sevenDay':seven_rows,'monthTrend':month_rows,'monthly':monthly,
