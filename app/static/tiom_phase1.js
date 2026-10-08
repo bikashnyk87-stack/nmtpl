@@ -35,7 +35,8 @@
     if(S.boot.user.isManagement)items.push(['USERS','Users']);
     const nav=q('nav'); nav.hidden=false; nav.innerHTML=items.map(([id,label])=>`<button id="nav_${id}" onclick="render('${id}')">${label}</button>`).join('');
   };
-  window.renderHome=function(){const mech=(S.boot.user.isManagement||S.boot.user.modules.includes('MECHANICAL'))?'<button class="btn secondary" onclick="render(\'MECHANICAL\')">Mechanical</button>':'';html('app','<div class="panel tiom-home"><div class="eyebrow">TIOM OPERATIONS</div><h1>Thakurani Iron Ore Mine</h1><p class="note">Attendance and Shift Control are paused. Production contains the existing Site Entry plus the compact MIS driver-report workflow.</p><div class="pilot-actions"><button class="btn primary" onclick="render(\'PRODUCTION\')">Production</button><button class="btn secondary" onclick="render(\'HSD\')">HSD</button>'+mech+'</div></div>')};
+  // Overview is owned by workspace.js / management UI. Do not replace it with
+  // this legacy splash screen after those modules initialize.
 
   window.renderProduction=function(){
     html('app',`<div class="tiom-sap-head"><div><b>TIOM / PRODUCTION</b><span>Site Entry + MIS Driver Shift Reports</span></div><div class="tiom-sap-context">Thakurani Iron Ore Mine</div></div>
