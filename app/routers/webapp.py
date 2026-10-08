@@ -3763,16 +3763,30 @@ def tiom_mis_desk(db,user,p):
         TiomMisReport.operating_date.desc(),TiomMisReport.shift,TiomMisReport.entered_at.desc()
     ).limit(500)))
 
+    # Carry forward ONLY readings from chronologically earlier shifts.
+    # The previous implementation included current/future shifts on the same
+    # date and ordered by edit timestamp, which could silently cross-fill HMR.
+    shift_order={x.shift:i for i,x in enumerate(sorted(
+        db.scalars(select(ShiftMaster).where(ShiftMaster.active.is_(True))),
+        key=lambda x:x.start_time))}
+    preceding={name for name,idx in shift_order.items() if idx<shift_order.get(sh,0)}
+    def prior_meter_date(row):
+        return row.operating_date<day or (row.operating_date==day and row.shift in preceding)
+    def previous_key(row):
+        return (row.operating_date,shift_order.get(row.shift,-1),
+                row.entered_at.isoformat() if row.entered_at else '')
+    historical_reports=[r for r in db.scalars(select(TiomMisReport).where(
+        TiomMisReport.closing_kmr.is_not(None),TiomMisReport.operating_date<=day,
+        TiomMisReport.status=='SUBMITTED')) if prior_meter_date(r)]
     prev_kmr={}
-    for r in db.scalars(select(TiomMisReport).where(
-        TiomMisReport.closing_kmr.is_not(None),TiomMisReport.operating_date<=day
-    ).order_by(TiomMisReport.operating_date.desc(),TiomMisReport.entered_at.desc())):
+    for r in sorted(historical_reports,key=previous_key,reverse=True):
         prev_kmr.setdefault(r.vehicle_id,float(r.closing_kmr))
-    prev_hmr={}
-    for m in db.scalars(select(SiteAssetMeter).where(
+    historical_meters=[m for m in db.scalars(select(SiteAssetMeter).where(
         SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.meter_type=='HMR',
         SiteAssetMeter.closing_reading.is_not(None),SiteAssetMeter.operating_date<=day
-    ).order_by(SiteAssetMeter.operating_date.desc(),SiteAssetMeter.entered_at.desc())):
+    )) if prior_meter_date(m)]
+    prev_hmr={}
+    for m in sorted(historical_meters,key=previous_key,reverse=True):
         prev_hmr.setdefault(m.asset_id,float(m.closing_reading))
 
     trip_machines=[e for e in equipment if e.group=='LOADING']
@@ -3842,11 +3856,17 @@ def get_tiom_wb_suggestions(db,user,p):
     deployments=list(db.scalars(select(TiomSourceDeployment).where(
         TiomSourceDeployment.operating_date==day,TiomSourceDeployment.shift==sh,TiomSourceDeployment.active.is_(True)
     )))
-    out=[]
+    aliases={norm_vehicle(x.alias) for x in db.scalars(select(VehicleAlias).where(
+        VehicleAlias.machine_id==vehicle.machine_id,VehicleAlias.active.is_(True)))}
+    out=[];other_linked=0;other_vehicle=0
     for wb in wb_rows:
-        if not tiom_wb_vehicle_matches(wb,vehicle): continue
+        matched=tiom_wb_vehicle_matches(wb,vehicle) or bool(
+            aliases.intersection({norm_vehicle(wb.vehicle_raw),norm_vehicle(wb.vehicle_id)}))
+        if not matched:
+            other_vehicle+=1;continue
         rec=linked.get(wb.movement_key)
-        if rec and rec.row_id not in own_row_ids: continue
+        if rec and rec.row_id not in own_row_ids:
+            other_linked+=1;continue
         item=tiom_wb_payload(db,wb)
         source_id=item.get('sourceLocationId') or ''
         machines=sorted({d.machine_id for d in deployments if d.source_location_id==source_id}) if source_id else []
@@ -3855,7 +3875,9 @@ def get_tiom_wb_suggestions(db,user,p):
         item['linkedToThisReport']=bool(rec and rec.row_id in own_row_ids)
         out.append(item)
     return {'rows':out,'batch':{'batchId':batch.batch_id,'fileName':batch.file_name,'confirmedAt':batch.confirmed_at.isoformat() if batch.confirmed_at else ''},
-            'message':f'{len(out)} confirmed WB movement(s) available for {vehicle.machine_id}.'}
+            'diagnostics':{'batchValid':len(wb_rows),'otherVehicle':other_vehicle,'alreadyLinked':other_linked,
+                           'available':len(out),'unmappedRows':sum(not (x.get('materialId') and x.get('sourceLocationId') and x.get('destinationLocationId')) for x in out)},
+            'message':f'{len(out)} available; {other_linked} already linked to another MIS report; {other_vehicle} WB movements belong to other vehicles. Latest confirmed batch: {batch.file_name}.'}
 
 def get_tiom_mis_report(db,user,p):
     require(user,'PRODUCTION'); report=db.get(TiomMisReport,str((p or {}).get('reportId') or ''))
