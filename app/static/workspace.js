@@ -280,6 +280,7 @@ loadDashboard=function(){
       <section class="panel v2-panel"><div class="v2-title"><h3>Material Flow</h3><span>Recorded/derived movement stages</span></div>${dashFlow(d.materialFlow)}</section>
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>Fuel Dashboard</h3><span>Fuel issued · efficiency</span></div><div class="mini-summary">${dashMini('Fuel Issued',num(k.hsdLitres,1)+' L')}${dashMini('Fuel Consumed','—','Not captured')}${dashMini('Fuel / Final T',finalFuelIntensity==null?'—':num(finalFuelIntensity,2)+' L/t')}${dashMini('Fuel / Trip',num(k.fuelPerTrip,2)+' L')}</div>${dashBars(d.fuelByEquipment,'machine','litres',' L',12)}<details><summary>Fuel detail</summary>${fuelTable}</details></section><section class="panel v2-panel"><div class="v2-title"><h3>Shift Comparison</h3><span>A / B / C</span></div>${shiftTable}${dashBars((d.shiftComparison||[]).map(x=>({label:'Shift '+x.shift,tonnes:x.tonnes})),'label','tonnes',' t',6)}</section></div>
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>7-Day Production Trend</h3><span>Fresh ROM vs final fresh production</span></div>${dashLine((d.sevenDay||[]).map(x=>({label:String(x.date).slice(5),rom:x.romInput,final:x.finalProduction})),[{key:'rom',label:'Fresh ROM',unit:' t',d:0},{key:'final',label:'Final Fresh Production',unit:' t',d:0}])}<div class="fuel-trend">Fuel: ${(d.sevenDay||[]).map(x=>`${esc(String(x.date).slice(5))} ${num(x.fuel,0)}L`).join(' · ')}</div></section><section class="panel v2-panel"><div class="v2-title"><h3>Monthly Summary</h3><span>MTD through ${esc(d.toDate)}</span></div><div class="monthly-grid">${monthlyCards.map(x=>dashMini(x[0],x[1])).join('')}</div></section></div>
+      ${dashBreakdownDetail(d)}
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>Equipment Status</h3><span>Latest recorded condition</span></div>${dashDonut((d.equipmentStatus||[]).map(x=>({label:x.label,tonnes:x.value})),'label','tonnes',false)}</section><section class="panel v2-panel"><div class="v2-title"><h3>Alerts</h3><span>Green · warning · critical</span></div>${dashAlerts(d.exceptions)}</section></div>
       <div class="dashboard-grid three"><section class="panel v2-panel"><div class="v2-title"><h3>Top Performers</h3><span>Trips + tonnes</span></div>${dashPerformer(d.topPerformers)}</section><section class="panel v2-panel"><div class="v2-title"><h3>Bottom Performers</h3><span>Lowest recorded trip output</span></div>${dashPerformer(d.bottomPerformers)}</section><section class="panel v2-panel management"><div class="v2-title"><h3>Management Summary</h3><span>At a glance</span></div>${mgmt.map(x=>dashMini(x[0],x[1],x[2])).join('')}<div class="weather-placeholder"><b>Weather</b><span>Not configured — site weather source/coordinates required.</span></div></section></div>
       ${dashExceptionDetail(d)}
@@ -469,18 +470,19 @@ function openOption(field){
 function dashExceptionDetail(d) {
   const q=(d.exceptionDetails&&d.exceptionDetails.tonnage)||[];
   const l=(d.exceptionDetails&&d.exceptionDetails.lead)||[];
+  const qTotal=Number(d.exceptionDetails?.tonnageTotal??q.length),lTotal=Number(d.exceptionDetails?.leadTotal??l.length);
   const qty=table(['Date','Shift','Vehicle','Material','Source','Destination'],q.map(x=>[
     esc(x.date),esc(x.shift),esc(x.vehicle),esc(x.material),esc(x.source),esc(x.destination)]));
   const lead=table(['Date','Shift','Vehicle','Source','Destination','Bench RL','Route mode','Issue'],l.map(x=>[
     esc(x.date),esc(x.shift),esc(x.vehicle),esc(x.source),esc(x.destination),
     x.benchRl==null?'—':esc(x.benchRl),esc(x.routeMode),esc(x.reason)]));
   return '<section class="panel v2-panel tiom-evidence-panel"><div class="v2-title"><h3>Entry exceptions — supporting records</h3><span>Missing quantities are not zero</span></div>'+
-    '<div class="mini-summary">'+dashMini('Tonnage pending',num(q.length),'No WB weight or approved factor',q.length?'warning':'good')+
-    dashMini('Lead unresolved',num(l.length),'Review exact route/bench',l.length?'warning':'good')+
+    '<div class="mini-summary">'+dashMini('Tonnage pending',num(qTotal),'No WB weight or approved factor',q.length?'warning':'good')+
+    dashMini('Lead unresolved',num(lTotal),'Review exact route/bench',l.length?'warning':'good')+
     dashMini('Unlinked WB',dashFmt(d.kpis?.wbUnmatched,0),'Weighed totals retained')+
     dashMini('MIS drafts',dashFmt(d.kpis?.misDrafts,0),'Excluded until submitted')+'</div>'+
-    '<details open><summary><b>Trips awaiting tonnage ('+q.length+')</b></summary><p class="note">Correct the existing source report or approved factor. <button class="btn secondary small" onclick="render('+"'PRODUCTION'"+')">Open Production</button></p><div class="tiom-exc-scroll">'+qty+'</div></details>'+
-    '<details><summary><b>Lead reconciliation ('+l.length+')</b></summary><p class="note">Select one approved area/bench, destination and WB path. <button class="btn secondary small" onclick="render('+"'MASTERS'"+')">Open Masters</button></p><div class="tiom-exc-scroll">'+lead+'</div></details></section>';
+    '<details open><summary><b>Trips awaiting tonnage ('+qTotal+')</b></summary><p class="note">Correct the existing source report or approved factor. <button class="btn secondary small" onclick="render('+"'PRODUCTION'"+')">Open Production</button></p><div class="tiom-exc-scroll">'+qty+'</div></details>'+
+    '<details><summary><b>Lead reconciliation ('+lTotal+')</b></summary><p class="note">Select one approved area/bench, destination and WB path. <button class="btn secondary small" onclick="render('+"'MASTERS'"+')">Open Masters</button></p><div class="tiom-exc-scroll">'+lead+'</div></details></section>';
 }
 const tiomPreviousHome=renderHome;
 renderHome=function(){
@@ -512,9 +514,10 @@ function ownerLoad(){
       ['WB-MIS Linked',dashFmt(k.misWbLinkedTrips,0),'No duplicate tonnes counted']
     ];
     const alerts=[
-      ['Tonnage pending',(ed.tonnage||[]).length,'Trips without recorded weight/factor'],
-      ['Lead unresolved',(ed.lead||[]).length,'Route and bench review'],
+      ['Tonnage pending',Number(ed.tonnageTotal??(ed.tonnage||[]).length),'Trips without recorded weight/factor'],
+      ['Lead unresolved',Number(ed.leadTotal??(ed.lead||[]).length),'Route and bench review'],
       ['MIS draft reports',Number(k.misDrafts||0),'Awaiting report submission'],
+      ['Open breakdowns',Number(d.breakdowns?.activeEvents||0),'Review Mechanical repair status'],
       ['WB not linked',Number(k.wbUnmatched||0),'WB weight remains counted']
     ].filter(x=>x[1]>0);
     const trend=(d.sevenDay||[]).map(x=>({label:String(x.date||'').slice(5),rom:x.romInput,final:x.finalProduction}));
@@ -555,3 +558,16 @@ function ownerLoad(){
   ].join('\n');
   document.head.appendChild(el);
 })();
+
+function dashBreakdownDetail(d){
+  const bd=d.breakdowns||{}, rows=bd.rows||[];
+  const report=table(['Machine','Fault','Status','Start','Released','Downtime in period'],rows.map(x=>[
+    esc(x.machine),esc(x.fault),esc(x.status),esc(x.reportedAt||'—'),esc(x.releasedAt||'—'),
+    dashFmt(x.periodDowntimeHours,2,' h')]));
+  return '<section class="panel v2-panel"><div class="v2-title"><h3>Machine breakdown report</h3><span>From Mechanical ledger · overlap with selected shifts only</span></div>'+
+    '<div class="mini-summary">'+dashMini('Breakdowns with downtime',dashFmt(bd.totalEvents,0),'Selected period')+
+    dashMini('Still open',dashFmt(bd.activeEvents,0),'Status OPEN / IN_PROGRESS')+
+    dashMini('Downtime',dashFmt(bd.periodDowntimeHours,2,' h'),'Clipped to reporting window')+'</div>'+
+    (rows.length?'<div class="tiom-exc-scroll">'+report+'</div>':'<p class="note">No Mechanical breakdown records overlap the selected shifts. This does not independently certify zero breakdowns.</p>')+
+    '<button class="btn secondary small" onclick="render('+"'MECHANICAL'"+')">Open Mechanical details →</button></section>';
+}
