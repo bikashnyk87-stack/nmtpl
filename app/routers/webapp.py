@@ -3437,8 +3437,12 @@ def _tiom_mis_productivity_summary(db,from_day,to_day,shift='ALL'):
         else:
             a['otherTrips']+=1; a['otherQty']+=q
 
-    # HMR-only equipment must still appear, even with zero trips.
+    # HMR-only loader/excavator appears, but unrelated trucks, compressors,
+    # drilling and graders must not be displayed as zero-production loaders.
     for mid in meters_by_machine:
+        machine=eq.get(mid)
+        if not machine or not (machine.group=='LOADING' or 'LOADER' in str(machine.type or '').upper() or 'EXCAV' in str(machine.type or '').upper()):
+            continue
         agg.setdefault(mid,{
             'machineId':mid,'romTrips':0,'romQty':Decimal('0'),
             'obTrips':0,'obQty':Decimal('0'),'otherTrips':0,'otherQty':Decimal('0')
@@ -3446,6 +3450,9 @@ def _tiom_mis_productivity_summary(db,from_day,to_day,shift='ALL'):
 
     out=[]
     for mid,a in sorted(agg.items()):
+        machine=eq.get(mid)
+        if not machine or not (machine.group=='LOADING' or 'LOADER' in str(machine.type or '').upper() or 'EXCAV' in str(machine.type or '').upper()):
+            continue
         meter_list=meters_by_machine.get(mid,[])
         opening=None; closing=None; hrs=Decimal('0'); shifts_worked=set(); days_worked=set()
         for m in meter_list:
@@ -3483,6 +3490,34 @@ def _tiom_mis_productivity_summary(db,from_day,to_day,shift='ALL'):
             'productivity':float(productivity) if productivity is not None else None
         })
 
+    # Driver/tripper productivity belongs to a different equipment category.
+    # Keep vehicle trips on their parent reports and never attribute them as
+    # loading-machine trips simply because HMR was recorded for the truck.
+    vehicle_agg={}
+    for report in reports:
+        meter_hrs=None
+        if report.opening_kmr is not None and report.closing_kmr is not None and report.closing_kmr>=report.opening_kmr:
+            meter_hrs=float(report.closing_kmr-report.opening_kmr)
+        target=vehicle_agg.setdefault(report.vehicle_id,{'vehicleId':report.vehicle_id,'trips':0,'tonnes':Decimal('0'),'unweighedTrips':0,
+                                                           'operatorIds':set(),'kmRun':0.0,'kmKnown':False})
+        if report.operator_id:target['operatorIds'].add(report.operator_id)
+        if meter_hrs is not None:target['kmRun']+=meter_hrs;target['kmKnown']=True
+    report_for_id={r.report_id:r for r in reports}
+    for row in rows_:
+        parent=report_for_id.get(row.report_id)
+        if not parent:continue
+        v=vehicle_agg[parent.vehicle_id]
+        detail=details.get(row.row_id)
+        v['trips']+=1
+        if detail and detail.calculated_qty_mt is not None:
+            v['tonnes']+=Decimal(detail.calculated_qty_mt)
+        else:v['unweighedTrips']+=1
+    vehicle_rows=[{'vehicleId':x['vehicleId'],'label':_tiom_asset_label(eq[x['vehicleId']]) if x['vehicleId'] in eq else x['vehicleId'],
+                   'trips':x['trips'],'tonnes':round(float(x['tonnes']),2),'unweighedTrips':x['unweighedTrips'],
+                   'operatorIds':sorted(x['operatorIds']),'kmRun':round(x['kmRun'],2) if x['kmKnown'] else None,
+                   'averagePayloadMt':round(float(x['tonnes'])/(x['trips']-x['unweighedTrips']),2) if x['trips']>x['unweighedTrips'] else None}
+                  for x in vehicle_agg.values()]
+    vehicle_rows.sort(key=lambda x:(-x['trips'],x['vehicleId']))
     totals={
         'hrsRun':sum((Decimal(str(x['hrsRun'])) for x in out),Decimal('0')),
         'romTrips':sum(x['romTrips'] for x in out),
@@ -3495,7 +3530,7 @@ def _tiom_mis_productivity_summary(db,from_day,to_day,shift='ALL'):
     totals['productivity']=(totals['totalQty']/totals['hrsRun']) if totals['hrsRun']>0 else None
     return {
         'fromDate':str(from_day),'toDate':str(to_day),'shift':shift,
-        'rows':out,
+        'rows':out,'vehicleRows':vehicle_rows,
         'totals':{k:(float(v) if isinstance(v,Decimal) else v) for k,v in totals.items()}
     }
 
