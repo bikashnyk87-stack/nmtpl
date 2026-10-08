@@ -18,7 +18,7 @@ from app.models import MasterOption, WbHeaderAlias
 from app.routers import health, masters, production, hsd, reconciliation, dashboard, shift_control, webapp, sites, site_ops, maintenance
 from app.services.wb_mapping import ensure_wb_header_mapping
 from app.services.attendance_automation import automation_loop
-from app.site_models import create_multisite_tables
+from app.site_models import create_multisite_tables, ensure_tiom_entry_columns
 from app.maintenance_models import create_maintenance_tables
 from app.services.site_context import seed_default_sites_and_shifts
 from app.services.cloud_sync import init_sync_source
@@ -89,6 +89,7 @@ async def lifespan(app):
     ensure_location_master_schema(engine)
     ensure_tiom_route_master_schema(engine)
     create_multisite_tables(engine)
+    ensure_tiom_entry_columns(engine)
     create_maintenance_tables(engine)
     init_sync_source(engine)
     # Pilot migration safety: if an older build left exactly one active account
