@@ -3647,23 +3647,39 @@ def save_tiom_source_deployments(db,user,p):
         context_ids=set(_tiom_source_context_map(db,day,sh))
         missing=sorted({x[0].location_id for x in parsed if x[0].location_id not in context_ids})
         if missing: raise HTTPException(422,'Enter Bench RL once in Face / Bench Setup for: '+', '.join(missing))
+    # Save submitted assignments individually; do not delete unrelated
+    # machine allocations or meters when a field user updates one row.
     before=_tiom_source_deployments(db,day,sh)
-    db.execute(delete(TiomSourceDeployment).where(
-        TiomSourceDeployment.operating_date==day,TiomSourceDeployment.shift==sh
-    ))
+    all_existing=list(db.scalars(select(TiomSourceDeployment).where(
+        TiomSourceDeployment.operating_date==day,TiomSourceDeployment.shift==sh,
+        TiomSourceDeployment.active.is_(True))))
+    existing_by_key={}
+    for record in all_existing:
+        key=(record.source_location_id,record.machine_id,record.from_at,record.to_at)
+        existing_by_key.setdefault(key,record)
+    # Never allocate the same machine to two overlapping locations. A null
+    # time is a whole-shift reservation and must be explicitly closed before a transfer.
+    combined=list(all_existing)
+    def conflicts(a_from,a_to,b_from,b_to):
+        return not (a_from and a_to and b_from and b_to and
+                    (a_to<=b_from or b_to<=a_from))
     for source,machine,activity,from_at,to_at,notes,operator_id in parsed:
-        db.add(TiomSourceDeployment(
-            deployment_id=str(uuid4()),operating_date=day,shift=sh,source_location_id=source.location_id,
-            machine_id=machine.machine_id,operator_id=operator_id,activity=activity,from_at=from_at,to_at=to_at,active=True,
-            notes=notes,entered_by=user.login_id,entered_at=now_local()
-        ))
-    deployed_ids={x[1].machine_id for x in parsed}
-    stale=list(db.scalars(select(SiteAssetMeter).where(
-        SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,SiteAssetMeter.shift==sh,
-        SiteAssetMeter.meter_type=='HMR',SiteAssetMeter.source_type=='TIOM_DEPLOYMENT'
-    )))
-    for meter in stale:
-        if meter.asset_id not in deployed_ids: db.delete(meter)
+        key=(source.location_id,machine.machine_id,from_at,to_at)
+        existing=existing_by_key.get(key)
+        for other in combined:
+            if other is existing or other.machine_id!=machine.machine_id or other.source_location_id==source.location_id:
+                continue
+            if conflicts(from_at,to_at,other.from_at,other.to_at):
+                raise HTTPException(409,f'{machine.machine_id} already allocated to {other.source_location_id} in this shift. Close the earlier time range before transferring.')
+        entry=existing or TiomSourceDeployment(
+            deployment_id=str(uuid4()),operating_date=day,shift=sh,
+            source_location_id=source.location_id,machine_id=machine.machine_id,
+            entered_by=user.login_id,entered_at=now_local())
+        entry.operator_id=operator_id
+        entry.activity=activity;entry.from_at=from_at;entry.to_at=to_at
+        entry.notes=notes;entry.active=True;entry.entered_by=user.login_id;entry.entered_at=now_local()
+        if not existing:
+            db.add(entry);combined.append(entry);existing_by_key[key]=entry
     for machine_id,(opening,closing,reset,meter_note) in meter_by_machine.items():
         usage=(closing-opening) if opening is not None and closing is not None and closing>=opening and not reset else None
         meter=db.scalar(select(SiteAssetMeter).where(
