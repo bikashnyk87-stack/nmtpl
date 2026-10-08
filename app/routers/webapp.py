@@ -3243,16 +3243,26 @@ def _tiom_drilling_summary(db,from_day,to_day,shift='ALL'):
         if shift!='ALL': hq=hq.where(HsdIssue.shift==shift)
         for x in db.scalars(hq): hsd[x.machine_id]=hsd.get(x.machine_id,Decimal('0'))+Decimal(x.litres or 0)
     agg={}
-    total={'holes':0,'romObMeterage':Decimal('0'),'bhjBhqMeterage':Decimal('0'),'totalMeterage':Decimal('0'),'drillHours':Decimal('0'),'compressorHours':Decimal('0'),'breakdownHours':Decimal('0'),'hsdLitres':Decimal('0')}
+    total={'holes':0,'romObHoles':0,'bhjBhqHoles':0,'unclassifiedHoles':0,'romObMeterage':Decimal('0'),'bhjBhqMeterage':Decimal('0'),'totalMeterage':Decimal('0'),'drillHours':Decimal('0'),'compressorHours':Decimal('0'),'breakdownHours':Decimal('0'),'hsdLitres':Decimal('0')}
     for r in rows:
         st=sets.get(r.drill_set_id)
-        a=agg.setdefault(r.drill_set_id,{'id':r.drill_set_id,'label':st.drill_set_name if st else r.drill_set_id,'holes':0,'romObMeterage':Decimal('0'),'bhjBhqMeterage':Decimal('0'),'totalMeterage':Decimal('0'),'drillHours':Decimal('0'),'compressorHours':Decimal('0'),'breakdownHours':Decimal('0')})
+        a=agg.setdefault(r.drill_set_id,{'id':r.drill_set_id,'label':st.drill_set_name if st else r.drill_set_id,'holes':0,'romObHoles':0,'bhjBhqHoles':0,'unclassifiedHoles':0,'romObMeterage':Decimal('0'),'bhjBhqMeterage':Decimal('0'),'totalMeterage':Decimal('0'),'drillHours':Decimal('0'),'compressorHours':Decimal('0'),'breakdownHours':Decimal('0')})
         rom=Decimal(r.rom_ob_meterage or 0); bhj=Decimal(r.bhj_bhq_meterage or 0); met=rom+bhj
         dh=(Decimal(r.drill_close_hmr)-Decimal(r.drill_open_hmr)) if r.drill_open_hmr is not None and r.drill_close_hmr is not None and r.drill_close_hmr>=r.drill_open_hmr else Decimal('0')
         ch=(Decimal(r.compressor_close_hmr)-Decimal(r.compressor_open_hmr)) if r.compressor_open_hmr is not None and r.compressor_close_hmr is not None and r.compressor_close_hmr>=r.compressor_open_hmr else Decimal('0')
         bd=Decimal(r.breakdown_hours or 0)
-        a['holes']+=int(r.holes or 0); a['romObMeterage']+=rom; a['bhjBhqMeterage']+=bhj; a['totalMeterage']+=met; a['drillHours']+=dh; a['compressorHours']+=ch; a['breakdownHours']+=bd
-        total['holes']+=int(r.holes or 0); total['romObMeterage']+=rom; total['bhjBhqMeterage']+=bhj; total['totalMeterage']+=met; total['drillHours']+=dh; total['compressorHours']+=ch; total['breakdownHours']+=bd
+        a['holes']+=int(r.holes or 0)
+        if r.rom_ob_holes is None or r.bhj_bhq_holes is None:
+            a['unclassifiedHoles']+=int(r.holes or 0)
+        else:
+            a['romObHoles']+=int(r.rom_ob_holes);a['bhjBhqHoles']+=int(r.bhj_bhq_holes)
+        a['romObMeterage']+=rom; a['bhjBhqMeterage']+=bhj; a['totalMeterage']+=met; a['drillHours']+=dh; a['compressorHours']+=ch; a['breakdownHours']+=bd
+        total['holes']+=int(r.holes or 0)
+        if r.rom_ob_holes is None or r.bhj_bhq_holes is None:
+            total['unclassifiedHoles']+=int(r.holes or 0)
+        else:
+            total['romObHoles']+=int(r.rom_ob_holes);total['bhjBhqHoles']+=int(r.bhj_bhq_holes)
+        total['romObMeterage']+=rom; total['bhjBhqMeterage']+=bhj; total['totalMeterage']+=met; total['drillHours']+=dh; total['compressorHours']+=ch; total['breakdownHours']+=bd
     out=[]
     for sid,a in agg.items():
         st=sets.get(sid); fuel=(hsd.get(st.drill_machine_id,Decimal('0'))+hsd.get(st.compressor_machine_id,Decimal('0'))) if st else Decimal('0')
@@ -4758,6 +4768,7 @@ def tiom_drilling_desk(db,user,p):
             'drillMachineId':st.drill_machine_id,'drillMachineLabel':_tiom_asset_label(equipment.get(st.drill_machine_id)) if equipment.get(st.drill_machine_id) else st.drill_machine_id,
             'compressorMachineId':st.compressor_machine_id,'compressorMachineLabel':_tiom_asset_label(equipment.get(st.compressor_machine_id)) if equipment.get(st.compressor_machine_id) else st.compressor_machine_id,
             'sourceLocationId':r.source_location_id if r else '', 'holes':r.holes if r else 0,
+            'romObHoles':r.rom_ob_holes if r else None,'bhjBhqHoles':r.bhj_bhq_holes if r else None,
             'romObMeterage':float(r.rom_ob_meterage) if r else 0,'bhjBhqMeterage':float(r.bhj_bhq_meterage) if r else 0,
             'drillOpenHmr':float(r.drill_open_hmr) if r and r.drill_open_hmr is not None else None,'drillCloseHmr':float(r.drill_close_hmr) if r and r.drill_close_hmr is not None else None,
             'compressorOpenHmr':float(r.compressor_open_hmr) if r and r.compressor_open_hmr is not None else None,'compressorCloseHmr':float(r.compressor_close_hmr) if r and r.compressor_close_hmr is not None else None,
@@ -4788,6 +4799,13 @@ def save_tiom_drilling_shift(db,user,p):
         try: holes=int(holes_raw or 0)
         except Exception: raise HTTPException(422,f'Drilling row {idx}: Holes must be a whole number.')
         if holes<0: raise HTTPException(422,f'Drilling row {idx}: Holes cannot be negative.')
+        rom_holes_raw=item.get('romObHoles');bhj_holes_raw=item.get('bhjBhqHoles')
+        if rom_holes_raw not in (None,'') and bhj_holes_raw not in (None,''):
+            try:rom_holes=int(rom_holes_raw);bhj_holes=int(bhj_holes_raw)
+            except Exception:raise HTTPException(422,f'Drilling row {idx}: Enter integer hole counts.')
+            if rom_holes<0 or bhj_holes<0:raise HTTPException(422,f'Drilling row {idx}: Hole counts must be nonnegative.')
+            holes=rom_holes+bhj_holes
+        else:rom_holes=None;bhj_holes=None
         rom=dec(rom_raw,f'ROM/OB meterage row {idx}',True); bhj=dec(bhj_raw,f'BHJ/BHQ meterage row {idx}',True)
         do=dec(item.get('drillOpenHmr'),f'Drill HMR opening row {idx}'); dc=dec(item.get('drillCloseHmr'),f'Drill HMR closing row {idx}')
         co=dec(item.get('compressorOpenHmr'),f'Compressor HMR opening row {idx}'); cc=dec(item.get('compressorCloseHmr'),f'Compressor HMR closing row {idx}')
@@ -4796,7 +4814,9 @@ def save_tiom_drilling_shift(db,user,p):
         if co is not None and cc is not None and cc<co: raise HTTPException(422,f'Drilling row {idx}: Compressor closing HMR cannot be below opening HMR.')
         existing=db.scalar(select(TiomDrillingShift).where(TiomDrillingShift.operating_date==day,TiomDrillingShift.shift==sh,TiomDrillingShift.drill_set_id==set_id))
         obj=existing or TiomDrillingShift(drilling_id=str(uuid4()),operating_date=day,shift=sh,drill_set_id=set_id,entered_by=user.login_id,entered_at=now_local())
-        obj.source_location_id=source_id or None; obj.holes=holes; obj.rom_ob_meterage=rom; obj.bhj_bhq_meterage=bhj
+        obj.source_location_id=source_id or None; obj.holes=holes
+        obj.rom_ob_holes=rom_holes;obj.bhj_bhq_holes=bhj_holes
+        obj.rom_ob_meterage=rom; obj.bhj_bhq_meterage=bhj
         obj.drill_open_hmr=do; obj.drill_close_hmr=dc; obj.compressor_open_hmr=co; obj.compressor_close_hmr=cc
         obj.breakdown_hours=bd; obj.remarks=short(str(item.get('remarks') or '')); obj.entered_by=user.login_id; obj.entered_at=now_local(); db.add(obj)
         _tiom_upsert_hmr(db,user,day,sh,st.drill_machine_id,do,dc,'TIOM_DRILLING',f'[DRILL_SET:{set_id}]')
