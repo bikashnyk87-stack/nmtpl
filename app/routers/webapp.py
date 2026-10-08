@@ -882,33 +882,58 @@ def dashboard_desk(db, user, p):
         match=re.search(r'\bMSP\s*(?:PLANT\s*)?-?\s*(\d+)\b',txt)
         return f'MSP-{match.group(1)}' if match else None
 
+    # Process-plant hours come from the central SiteAssetMeter, not the
+    # paused attendance workflow. Link plant/Crusher equipment by an explicit
+    # shift deployment location, falling back to an unambiguous equipment label.
+    plant_meter_query=select(SiteAssetMeter).where(
+        SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.meter_type=='HMR',
+        SiteAssetMeter.operating_date>=start_day,SiteAssetMeter.operating_date<=end_day)
+    plant_deploy_query=select(TiomSourceDeployment).where(
+        TiomSourceDeployment.operating_date>=start_day,
+        TiomSourceDeployment.operating_date<=end_day,TiomSourceDeployment.active.is_(True))
+    if selected_shift!='ALL':
+        plant_meter_query=plant_meter_query.where(SiteAssetMeter.shift==selected_shift)
+        plant_deploy_query=plant_deploy_query.where(TiomSourceDeployment.shift==selected_shift)
+    elif allowed_shifts:
+        plant_meter_query=plant_meter_query.where(SiteAssetMeter.shift.in_(allowed_shifts))
+        plant_deploy_query=plant_deploy_query.where(TiomSourceDeployment.shift.in_(allowed_shifts))
+    plant_meters=list(db.scalars(plant_meter_query))
+    plant_locations={x.location_id:x for x in db.scalars(select(Location))}
+    plant_deployments={}
+    for assigned in db.scalars(plant_deploy_query):
+        plant_deployments.setdefault((assigned.operating_date,assigned.shift,assigned.machine_id),set()).add(
+            assigned.source_location_id)
     def _plant_run_hours(label):
-        # Actual HMR/run-meter only. WB timestamps are not plant running hours.
-        totals={}
-        for att in ea:
-            if att.run_meter is None:
-                continue
-            eq=equipment_map.get(att.machine_id)
-            eq_txt=' '.join([
-                str(att.machine_id or ''),
-                str(eq.type if eq else ''),
-                str(eq.group if eq else ''),
-                str(eq.make_model if eq else '')
-            ]).upper()
+        by_shift={}
+        for meter in plant_meters:
+            equipment=equipment_map.get(meter.asset_id)
+            if not equipment:continue
+            locations=plant_deployments.get((meter.operating_date,meter.shift,meter.asset_id),set())
+            labels=[(plant_locations[src].location_name+' '+src) if src in plant_locations else src for src in locations]
+            identity=' '.join([str(equipment.machine_id),str(equipment.type or ''),str(equipment.make_model or '')]).upper()
+            joined=' '.join(labels).upper()
             matched=False
             if label.startswith('MSP-'):
-                plant_no=label.split('-',1)[1]
-                matched=bool(re.search(rf'\bMSP\s*(?:PLANT\s*)?-?\s*{re.escape(plant_no)}\b',eq_txt))
+                no=re.escape(label.split('-',1)[1])
+                expression=rf'\\bMSP\\s*(?:PLANT\\s*)?-?\\s*{no}\\b'
+                matched=bool(re.search(expression,joined))
+                if not locations and equipment.group=='PROCESSING':
+                    matched=bool(re.search(expression,identity))
             elif label=='Crusher':
-                matched=('CRUSH' in eq_txt or 'OCP' in eq_txt)
-            if not matched:
-                continue
-            val=float(att.run_meter or 0)
-            if val>=0:
-                totals[att.machine_id]=totals.get(att.machine_id,0.0)+val
-        # Multiple plant components can run in parallel; summing them would
-        # overstate clock hours. Use the longest verified component runtime.
-        return max(totals.values()) if totals else None
+                matched=('CRUSH' in joined or 'OCP' in joined)
+                if not locations and equipment.group=='PROCESSING':
+                    matched=('CRUSH' in identity or 'OCP' in identity)
+            if not matched:continue
+            usage=(float(meter.usage) if meter.usage is not None else
+                   (float(meter.closing_reading-meter.opening_reading)
+                    if meter.closing_reading is not None and meter.opening_reading is not None
+                       and meter.closing_reading>=meter.opening_reading else None))
+            if usage is None or usage<0:continue
+            key=(meter.operating_date,meter.shift)
+            by_shift[key]=max(by_shift.get(key,0.0),usage)
+        # Parallel components do not double-count a shift's running hours.
+        # Across shifts/days, hours are added rather than taking one global max.
+        return sum(by_shift.values()) if by_shift else None
 
     def _group_by_msp(rows,side):
         grouped={}
@@ -3806,6 +3831,13 @@ def tiom_mis_desk(db,user,p):
     locations=list(db.scalars(select(Location).where(Location.active).order_by(Location.location_name)))
     source_locations=location_options(db,'SOURCE')
     destination_locations=location_options(db,'DESTINATION')
+    deployment_locations=list(source_locations)
+    registered={x['id'] for x in deployment_locations}
+    for location in locations:
+        label=(str(location.location_name or '')+' '+str(location.location_id)).upper()
+        if (location.type in {'SCREEN','CRUSHER','PLANT'} or re.search(r'\\bMSP\\s*-?\\s*\\d+\\b',label)) and location.location_id not in registered:
+            deployment_locations.append({'id':location.location_id,'label':location.location_name})
+            registered.add(location.location_id)
     products=list(db.scalars(select(Product).where(Product.active).order_by(Product.name)))
     activities=list(db.scalars(select(ActivityMaster).where(ActivityMaster.active).order_by(ActivityMaster.activity)))
     lead_rules=list(db.scalars(select(TiomLeadDistance).where(TiomLeadDistance.active).order_by(
@@ -3883,6 +3915,7 @@ def tiom_mis_desk(db,user,p):
             'destinationLocationId':x.destination_location_id,'routeMode':x.route_mode,
             'leadKm':float(x.lead_km),'materialScope':x.material_scope or ''
         } for x in lead_rules],
+        'deploymentLocations':[{'id':x['id'],'label':_tiom_location_display(x['label'],x['id'])} for x in deployment_locations],
         'sourceContexts':_tiom_source_context_rows(db,day,sh),  # legacy compatibility only
         'operators':[{'id':x.employee_id,'label':f'{x.name} · {x.employee_id} · {x.role}'} for x in persons],
         'locations':[{'id':x.location_id,'label':_tiom_location_display(x.location_name,x.location_id),'role':x.role or 'UNCLASSIFIED'} for x in locations],
