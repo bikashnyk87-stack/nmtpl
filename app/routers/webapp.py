@@ -4111,6 +4111,14 @@ def save_tiom_mis_report(db,user,p,submit=False):
             unloading+=timedelta(days=1)
         dep_matches=[d for d in deployments if d.source_location_id==source_id and d.machine_id==machine_id]
         if not dep_matches:
+            # Existing assignment at another source must be closed before
+            # this machine can be used here; do not silently create a second
+            # overlapping allocation from a trip row.
+            for other in deployments:
+                if other.machine_id!=machine_id or other.source_location_id==source_id:continue
+                if (not loading or not other.from_at or not other.to_at or
+                    aware(other.from_at)<=aware(loading)<aware(other.to_at)):
+                    raise HTTPException(409,f'Row {i}: {machine_id} is already assigned to {other.source_location_id}. Close or time-bound the previous allocation in Machine Setup first.')
             activity='EXCAVATION' if 'EXCAV' in str(machine.type or '').upper() else 'LOADING'
             if not db.get(ActivityMaster,activity):
                 db.add(ActivityMaster(activity=activity,vehicle_required=False,active=True))
