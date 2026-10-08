@@ -133,10 +133,25 @@
       const current=C[id]||[];
       if(current.length!==all.length||current.some(x=>!all.some(y=>y.id===x.id)))comboReplace(id,all,selected);
     }
+    for(let i=0;i<T.misRows;i++){
+      const id='tm_mac_'+i,source=v('tm_src_'+i),selected=v(id);
+      const all=machinesForSource(source,selected);
+      const current=C[id]||[];
+      if(current.length!==all.length||current.some(x=>!all.some(y=>y.id===x.id)))comboReplace(id,all,selected);
+    }
   };
   window.saveDeployments=function(){const rows=deploymentRows().filter(r=>r.sourceLocationId||r.machineId);appRun(function(r){toast(r.message);loadTiomMis()},function(e){toast(e.message,true)}).saveTiomSourceDeployments({date:v('tm_date'),shift:v('tm_shift'),rows})};
   function deploymentMachineIds(sourceId){const ids=new Set();for(const r of (T.mis?.deployments||[]))if(r.sourceLocationId===sourceId&&r.machineId)ids.add(r.machineId);for(const r of deploymentRows())if(r.sourceLocationId===sourceId&&r.machineId)ids.add(r.machineId);return ids}
-  function machinesForSource(sourceId,selected){const all=[...(T.mis?.machines||[])];if(!sourceId)return selected?all.filter(x=>x.id===selected):[];const ids=deploymentMachineIds(sourceId);all.sort((a,b)=>(ids.has(b.id)?1:0)-(ids.has(a.id)?1:0)||String(a.label||a.id).localeCompare(String(b.label||b.id)));return all}
+  function machinesForSource(sourceId,selected){
+    const all=[...(T.mis?.machines||[])];
+    if(!sourceId)return selected?all.filter(x=>x.id===selected):[];
+    const current=[...(T.mis?.deployments||[]),...deploymentRows()];
+    const assignedHere=new Set(current.filter(r=>r.sourceLocationId===sourceId).map(r=>r.machineId).filter(Boolean));
+    const assignedElsewhere=new Set(current.filter(r=>r.sourceLocationId&&r.sourceLocationId!==sourceId).map(r=>r.machineId).filter(Boolean));
+    const available=all.filter(x=>!assignedElsewhere.has(x.id)||assignedHere.has(x.id)||x.id===selected);
+    available.sort((a,b)=>(assignedHere.has(b.id)?1:0)-(assignedHere.has(a.id)?1:0)||String(a.label||a.id).localeCompare(String(b.label||b.id)));
+    return available;
+  }
   function leadPreview(i){const src=v('tm_src_'+i),dst=v('tm_dst_'+i),wb=!!v('tm_wb_'+i),source=(T.mis?.sourceLocations||[]).find(x=>x.id===src),rl=source&&source.benchRl!=null?Number(source.benchRl):NaN,mode=wb?'WITH_WB':'WITHOUT_WB';if(!src||!dst)return{leadKm:null,routeMode:mode,status:'Select destination'};if(!Number.isFinite(rl))return{leadKm:null,routeMode:mode,status:'RL missing in Source Master'};const exact=(T.mis?.leadRules||[]).filter(x=>x.sourceLocationId===src&&x.destinationLocationId===dst&&Number(x.benchRl)===rl&&x.routeMode===mode);if(exact.length===1)return{leadKm:Number(exact[0].leadKm),routeMode:mode,status:'OK',benchRl:rl};if(exact.length>1)return{leadKm:null,routeMode:mode,status:'Lead Master conflict'};const route=(T.mis?.routes||[]).find(x=>x.sourceLocationId===src&&x.destinationLocationId===dst&&x.routeMode===mode);return{leadKm:null,routeMode:mode,status:route?'Lead not configured':'Route not configured',benchRl:rl}}
   window.updateLead=function(i){const out=leadPreview(i),el=q('tm_lead_'+i);if(el){el.dataset.lead=out.leadKm==null?'':String(out.leadKm);el.title=`${out.routeMode||''}${out.benchRl!=null?' · RL '+out.benchRl:''}`;el.textContent=out.leadKm==null?out.status:(n(out.leadKm,3)+' km')}return out};
 
