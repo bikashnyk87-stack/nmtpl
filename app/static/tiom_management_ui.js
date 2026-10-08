@@ -81,9 +81,12 @@
       Number(k.wbUnmatched||0)?attention('WB movements not linked to MIS','WB tonnes remain included; attribution needs review',k.wbUnmatched,'warn'):''
     ].filter(Boolean);
     const period=E(d.fromDate)+(d.toDate!==d.fromDate?' – '+E(d.toDate):'');
-    const drill=metric('DRILLED HOLES',fmt(k.drillHoles,0),'Recorded shifts')+
-      metric('DRILL METERAGE',fmt(k.drillMeterage,1,' m'),'Recorded total')+
-      metric('DRILL RATE',fmt(k.drillMeterPerHour,1,' m/h'),'Requires valid running HMR');
+    const drill=metric('ROM/OB HOLES',fmt(dr.romObHoles,0),'Separated hole entry')+
+      metric('BHJ/BHQ HOLES',fmt(dr.bhjBhqHoles,0),'Separated hole entry')+
+      metric('ROM/OB METERS',fmt(dr.romObMeterage,1,' m'),'Drill meterage')+
+      metric('BHJ/BHQ METERS',fmt(dr.bhjBhqMeterage,1,' m'),'Drill meterage')+
+      metric('UNCLASSIFIED HOLES',fmt(dr.unclassifiedHoles,0),'Historical combined counts')+
+      metric('DRILL RATE',fmt(k.drillMeterPerHour,1,' m/h'),'Valid HMR only');
     const footer='<div class="mc-checks">'+status(Number(k.wbTrips)>0,'Confirmed WB: '+fmt(k.wbTrips,0)+' movements')+
       status(Number(k.misDrafts||0)===0,'MIS drafts: '+fmt(k.misDrafts,0))+
       status(Number(k.haulLeadMissingTrips||0)===0,'Lead unresolved: '+fmt(k.haulLeadMissingTrips,0))+'</div>';
