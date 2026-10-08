@@ -196,7 +196,7 @@
     else if(name==='DRILL'){render('PRODUCTION');tiomProdTab('DRILL');}
     else render(name);
     if(name==='MIS'||name==='DRILL'){
-      document.querySelectorAll('#nav button').forEach(x=>x.classList.remove('active'));
+      document.querySelectorAll('#nav button').forEach(x=>{x.classList.remove('active');x.setAttribute('aria-current',x.id==='nav_'+name?'page':'false');});
       const el=document.getElementById('nav_'+name);if(el)el.classList.add('active');
     }
   };
