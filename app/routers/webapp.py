@@ -790,6 +790,13 @@ def dashboard_desk(db, user, p):
         crusher_final,crusher_feed_fact,crusher_blend_feed
     )
     final_production=screen_direct+crusher_fresh_final
+    # Keep physical gross-output evidence distinct from an unverified fresh share.
+    # A missing crusher-feed quantity must never silently prove 100% fresh output.
+    allocation_pending=(crusher_final>0 and (crusher_feed_fact<=0 or crusher_blend_feed>crusher_feed_fact))
+    allocation_status=('CRUSHER_FEED_TONNAGE_MISSING' if crusher_final>0 and crusher_feed_fact<=0
+                       else 'BLEND_FEED_EXCEEDS_TOTAL' if crusher_blend_feed>crusher_feed_fact
+                       else 'PROPORTIONAL_ALLOCATION' if crusher_blend_feed>0
+                       else 'NO_RECORDED_BLEND')
 
     def prod_pct(value,base=rom_input):
         return round(float(Decimal(value or 0)/base*Decimal('100')),2) if base and base>0 else None
@@ -1241,16 +1248,21 @@ def dashboard_desk(db, user, p):
         'crusherFinesMt':round(float(crusher_fines),2),'crusherFinesPct':prod_pct(crusher_fines),
         'crusherCloMt':round(float(crusher_clo),2),'crusherCloPct':prod_pct(crusher_clo),
         'crusherGrossOutputMt':round(float(crusher_final),2),'crusherGrossOutputPct':prod_pct(crusher_final),
-        'crusherFreshOutputMt':round(float(crusher_fresh_final),2),'crusherFreshOutputPct':prod_pct(crusher_fresh_final),
+        'crusherFreshOutputMt':None if allocation_pending else round(float(crusher_fresh_final),2),
+        'crusherFreshOutputPct':None if allocation_pending else prod_pct(crusher_fresh_final),
+        'allocationStatus':allocation_status,'allocationPending':allocation_pending,
         'crusherBlendOutputMt':round(float(crusher_blend_output),2),'crusherBlendOutputPct':prod_pct(crusher_blend_output),
-        'finalProductionMt':round(float(final_production),2),'finalRecoveryPct':prod_pct(final_production),
+        'finalProductionMt':None if allocation_pending else round(float(final_production),2),
+        'finalRecoveryPct':None if allocation_pending else prod_pct(final_production),
+        'provisionalOutputMt':round(float(final_production),2) if allocation_pending else None,
         'crusherFeedMt':round(float(crusher_feed),2),'crusherFeedPct':prod_pct(crusher_feed),
         'crusherFreshFeedMt':round(float(crusher_fresh_feed),2),'crusherFreshFeedPct':prod_pct(crusher_fresh_feed),
         'crusherBlendFeedMt':round(float(crusher_blend_feed),2),'crusherBlendFeedPct':prod_pct(crusher_blend_feed),
         'crusherRecoveryPct':round(crusher_recovery,2) if crusher_recovery is not None else None,
         'oldStockExcludedMt':round(float(old_stock_excluded),2),'oldStockTrips':old_stock_trips,
         'oldStockVsRomPct':prod_pct(old_stock_excluded),
-        'balanceMt':round(float(production_balance),2),'balancePct':prod_pct(production_balance),
+        'balanceMt':None if allocation_pending else round(float(production_balance),2),
+        'balancePct':None if allocation_pending else prod_pct(production_balance),
         'note':'Fresh ROM is the 100% mine-production base. Genuine MSP lumps and large spillage sent to Crusher are fresh intermediate feed. CLO 10-40 is company old-stock blend, not NMTPL production. Crusher gross output is allocated pro-rata between fresh feed and old-stock blend because the mixed final product cannot be traced by feed stream after crushing. Same-MSP spillage is recycle and increases throughput/TPH, not fresh production.'
     }
     fuel_per_tonne=float(hsd_litres)/wb_tonnes if wb_tonnes else 0.0
