@@ -1449,6 +1449,11 @@ def dashboard_desk(db, user, p):
                 item['tonnes']=None
                 item['pct']=None
                 item['status']='ALLOCATION_PENDING'
+        for item in plant_performance:
+            if item.get('plantType')=='CRUSHER':
+                item['outputMt']=None
+                item['finalYieldPct']=None
+                item['allocationStatus']=allocation_status
 
     source_rows=[{'label':r['label'],'trips':r['trips'],'tonnes':round(r['tonnes'],2),'avgPayload':round(r['tonnes']/r['trips'],2) if r['trips'] else 0,
                   'pct':round(r['tonnes']/wb_tonnes*100,1) if wb_tonnes else 0} for r in sorted(sources.values(),key=lambda x:x['tonnes'],reverse=True)]
