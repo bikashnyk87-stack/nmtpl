@@ -915,7 +915,7 @@ def dashboard_desk(db, user, p):
             matched=False
             if label.startswith('MSP-'):
                 no=re.escape(label.split('-',1)[1])
-                expression=rf'\\bMSP\\s*(?:PLANT\\s*)?-?\\s*{no}\\b'
+                expression=rf'\bMSP\s*(?:PLANT\s*)?-?\s*{no}\b'
                 matched=bool(re.search(expression,joined))
                 if not locations and equipment.group=='PROCESSING':
                     matched=bool(re.search(expression,identity))
@@ -3835,7 +3835,7 @@ def tiom_mis_desk(db,user,p):
     registered={x['id'] for x in deployment_locations}
     for location in locations:
         label=(str(location.location_name or '')+' '+str(location.location_id)).upper()
-        if (location.type in {'SCREEN','CRUSHER','PLANT'} or re.search(r'\\bMSP\\s*-?\\s*\\d+\\b',label)) and location.location_id not in registered:
+        if (location.type in {'SCREEN','CRUSHER','PLANT'} or re.search(r'\bMSP\s*-?\s*\d+\b',label)) and location.location_id not in registered:
             deployment_locations.append({'id':location.location_id,'label':location.location_name})
             registered.add(location.location_id)
     products=list(db.scalars(select(Product).where(Product.active).order_by(Product.name)))
