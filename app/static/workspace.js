@@ -192,7 +192,7 @@ async function dashboardShare(){const d=S.dashboard||{},k=d.kpis||{},p=d.product
 renderDashboard = function(){
   S.dashMode='TODAY';S.dashMaterialFilter='';
   html('app',`<div class="page-heading dashboard-heading"><div><div class="eyebrow">MINE OPERATIONS CONTROL ROOM</div><h1>Production Dashboard</h1></div><div class="head-actions"><button class="btn secondary small" onclick="dashSetTargets()">Targets ⚙</button><button class="btn secondary small" onclick="dashboardCsv()">CSV</button><button class="btn secondary small" onclick="dashboardJson()">JSON</button><button class="btn secondary small" onclick="dashboardPrint()">Print / PDF</button><button class="btn secondary small" onclick="dashboardShare()">Share</button><button class="btn secondary small" onclick="loadDashboard()">Refresh</button></div></div>
-    <div class="panel dashboard-toolbar sticky-dashboard"><div class="range-switch" role="group" aria-label="Reporting period">${[['TODAY','Today'],['CURRENT_SHIFT','Current shift'],['7D','7 days'],['MTD','MTD'],['CUSTOM','Custom']].map(([id,label])=>`<button class="period ${id==='TODAY'?'on':''}" onclick="dashMode(this,'${id}')">${label}</button>`).join('')}</div>
+    <div class="panel dashboard-toolbar sticky-dashboard"><div class="range-switch" role="group" aria-label="Reporting period">${[['CURRENT_SHIFT','Current shift'],['TODAY','Today'],['YESTERDAY','Yesterday'],['7D','7 days'],['MTD','MTD'],['CUSTOM','Custom']].map(([id,label])=>`<button class="period ${id==='TODAY'?'on':''}" onclick="dashMode(this,'${id}')">${label}</button>`).join('')}</div>
     <div id="custom_dates" hidden><label>From<input id="dash_from" type="date" value="${esc(S.boot.today)}"></label><label>To<input id="dash_to" type="date" value="${esc(S.boot.today)}"></label></div>
     <label>Shift<select id="dash_shift" onchange="loadDashboard()"><option value="ALL">All shifts</option>${opt(S.boot.masters.shifts,x=>x,x=>x)}</select></label><label>Source<select id="dash_source" onchange="loadDashboard()"><option value="">All sources</option></select></label><label>Destination<select id="dash_destination" onchange="loadDashboard()"><option value="">All destinations</option></select></label><label>Vehicle<select id="dash_vehicle" onchange="loadDashboard()"><option value="">All vehicles</option></select></label><button id="dash_apply" class="btn primary small" hidden onclick="loadDashboard()">Apply</button></div>
     <div id="dashboard_body" aria-live="polite"><div class="loading">Loading control room…</div></div>`);loadDashboard();
@@ -203,7 +203,7 @@ dashMode=function(btn,mode){S.dashMode=mode;document.querySelectorAll('.period')
 loadDashboard=function(){
   appRun(d=>{
     S.dashboard=d;dashRefreshFilterOptions(d);const k=d.kpis||{},p=d.production||{},targets=dashTargets(),days=Math.max(1,Math.round((new Date(d.toDate)-new Date(d.fromDate))/86400000)+1),periodTarget=targets.day?targets.day*days:0;
-    const productionActual=Number(p.finalProductionMt||0),achievement=periodTarget?productionActual/periodTarget*100:null,remaining=periodTarget?Math.max(0,periodTarget-productionActual):null;
+    const productionActual=p.finalProductionMt==null?null:Number(p.finalProductionMt),achievement=periodTarget&&productionActual!=null?productionActual/periodTarget*100:null,remaining=periodTarget&&productionActual!=null?Math.max(0,periodTarget-productionActual):null;
     const finalFuelIntensity=productionActual>0?Number(k.hsdLitres||0)/productionActual:null;
     const topCards=[
       ['Fresh ROM',dashFmt(p.romInputMt,1,' t'),p.romPct==null?'No fresh ROM':'100% production base','good'],
@@ -211,9 +211,9 @@ loadDashboard=function(){
       ['Screen 5-18',dashFmt(p.screen518Mt,1,' t'),p.screen518Pct==null?'—':num(p.screen518Pct,1)+'% of ROM','neutral'],
       ['Crusher Gross Output',dashFmt(p.crusherGrossOutputMt,1,' t'),'Physical output before blend allocation','neutral'],
       ['Old Stock Blend Feed',dashFmt(p.crusherBlendFeedMt,1,' t'),'CLO 10-40 · excluded','warning'],
-      ['Fresh Crusher Output',dashFmt(p.crusherFreshOutputMt,1,' t'),'Gross output less allocated blend share','neutral'],
+      ['Fresh Crusher Output',p.allocationPending?'Allocation pending':dashFmt(p.crusherFreshOutputMt,1,' t'),p.allocationPending?'Crusher feed quantity not verified':'Gross output less allocated blend share',p.allocationPending?'warning':'neutral'],
       ['Screen Direct Output',dashFmt(p.screenDirectMt,1,' t'),p.screenDirectPct==null?'—':num(p.screenDirectPct,1)+'% of ROM','neutral'],
-      ['Final Fresh Production',dashFmt(p.finalProductionMt,1,' t'),p.finalRecoveryPct==null?'Recovery —':'Recovery '+num(p.finalRecoveryPct,1)+'%','good'],
+      ['Final Fresh Production',p.allocationPending?'Pending allocation':dashFmt(p.finalProductionMt,1,' t'),p.allocationPending?'Gross output recorded; fresh share unverified':p.finalRecoveryPct==null?'Recovery —':'Recovery '+num(p.finalRecoveryPct,1)+'%',p.allocationPending?'warning':'good'],
       ['Total Crusher Feed',dashFmt(p.crusherFeedMt,1,' t'),'Fresh + old-stock blend','neutral'],
       ['Crusher Recovery',p.crusherRecoveryPct==null?'—':num(p.crusherRecoveryPct,1)+'%','Crusher output / feed','neutral'],
       ['Process / Timing Balance',dashFmt(p.balanceMt,1,' t'),p.balancePct==null?'—':num(p.balancePct,1)+'% of ROM','neutral'],
@@ -231,7 +231,8 @@ loadDashboard=function(){
       ['WB Rows',dashFmt(k.wbTrips,0),'Confirmed valid movements'],
       ['Avg Payload',dashFmt(k.avgPayload,2,' t'),'WB movement payload'],
       ['Match Rate',dashFmt(k.matchRate,1,'%'),'WB reconciliation'],
-      ['Lead Missing',dashFmt(k.haulLeadMissingTrips,0),'Route/lead setup required'],
+      ['Lead Missing',dashFmt(k.haulLeadMissingTrips,0),'Master/bench review required'],
+      ['Tonnage Pending',dashFmt((d.exceptionDetails?.tonnage||[]).length,0),'No approved weight/factor'],
       ['HSD Issued',dashFmt(k.hsdLitres,1,' L'),'Selected period'],
       ['HSD / Final T',finalFuelIntensity==null?'—':num(finalFuelIntensity,2)+' L/t','Issued / final fresh production'],
       ['Avg Cycle',dashFmt(k.avgCycleTime,1,' min'),'Start → unload'],
@@ -265,7 +266,7 @@ loadDashboard=function(){
     const monthlyCards=[['Month Final Prod. Target',monthTarget?num(monthTarget,0)+' t':'Not set'],['Month Final Fresh Production',num(d.monthly.actual,1)+' t'],['Achievement',monthAchievement==null?'—':num(monthAchievement,1)+'%'],['Best Day',d.monthly.bestDay?d.monthly.bestDay+' · '+num(d.monthly.bestTonnes,0)+' t':'—'],['Worst Day',d.monthly.worstDay?d.monthly.worstDay+' · '+num(d.monthly.worstTonnes,0)+' t':'—'],['Avg Daily Final Fresh Production',num(d.monthly.avgDaily,1)+' t']];
     html('dashboard_body',`<div class="dashboard-context compact"><b>${esc(d.fromDate)}${d.fromDate!==d.toDate?' → '+esc(d.toDate):''}</b><span>${d.shift==='ALL'?'All permitted shifts':'Shift '+esc(d.shift)}</span>${materialFilter}${extraFilters}<span>Updated ${esc(new Date().toLocaleTimeString('en-IN',{hour:'2-digit',minute:'2-digit'}))}</span></div>
       <div class="v2-kpi-grid">${topCards.map(x=>dashCard(...x)).join('')}</div>
-      <div class="ops-kpi-strip">${opsCards.map(x=>dashMini(...x)).join('')}</div>
+      <div class="ops-kpi-strip">${opsCards.map(x=>dashMini(...x)).join('')}</div>${p.allocationPending?'<div class="tiom-evidence-warn">Crusher gross output is recorded, but fresh allocation requires verified crusher-feed tonnage. The fresh share is not final.</div>':''}
       <section class="panel v2-panel production-truth"><div class="v2-title"><h3>Fresh ROM → Final Fresh Production</h3><span>Fresh ROM = 100% production base · RH / old stock excluded</span></div>${dashProductionFlow(p)}</section>
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>Material Production</h3><span>Fresh ROM = 100% · old-stock blend excluded · recycle shown separately</span></div>${dashProductionMaterialTable(d.productionMaterials)}</section><section class="panel v2-panel"><div class="v2-title"><h3>Plant Feed vs Plant Output</h3><span>Feed/output from confirmed WB · TPH uses actual HMR running hours</span></div>${dashPlantPerformanceTable(d.plantPerformance)}</section></div>
       <details class="panel v2-panel"><summary><b>WB Material Movement — Audit</b> · raw WB mix, not production KPI</summary><div class="dashboard-grid two"><div>${dashMaterialTable(d.materials)}</div><div>${dashDonut(d.materials,'label','tonnes',true)}</div></div></details>
@@ -281,6 +282,7 @@ loadDashboard=function(){
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>7-Day Production Trend</h3><span>Fresh ROM vs final fresh production</span></div>${dashLine((d.sevenDay||[]).map(x=>({label:String(x.date).slice(5),rom:x.romInput,final:x.finalProduction})),[{key:'rom',label:'Fresh ROM',unit:' t',d:0},{key:'final',label:'Final Fresh Production',unit:' t',d:0}])}<div class="fuel-trend">Fuel: ${(d.sevenDay||[]).map(x=>`${esc(String(x.date).slice(5))} ${num(x.fuel,0)}L`).join(' · ')}</div></section><section class="panel v2-panel"><div class="v2-title"><h3>Monthly Summary</h3><span>MTD through ${esc(d.toDate)}</span></div><div class="monthly-grid">${monthlyCards.map(x=>dashMini(x[0],x[1])).join('')}</div></section></div>
       <div class="dashboard-grid two"><section class="panel v2-panel"><div class="v2-title"><h3>Equipment Status</h3><span>Latest recorded condition</span></div>${dashDonut((d.equipmentStatus||[]).map(x=>({label:x.label,tonnes:x.value})),'label','tonnes',false)}</section><section class="panel v2-panel"><div class="v2-title"><h3>Alerts</h3><span>Green · warning · critical</span></div>${dashAlerts(d.exceptions)}</section></div>
       <div class="dashboard-grid three"><section class="panel v2-panel"><div class="v2-title"><h3>Top Performers</h3><span>Trips + tonnes</span></div>${dashPerformer(d.topPerformers)}</section><section class="panel v2-panel"><div class="v2-title"><h3>Bottom Performers</h3><span>Lowest recorded trip output</span></div>${dashPerformer(d.bottomPerformers)}</section><section class="panel v2-panel management"><div class="v2-title"><h3>Management Summary</h3><span>At a glance</span></div>${mgmt.map(x=>dashMini(x[0],x[1],x[2])).join('')}<div class="weather-placeholder"><b>Weather</b><span>Not configured — site weather source/coordinates required.</span></div></section></div>
+      ${dashExceptionDetail(d)}
       <details class="panel data-notes"><summary>Data coverage / calculation notes</summary><p>${(d.notes||[]).map(esc).join(' ')}</p><p><b>Not captured:</b> true unloading duration, queue time, bucket count, dedicated plant telemetry where HMR is unavailable, and weather.</p></details>`);
   },e=>html('dashboard_body','<div class="panel bad" role="alert">'+esc(e.message)+' <button class="btn secondary" onclick="loadDashboard()">Retry</button></div>')).getDashboard({mode:S.dashMode,fromDate:val('dash_from'),toDate:val('dash_to'),shift:val('dash_shift')||'ALL',materialFilter:S.dashMaterialFilter||'',sourceFilter:val('dash_source')||'',destinationFilter:val('dash_destination')||'',vehicleFilter:val('dash_vehicle')||''});
 };
@@ -462,3 +464,94 @@ function openOption(field){
   };
   dlg.showModal();document.getElementById(team?'option_id':'option_value').focus();
 }
+
+/* Owner overview and operational exceptions: read existing dashboard data only. */
+function dashExceptionDetail(d) {
+  const q=(d.exceptionDetails&&d.exceptionDetails.tonnage)||[];
+  const l=(d.exceptionDetails&&d.exceptionDetails.lead)||[];
+  const qty=table(['Date','Shift','Vehicle','Material','Source','Destination'],q.map(x=>[
+    esc(x.date),esc(x.shift),esc(x.vehicle),esc(x.material),esc(x.source),esc(x.destination)]));
+  const lead=table(['Date','Shift','Vehicle','Source','Destination','Bench RL','Route mode','Issue'],l.map(x=>[
+    esc(x.date),esc(x.shift),esc(x.vehicle),esc(x.source),esc(x.destination),
+    x.benchRl==null?'—':esc(x.benchRl),esc(x.routeMode),esc(x.reason)]));
+  return '<section class="panel v2-panel tiom-evidence-panel"><div class="v2-title"><h3>Entry exceptions — supporting records</h3><span>Missing quantities are not zero</span></div>'+
+    '<div class="mini-summary">'+dashMini('Tonnage pending',num(q.length),'No WB weight or approved factor',q.length?'warning':'good')+
+    dashMini('Lead unresolved',num(l.length),'Review exact route/bench',l.length?'warning':'good')+
+    dashMini('Unlinked WB',dashFmt(d.kpis?.wbUnmatched,0),'Weighed totals retained')+
+    dashMini('MIS drafts',dashFmt(d.kpis?.misDrafts,0),'Excluded until submitted')+'</div>'+
+    '<details open><summary><b>Trips awaiting tonnage ('+q.length+')</b></summary><p class="note">Correct the existing source report or approved factor. <button class="btn secondary small" onclick="render('+"'PRODUCTION'"+')">Open Production</button></p><div class="tiom-exc-scroll">'+qty+'</div></details>'+
+    '<details><summary><b>Lead reconciliation ('+l.length+')</b></summary><p class="note">Select one approved area/bench, destination and WB path. <button class="btn secondary small" onclick="render('+"'MASTERS'"+')">Open Masters</button></p><div class="tiom-exc-scroll">'+lead+'</div></details></section>';
+}
+const tiomPreviousHome=renderHome;
+renderHome=function(){
+  if(!S.boot?.user?.modules?.includes('DASHBOARD'))return tiomPreviousHome();
+  const day=esc(S.boot.today);
+  html('app','<div class="tiom-owner"><div class="page-heading"><div><div class="eyebrow">THAKURANI IRON ORE MINE · MANAGEMENT</div><h1>Owner Overview</h1><p class="note">Work achieved · Resources used · Decisions needed</p></div><button class="btn secondary small" onclick="ownerLoad()">Refresh</button></div>'+
+    '<div class="panel dashboard-toolbar owner-toolbar"><label>Period<select id="owner_period" onchange="ownerPeriodChanged()"><option value="TODAY">Today</option><option value="YESTERDAY">Yesterday</option><option value="7D">7 days</option><option value="MTD">MTD</option><option value="CUSTOM">Custom</option></select></label>'+
+    '<label>From<input id="owner_from" type="date" value="'+day+'"></label><label>To<input id="owner_to" type="date" value="'+day+'"></label>'+
+    '<label>Shift<select id="owner_shift" onchange="ownerLoad()"><option value="ALL">All shifts</option>'+opt(S.boot.masters.shifts,x=>x,x=>x)+'</select></label>'+
+    '<button class="btn primary small" onclick="ownerLoad()">Apply</button><button class="btn secondary small" onclick="render('+"'DASHBOARD'"+')">Detailed Dashboard →</button></div>'+
+    '<div id="owner_body" aria-live="polite" class="loading">Loading owner overview…</div></div>');
+  ownerPeriodChanged();
+};
+function ownerPeriodChanged(){
+  const custom=val('owner_period')==='CUSTOM';
+  ['owner_from','owner_to'].forEach(id=>{const el=document.getElementById(id);if(el){el.disabled=!custom;el.closest('label').hidden=!custom;}});
+  ownerLoad();
+}
+function ownerLoad(){
+  const mode=val('owner_period')||'TODAY';
+  appRun(d=>{
+    const p=d.production||{},k=d.kpis||{},ed=d.exceptionDetails||{},pending=!!p.allocationPending;
+    const metrics=[
+      ['Fresh ROM',dashFmt(p.romInputMt,1,' t'),'Recorded fresh mine movement'],
+      ['OB Removed',dashFmt(k.misObQty,1,' t'),'Estimated where trip factor used'],
+      ['Fresh Output',pending?'Pending allocation':dashFmt(p.finalProductionMt,1,' t'),'Screen + allocated crusher output'],
+      ['Rehandling',dashFmt(p.oldStockExcludedMt,1,' t'),'Not counted as fresh production'],
+      ['HSD Issued',dashFmt(k.hsdLitres,1,' L'),'Issues, not measured consumption'],
+      ['WB-MIS Linked',dashFmt(k.misWbLinkedTrips,0),'No duplicate tonnes counted']
+    ];
+    const alerts=[
+      ['Tonnage pending',(ed.tonnage||[]).length,'Trips without recorded weight/factor'],
+      ['Lead unresolved',(ed.lead||[]).length,'Route and bench review'],
+      ['MIS draft reports',Number(k.misDrafts||0),'Awaiting report submission'],
+      ['WB not linked',Number(k.wbUnmatched||0),'WB weight remains counted']
+    ].filter(x=>x[1]>0);
+    const trend=(d.sevenDay||[]).map(x=>({label:String(x.date||'').slice(5),rom:x.romInput,final:x.finalProduction}));
+    const line=dashLine(trend,[{key:'rom',label:'Fresh ROM',unit:' t',d:0},{key:'final',label:'Calculated fresh output',unit:' t',d:0}]);
+    const plants=table(['Plant','Feed t','Output t','Run h','Feed t/h'],(d.plantPerformance||[]).map(x=>[
+      esc(x.plant),dashFmt(x.freshFeedMt,1),x.plantType==='CRUSHER'&&pending?'Pending':dashFmt(x.outputMt,1),
+      dashFmt(x.runningHours,2),dashFmt(x.tph,2)]));
+    const fuels=table(['Equipment','Category','Issued L'],(d.fuelByEquipment||[]).slice(0,12).map(x=>[
+      esc(x.machine),esc(x.type),dashFmt(x.litres,1)]));
+    html('owner_body','<div class="owner-kpis">'+metrics.map(x=>dashCard(x[0],x[1],x[2],x[1]==='Pending allocation'?'warning':'neutral')).join('')+'</div>'+
+      (pending?'<div class="tiom-evidence-warn">Crusher gross output is recorded; final fresh allocation is pending crusher-feed evidence. Historical calculated trends can be provisional.</div>':'')+
+      '<div class="owner-grid"><section class="panel v2-panel"><div class="v2-title"><h3>Work achieved — 7-day trend</h3><span>Movement categories separate</span></div>'+line+'</section>'+
+      '<section class="panel v2-panel"><div class="v2-title"><h3>Owner attention</h3><span>'+alerts.length+' exception types</span></div>'+
+      (alerts.length?alerts.map(x=>'<button class="owner-issue" onclick="render('+"'DASHBOARD'"+')"><b>'+esc(x[0])+'</b><span>'+num(x[1])+' · '+esc(x[2])+'</span><strong>View →</strong></button>').join(''):'<div class="emptyviz">No flagged exceptions for the period.</div>')+
+      '</section><section class="panel v2-panel"><div class="v2-title"><h3>Plant performance</h3><span>WB and equipment HMR</span></div>'+plants+'</section>'+
+      '<section class="panel v2-panel"><div class="v2-title"><h3>Fuel issued by equipment</h3><span>HSD ledger; not consumption</span></div>'+fuels+'</section></div>'+
+      '<p class="note">Overview and Dashboard use the same calculations. WB, MIS estimates and old-stock handling are not summed as independent fresh production.</p>');
+  },e=>html('owner_body','<div class="panel bad">'+esc(e.message)+' <button class="btn secondary" onclick="ownerLoad()">Retry</button></div>')).getDashboard({
+    mode,fromDate:val('owner_from'),toDate:val('owner_to'),shift:val('owner_shift')||'ALL'
+  });
+}
+(function(){
+  if(document.getElementById('tiom-owner-style'))return;
+  const el=document.createElement('style');el.id='tiom-owner-style';
+  el.textContent=[
+    '.tiom-owner{max-width:1600px;margin:auto}.tiom-owner .page-heading h1{font-size:22px;margin:2px 0}',
+    '.owner-toolbar{display:flex;gap:8px;flex-wrap:wrap;align-items:end}.owner-toolbar label{font-size:10px}',
+    '.owner-kpis{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;margin:9px 0}',
+    '.owner-kpis .v2-kpi{min-width:0}.owner-kpis .v2-kpi b{font-size:21px}',
+    '.owner-grid{display:grid;grid-template-columns:1.4fr 1fr;gap:10px}.owner-grid .panel{min-width:0}',
+    '.owner-issue{width:100%;border:1px solid #dce5eb;background:#fff;border-radius:6px;padding:10px 12px;display:grid;grid-template-columns:1fr auto;gap:4px;text-align:left;cursor:pointer;margin:4px 0}',
+    '.owner-issue:hover{background:#f0fafa;border-color:#008b92}.owner-issue span{font-size:10px;color:#64778b}.owner-issue strong{grid-column:2;grid-row:1/3;align-self:center;color:#007e9b}',
+    '.tiom-evidence-warn{padding:9px 12px;margin:8px 0;background:#fff4dc;border:1px solid #e9c878;border-radius:6px;color:#754d05;font-size:11px}',
+    '.tiom-evidence-panel details{margin-top:8px;padding:7px;border:1px solid #d9e3e8;border-radius:5px}.tiom-evidence-panel summary{cursor:pointer}',
+    '.tiom-exc-scroll{max-height:300px;overflow:auto}.tiom-exc-scroll table{font-size:10px}',
+    '@media(max-width:1250px){.owner-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}',
+    '@media(max-width:850px){.owner-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.owner-grid{grid-template-columns:1fr}}'
+  ].join('\n');
+  document.head.appendChild(el);
+})();
