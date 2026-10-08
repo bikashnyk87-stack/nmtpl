@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, time as dtime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
+from openpyxl import Workbook
 from pathlib import Path
 from uuid import uuid4
 import hashlib
@@ -12,6 +13,7 @@ from time import perf_counter
 from email.message import EmailMessage
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from openpyxl import load_workbook
 from pydantic import BaseModel, Field
 from sqlalchemy import select, delete, text, func
@@ -4805,11 +4807,117 @@ def tiom_hsd_desk(db,user,p):
             'report':_tiom_hsd_report(db,day,report_from,report_to)}
 
 
+
+
+# WB reporting is read-only and uses the latest confirmed batch per date/shift.
+# Previous uploaded versions remain in history but must not double-count movement.
+def _tiom_wb_history_rows(db,user,p):
+    require(user,'WB')
+    p=p or {}
+    today=operating_context()[0]
+    from_day=_parse_ui_date_v2(p.get('fromDate'),'WB report From') if p.get('fromDate') else today-timedelta(days=6)
+    to_day=_parse_ui_date_v2(p.get('toDate'),'WB report To') if p.get('toDate') else today
+    if to_day<from_day or (to_day-from_day).days>366:
+        raise HTTPException(422,'WB report range must be chronological and at most 367 days.')
+    sh=str(p.get('shift') or 'ALL').upper()
+    all_shifts={x.shift for x in db.scalars(select(ShiftMaster).where(ShiftMaster.active.is_(True)))}
+    if sh!='ALL' and sh not in all_shifts:raise HTTPException(422,'Invalid shift filter.')
+    allowed=all_shifts if user.admin or 'ALL' in user.shifts.split(',') else all_shifts.intersection(user.shifts.split(','))
+    if sh!='ALL':
+        require(user,shift=sh)
+        allowed={sh}
+    if not allowed: return [],{'fromDate':str(from_day),'toDate':str(to_day),'shift':sh}
+    batches=list(db.scalars(select(WbImportBatch).where(
+        WbImportBatch.operating_date>=from_day,WbImportBatch.operating_date<=to_day,
+        WbImportBatch.status=='CONFIRMED',WbImportBatch.confirmed_at.is_not(None),
+        WbImportBatch.shift.in_(allowed)).order_by(
+        WbImportBatch.operating_date,WbImportBatch.shift,WbImportBatch.confirmed_at.desc()
+    )))
+    latest={}
+    for b in batches:latest.setdefault((b.operating_date,b.shift),b)
+    ids=[x.batch_id for x in latest.values()]
+    raw=list(db.scalars(select(WbMovement).where(WbMovement.batch_id.in_(ids)).order_by(
+        WbMovement.operating_date,WbMovement.shift,WbMovement.weigh_at,WbMovement.movement_no
+    ))) if ids else []
+    filters={key:str(p.get(key) or '').strip().upper() for key in
+             ('vehicleFilter','materialFilter','sourceFilter','destinationFilter','status')}
+    def eligible(row):
+        return (filters['status'] in ('','ALL') or str(row.row_status or '').upper()==filters['status']) and (
+            not filters['vehicleFilter'] or filters['vehicleFilter'] in (str(row.vehicle_raw or '')+' '+str(row.vehicle_id or '')).upper()) and (
+            not filters['materialFilter'] or filters['materialFilter'] in (str(row.material_code or '')+' '+str(row.material_name or '')).upper()) and (
+            not filters['sourceFilter'] or filters['sourceFilter'] in str(row.source_raw or '').upper()) and (
+            not filters['destinationFilter'] or filters['destinationFilter'] in str(row.destination_raw or '').upper())
+    rows=[r for r in raw if eligible(r)]
+    meta={'fromDate':str(from_day),'toDate':str(to_day),'shift':sh,
+          'batchCount':len(latest),'filteredRecords':len(rows),'latestConfirmedOnly':True}
+    return rows,meta
+
+
+def get_tiom_wb_history(db,user,p):
+    rows,meta=_tiom_wb_history_rows(db,user,p)
+    valid=[r for r in rows if r.row_status=='VALID']
+    mt=sum((Decimal(r.net_kg or 0) for r in valid),Decimal('0'))/Decimal('1000')
+    distinct={str(r.vehicle_id or r.vehicle_raw or '') for r in valid if r.vehicle_id or r.vehicle_raw}
+    groups={}
+    for r in valid:
+        m=str(r.material_name or r.material_code or 'Unclassified')
+        group=groups.setdefault(m,{'material':m,'trips':0,'tonnes':Decimal('0')})
+        group['trips']+=1;group['tonnes']+=Decimal(r.net_kg or 0)/Decimal('1000')
+    return {**meta,'kpis':{
+        'validMovements':len(valid),'reviewMovements':sum(r.row_status=='REVIEW' for r in rows),
+        'validTonnes':round(float(mt),2),'uniqueVehicles':len(distinct),
+        'avgPayloadMt':round(float(mt/len(valid)),2) if valid else None,
+        'batches':meta['batchCount']},
+        'materials':[{**g,'tonnes':round(float(g['tonnes']),2)} for g in sorted(groups.values(),key=lambda g:g['tonnes'],reverse=True)[:12]],
+        'rows':[{'date':str(x.operating_date),'shift':x.shift,'movementNo':x.movement_no,
+                 'vehicle':x.vehicle_raw,'material':x.material_name or x.material_code,
+                 'source':x.source_raw,'destination':x.destination_raw,
+                 'netMt':round(float(Decimal(x.net_kg or 0)/Decimal('1000')),3),
+                 'status':x.row_status,'issue':x.issue or ''}
+                for x in rows[:120]],
+        'previewCount':min(120,len(rows))}
+
+
+@router.get('/wb/full-export')
+def tiom_full_wb_export(request:Request,fromDate:str='',toDate:str='',shift:str='ALL',
+                       vehicleFilter:str='',materialFilter:str='',sourceFilter:str='',
+                       destinationFilter:str='',status:str='ALL',db:Session=Depends(get_db)):
+    user=get_user(db,request)
+    rows,meta=_tiom_wb_history_rows(db,user,{
+        'fromDate':fromDate,'toDate':toDate,'shift':shift,'vehicleFilter':vehicleFilter,
+        'materialFilter':materialFilter,'sourceFilter':sourceFilter,
+        'destinationFilter':destinationFilter,'status':status})
+    if len(rows)>50000:
+        raise HTTPException(422,'More than 50,000 WB rows matched. Narrow the date range before exporting.')
+    book=Workbook();sheet=book.active;sheet.title='WB Full Data'
+    sheet.append(['Operating Date','Shift','WB Movement No','Vehicle','Vehicle Master ID',
+                  'Material Code','Material Name','Source','Destination','Tare KG','Gross KG',
+                  'Net KG','Net MT','Weigh Time','Status','Exception','WB Batch'])
+    def safe_cell(value):
+        v=str(value or '')
+        return "'"+v if v.lstrip().startswith(('=','+','-','@')) else v
+    for x in rows:
+        sheet.append([str(x.operating_date),safe_cell(x.shift),safe_cell(x.movement_no),
+            safe_cell(x.vehicle_raw),safe_cell(x.vehicle_id),safe_cell(x.material_code),
+            safe_cell(x.material_name),safe_cell(x.source_raw),safe_cell(x.destination_raw),
+            float(x.tare_kg or 0),float(x.gross_kg or 0),float(x.net_kg or 0),
+            round(float(Decimal(x.net_kg or 0)/Decimal('1000')),3),
+            x.weigh_at.astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if x.weigh_at else '',
+            safe_cell(x.row_status),safe_cell(x.issue),safe_cell(x.batch_id)])
+    sheet.freeze_panes='A2';sheet.auto_filter.ref=sheet.dimensions
+    for col in 'ABCDEFGHIJKLMNOPQ':sheet.column_dimensions[col].width=17
+    for col in ['G','H','I','P']:sheet.column_dimensions[col].width=25
+    buf=BytesIO();book.save(buf);buf.seek(0)
+    name=f"TIOM_WB_Full_{meta['fromDate']}_to_{meta['toDate']}.xlsx"
+    return StreamingResponse(buf,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      headers={'Content-Disposition':f'attachment; filename="{name}"',
+               'Cache-Control':'no-store'})
+
 @router.post('/rpc')
 def rpc(p: RPC, request: Request, db: Session = Depends(get_db)):
     csrf(request)
     user = get_user(db, request)
-    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'getTiomWbSuggestions', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
+    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
     if p.method not in read_methods:
         lock(db)
     try:
@@ -4863,6 +4971,7 @@ def dispatch(db, user, method, args):
     if method == 'getTiomMisDesk': return tiom_mis_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomMisReport': return get_tiom_mis_report(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomWbSuggestions': return get_tiom_wb_suggestions(db,user,args[0] if args and isinstance(args[0],dict) else {})
+    if method == 'getTiomWbHistory': return get_tiom_wb_history(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomShiftProductionDesk': return get_tiom_shift_production_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomDrillingDesk': return tiom_drilling_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomHsdDesk': return tiom_hsd_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
