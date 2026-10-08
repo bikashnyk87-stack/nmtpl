@@ -3541,6 +3541,7 @@ def _tiom_mis_shift_summary(db,day,sh):
 def _tiom_source_deployments(db, day, sh):
     locations={x.location_id:x for x in db.scalars(select(Location))}
     equipment={x.machine_id:x for x in db.scalars(select(Equipment))}
+    people={x.employee_id:x for x in db.scalars(select(Person))}
     source_contexts=_tiom_source_context_map(db,day,sh)
     meters={x.asset_id:x for x in db.scalars(select(SiteAssetMeter).where(
         SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,
@@ -3562,6 +3563,8 @@ def _tiom_source_deployments(db, day, sh):
             'sourceLabel':(f'{loc.location_name} · {loc.location_id}' if loc else r.source_location_id),
             'benchRl':_tiom_bench_rl_from_location(db,r.source_location_id) or (source_contexts.get(r.source_location_id).bench_rl_m if source_contexts.get(r.source_location_id) else None),
             'machineId':r.machine_id,
+            'operatorId':r.operator_id or '',
+            'operatorName':people[r.operator_id].name if r.operator_id in people else '',
             'machineLabel':(_tiom_asset_label(eq) if eq else r.machine_id),
             'activity':r.activity or 'EXCAVATION',
             'fromTime':r.from_at.astimezone(TZ).strftime('%H:%M') if r.from_at else '',
@@ -3605,11 +3608,13 @@ def save_tiom_source_deployments(db,user,p):
         if not isinstance(item,dict): continue
         source_id=str(item.get('sourceLocationId') or '').strip()
         machine_id=str(item.get('machineId') or '').strip()
+        operator_id=str(item.get('operatorId') or '').strip() or None
         if not source_id and not machine_id: continue
         if not source_id: raise HTTPException(422,f'Deployment row {idx}: select source.')
         if not machine_id: raise HTTPException(422,f'Deployment row {idx}: select equipment / machine.')
         source=active_resource(db,Location,source_id)
         machine=active_resource(db,Equipment,machine_id)
+        if operator_id: active_resource(db,Person,operator_id)
         if machine.group in {'TRANSPORT','HSD_TANKER'}: raise HTTPException(422,f'Deployment row {idx}: choose working HMR equipment; transport/tanker equipment belongs in its own operational entry.')
         activity=short(str(item.get('activity') or '').strip().upper())[:40]
         if not activity: raise HTTPException(422,f'Deployment row {idx}: activity is required.')
@@ -3636,7 +3641,7 @@ def save_tiom_source_deployments(db,user,p):
         key=(source.location_id,machine.machine_id,from_at.isoformat() if from_at else '',to_at.isoformat() if to_at else '')
         if key in seen: raise HTTPException(409,f'Deployment row {idx}: duplicate source/machine period.')
         seen.add(key)
-        parsed.append((source,machine,activity,from_at,to_at,short(str(item.get('notes') or ''))))
+        parsed.append((source,machine,activity,from_at,to_at,short(str(item.get('notes') or '')),operator_id))
     if not parsed: raise HTTPException(422,'Add at least one source-machine deployment.')
     if incoming_contexts is not None:
         context_ids=set(_tiom_source_context_map(db,day,sh))
@@ -3646,10 +3651,10 @@ def save_tiom_source_deployments(db,user,p):
     db.execute(delete(TiomSourceDeployment).where(
         TiomSourceDeployment.operating_date==day,TiomSourceDeployment.shift==sh
     ))
-    for source,machine,activity,from_at,to_at,notes in parsed:
+    for source,machine,activity,from_at,to_at,notes,operator_id in parsed:
         db.add(TiomSourceDeployment(
             deployment_id=str(uuid4()),operating_date=day,shift=sh,source_location_id=source.location_id,
-            machine_id=machine.machine_id,activity=activity,from_at=from_at,to_at=to_at,active=True,
+            machine_id=machine.machine_id,operator_id=operator_id,activity=activity,from_at=from_at,to_at=to_at,active=True,
             notes=notes,entered_by=user.login_id,entered_at=now_local()
         ))
     deployed_ids={x[1].machine_id for x in parsed}
