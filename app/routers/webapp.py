@@ -4833,6 +4833,8 @@ def save_tiom_drilling_shift(db,user,p):
         except Exception: raise HTTPException(422,f'Drilling row {idx}: Holes must be a whole number.')
         if holes<0: raise HTTPException(422,f'Drilling row {idx}: Holes cannot be negative.')
         rom_holes_raw=item.get('romObHoles');bhj_holes_raw=item.get('bhjBhqHoles')
+        if (rom_holes_raw in (None,'')) != (bhj_holes_raw in (None,'')):
+            raise HTTPException(422,f'Drilling row {idx}: enter both ROM/OB and BHJ/BHQ hole counts (use zero where none).')
         if rom_holes_raw not in (None,'') and bhj_holes_raw not in (None,''):
             try:rom_holes=int(rom_holes_raw);bhj_holes=int(bhj_holes_raw)
             except Exception:raise HTTPException(422,f'Drilling row {idx}: Enter integer hole counts.')
