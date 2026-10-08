@@ -613,6 +613,7 @@ class TiomSourceDeployment(Base):
     shift: Mapped[str] = mapped_column(String(20), index=True)
     source_location_id: Mapped[str] = mapped_column(ForeignKey("locations.location_id"), index=True)
     machine_id: Mapped[str] = mapped_column(ForeignKey("equipment.machine_id"), index=True)
+    operator_id: Mapped[str | None] = mapped_column(String(60))
     activity: Mapped[str] = mapped_column(String(40), default="LOADING", index=True)
     from_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
     to_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
@@ -698,6 +699,8 @@ class TiomDrillingShift(Base):
     drill_set_id: Mapped[str] = mapped_column(ForeignKey("tiom_drill_set.drill_set_id"), index=True)
     source_location_id: Mapped[str | None] = mapped_column(ForeignKey("locations.location_id"), index=True)
     holes: Mapped[int] = mapped_column(Integer, default=0)
+    rom_ob_holes: Mapped[int | None] = mapped_column(Integer)
+    bhj_bhq_holes: Mapped[int | None] = mapped_column(Integer)
     rom_ob_meterage: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("0"))
     bhj_bhq_meterage: Mapped[Decimal] = mapped_column(Numeric(14, 3), default=Decimal("0"))
     drill_open_hmr: Mapped[Decimal | None] = mapped_column(Numeric(16, 3))
@@ -1029,3 +1032,25 @@ def create_multisite_tables(engine) -> None:
     """Create additive v0.9 tables only; never mutate legacy v0.8 tables."""
     for model in MULTISITE_TABLES:
         model.__table__.create(engine, checkfirst=True)
+
+
+def ensure_tiom_entry_columns(engine) -> None:
+    """Safe additive columns for older TIOM schemas; never rewrites source rows."""
+    from sqlalchemy import inspect, text
+    targets = {
+        'tiom_source_deployment': {'operator_id': 'VARCHAR(60)'},
+        'tiom_drilling_shift': {
+            'rom_ob_holes': 'INTEGER',
+            'bhj_bhq_holes': 'INTEGER',
+        },
+    }
+    schema=inspect(engine)
+    with engine.begin() as conn:
+        for table, columns in targets.items():
+            if not schema.has_table(table):
+                continue
+            existing={r['name'] for r in schema.get_columns(table)}
+            for column, kind in columns.items():
+                if column not in existing:
+                    conn.execute(text(f'ALTER TABLE {table} ADD COLUMN {column} {kind}'))
+                    existing.add(column)

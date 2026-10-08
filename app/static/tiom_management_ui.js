@@ -81,9 +81,12 @@
       Number(k.wbUnmatched||0)?attention('WB movements not linked to MIS','WB tonnes remain included; attribution needs review',k.wbUnmatched,'warn'):''
     ].filter(Boolean);
     const period=E(d.fromDate)+(d.toDate!==d.fromDate?' – '+E(d.toDate):'');
-    const drill=metric('DRILLED HOLES',fmt(k.drillHoles,0),'Recorded shifts')+
-      metric('DRILL METERAGE',fmt(k.drillMeterage,1,' m'),'Recorded total')+
-      metric('DRILL RATE',fmt(k.drillMeterPerHour,1,' m/h'),'Requires valid running HMR');
+    const drill=metric('ROM/OB HOLES',fmt(dr.romObHoles,0),'Separated hole entry')+
+      metric('BHJ/BHQ HOLES',fmt(dr.bhjBhqHoles,0),'Separated hole entry')+
+      metric('ROM/OB METERS',fmt(dr.romObMeterage,1,' m'),'Drill meterage')+
+      metric('BHJ/BHQ METERS',fmt(dr.bhjBhqMeterage,1,' m'),'Drill meterage')+
+      metric('UNCLASSIFIED HOLES',fmt(dr.unclassifiedHoles,0),'Historical combined counts')+
+      metric('DRILL RATE',fmt(k.drillMeterPerHour,1,' m/h'),'Valid HMR only');
     const footer='<div class="mc-checks">'+status(Number(k.wbTrips)>0,'Confirmed WB: '+fmt(k.wbTrips,0)+' movements')+
       status(Number(k.misDrafts||0)===0,'MIS drafts: '+fmt(k.misDrafts,0))+
       status(Number(k.haulLeadMissingTrips||0)===0,'Lead unresolved: '+fmt(k.haulLeadMissingTrips,0))+'</div>';
@@ -111,6 +114,7 @@
       '<label id="mc_to_label" hidden>To<input id="mc_to" type="date" value="'+today+'"></label>'+
       '<select id="mc_shift" aria-label="Shift" onchange="tiomOwnerLoad()"><option value="ALL">All shifts</option>'+
       opt(S.boot.masters.shifts,x=>x,x=>x)+'</select>'+
+      '<label>Material<input id="mc_material" placeholder="All materials" size="12"></label><label>Source<input id="mc_source" placeholder="All sources" size="12"></label><label>Destination<input id="mc_destination" placeholder="All destinations" size="12"></label><label>Vehicle<input id="mc_vehicle" placeholder="All vehicles" size="12"></label>'+ 
       '<button class="btn secondary small" onclick="tiomOwnerLoad()">Refresh</button>'+
       '<button class="btn primary small" onclick="render('+"'DASHBOARD'"+')">Detailed Dashboard →</button></div></div>'+
       '<div id="owner_body" class="mc-loading">Loading management figures…</div></div>');
@@ -131,7 +135,7 @@
           ()=>{}).getTiomHsdDesk({date:String(d.toDate),shift:S.boot.shift,reportFrom:String(d.fromDate),reportTo:String(d.toDate)});
       }
     },e=>html('owner_body','<div class="panel bad">'+E(e.message)+' <button class="btn secondary" onclick="tiomOwnerLoad()">Retry</button></div>')).getDashboard({
-      mode,fromDate:v('mc_from'),toDate:v('mc_to'),shift:v('mc_shift')||'ALL'
+      mode,fromDate:v('mc_from'),toDate:v('mc_to'),shift:v('mc_shift')||'ALL',materialFilter:v('mc_material'),sourceFilter:v('mc_source'),destinationFilter:v('mc_destination'),vehicleFilter:v('mc_vehicle')
     });
   };
   window.renderHome=setupOwner;

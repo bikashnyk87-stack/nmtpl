@@ -1,6 +1,7 @@
 from datetime import date, datetime, timedelta, time as dtime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
+from openpyxl import Workbook
 from pathlib import Path
 from uuid import uuid4
 import hashlib
@@ -12,6 +13,7 @@ from time import perf_counter
 from email.message import EmailMessage
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, UploadFile, File, Form
+from fastapi.responses import StreamingResponse
 from openpyxl import load_workbook
 from pydantic import BaseModel, Field
 from sqlalchemy import select, delete, text, func
@@ -880,33 +882,58 @@ def dashboard_desk(db, user, p):
         match=re.search(r'\bMSP\s*(?:PLANT\s*)?-?\s*(\d+)\b',txt)
         return f'MSP-{match.group(1)}' if match else None
 
+    # Process-plant hours come from the central SiteAssetMeter, not the
+    # paused attendance workflow. Link plant/Crusher equipment by an explicit
+    # shift deployment location, falling back to an unambiguous equipment label.
+    plant_meter_query=select(SiteAssetMeter).where(
+        SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.meter_type=='HMR',
+        SiteAssetMeter.operating_date>=start_day,SiteAssetMeter.operating_date<=end_day)
+    plant_deploy_query=select(TiomSourceDeployment).where(
+        TiomSourceDeployment.operating_date>=start_day,
+        TiomSourceDeployment.operating_date<=end_day,TiomSourceDeployment.active.is_(True))
+    if selected_shift!='ALL':
+        plant_meter_query=plant_meter_query.where(SiteAssetMeter.shift==selected_shift)
+        plant_deploy_query=plant_deploy_query.where(TiomSourceDeployment.shift==selected_shift)
+    elif allowed_shifts:
+        plant_meter_query=plant_meter_query.where(SiteAssetMeter.shift.in_(allowed_shifts))
+        plant_deploy_query=plant_deploy_query.where(TiomSourceDeployment.shift.in_(allowed_shifts))
+    plant_meters=list(db.scalars(plant_meter_query))
+    plant_locations={x.location_id:x for x in db.scalars(select(Location))}
+    plant_deployments={}
+    for assigned in db.scalars(plant_deploy_query):
+        plant_deployments.setdefault((assigned.operating_date,assigned.shift,assigned.machine_id),set()).add(
+            assigned.source_location_id)
     def _plant_run_hours(label):
-        # Actual HMR/run-meter only. WB timestamps are not plant running hours.
-        totals={}
-        for att in ea:
-            if att.run_meter is None:
-                continue
-            eq=equipment_map.get(att.machine_id)
-            eq_txt=' '.join([
-                str(att.machine_id or ''),
-                str(eq.type if eq else ''),
-                str(eq.group if eq else ''),
-                str(eq.make_model if eq else '')
-            ]).upper()
+        by_shift={}
+        for meter in plant_meters:
+            equipment=equipment_map.get(meter.asset_id)
+            if not equipment:continue
+            locations=plant_deployments.get((meter.operating_date,meter.shift,meter.asset_id),set())
+            labels=[(plant_locations[src].location_name+' '+src) if src in plant_locations else src for src in locations]
+            identity=' '.join([str(equipment.machine_id),str(equipment.type or ''),str(equipment.make_model or '')]).upper()
+            joined=' '.join(labels).upper()
             matched=False
             if label.startswith('MSP-'):
-                plant_no=label.split('-',1)[1]
-                matched=bool(re.search(rf'\bMSP\s*(?:PLANT\s*)?-?\s*{re.escape(plant_no)}\b',eq_txt))
+                no=re.escape(label.split('-',1)[1])
+                expression=rf'\bMSP\s*(?:PLANT\s*)?-?\s*{no}\b'
+                matched=bool(re.search(expression,joined))
+                if not locations and equipment.group=='PROCESSING':
+                    matched=bool(re.search(expression,identity))
             elif label=='Crusher':
-                matched=('CRUSH' in eq_txt or 'OCP' in eq_txt)
-            if not matched:
-                continue
-            val=float(att.run_meter or 0)
-            if val>=0:
-                totals[att.machine_id]=totals.get(att.machine_id,0.0)+val
-        # Multiple plant components can run in parallel; summing them would
-        # overstate clock hours. Use the longest verified component runtime.
-        return max(totals.values()) if totals else None
+                matched=('CRUSH' in joined or 'OCP' in joined)
+                if not locations and equipment.group=='PROCESSING':
+                    matched=('CRUSH' in identity or 'OCP' in identity)
+            if not matched:continue
+            usage=(float(meter.usage) if meter.usage is not None else
+                   (float(meter.closing_reading-meter.opening_reading)
+                    if meter.closing_reading is not None and meter.opening_reading is not None
+                       and meter.closing_reading>=meter.opening_reading else None))
+            if usage is None or usage<0:continue
+            key=(meter.operating_date,meter.shift)
+            by_shift[key]=max(by_shift.get(key,0.0),usage)
+        # Parallel components do not double-count a shift's running hours.
+        # Across shifts/days, hours are added rather than taking one global max.
+        return sum(by_shift.values()) if by_shift else None
 
     def _group_by_msp(rows,side):
         grouped={}
@@ -3241,16 +3268,26 @@ def _tiom_drilling_summary(db,from_day,to_day,shift='ALL'):
         if shift!='ALL': hq=hq.where(HsdIssue.shift==shift)
         for x in db.scalars(hq): hsd[x.machine_id]=hsd.get(x.machine_id,Decimal('0'))+Decimal(x.litres or 0)
     agg={}
-    total={'holes':0,'romObMeterage':Decimal('0'),'bhjBhqMeterage':Decimal('0'),'totalMeterage':Decimal('0'),'drillHours':Decimal('0'),'compressorHours':Decimal('0'),'breakdownHours':Decimal('0'),'hsdLitres':Decimal('0')}
+    total={'holes':0,'romObHoles':0,'bhjBhqHoles':0,'unclassifiedHoles':0,'romObMeterage':Decimal('0'),'bhjBhqMeterage':Decimal('0'),'totalMeterage':Decimal('0'),'drillHours':Decimal('0'),'compressorHours':Decimal('0'),'breakdownHours':Decimal('0'),'hsdLitres':Decimal('0')}
     for r in rows:
         st=sets.get(r.drill_set_id)
-        a=agg.setdefault(r.drill_set_id,{'id':r.drill_set_id,'label':st.drill_set_name if st else r.drill_set_id,'holes':0,'romObMeterage':Decimal('0'),'bhjBhqMeterage':Decimal('0'),'totalMeterage':Decimal('0'),'drillHours':Decimal('0'),'compressorHours':Decimal('0'),'breakdownHours':Decimal('0')})
+        a=agg.setdefault(r.drill_set_id,{'id':r.drill_set_id,'label':st.drill_set_name if st else r.drill_set_id,'holes':0,'romObHoles':0,'bhjBhqHoles':0,'unclassifiedHoles':0,'romObMeterage':Decimal('0'),'bhjBhqMeterage':Decimal('0'),'totalMeterage':Decimal('0'),'drillHours':Decimal('0'),'compressorHours':Decimal('0'),'breakdownHours':Decimal('0')})
         rom=Decimal(r.rom_ob_meterage or 0); bhj=Decimal(r.bhj_bhq_meterage or 0); met=rom+bhj
         dh=(Decimal(r.drill_close_hmr)-Decimal(r.drill_open_hmr)) if r.drill_open_hmr is not None and r.drill_close_hmr is not None and r.drill_close_hmr>=r.drill_open_hmr else Decimal('0')
         ch=(Decimal(r.compressor_close_hmr)-Decimal(r.compressor_open_hmr)) if r.compressor_open_hmr is not None and r.compressor_close_hmr is not None and r.compressor_close_hmr>=r.compressor_open_hmr else Decimal('0')
         bd=Decimal(r.breakdown_hours or 0)
-        a['holes']+=int(r.holes or 0); a['romObMeterage']+=rom; a['bhjBhqMeterage']+=bhj; a['totalMeterage']+=met; a['drillHours']+=dh; a['compressorHours']+=ch; a['breakdownHours']+=bd
-        total['holes']+=int(r.holes or 0); total['romObMeterage']+=rom; total['bhjBhqMeterage']+=bhj; total['totalMeterage']+=met; total['drillHours']+=dh; total['compressorHours']+=ch; total['breakdownHours']+=bd
+        a['holes']+=int(r.holes or 0)
+        if r.rom_ob_holes is None or r.bhj_bhq_holes is None:
+            a['unclassifiedHoles']+=int(r.holes or 0)
+        else:
+            a['romObHoles']+=int(r.rom_ob_holes);a['bhjBhqHoles']+=int(r.bhj_bhq_holes)
+        a['romObMeterage']+=rom; a['bhjBhqMeterage']+=bhj; a['totalMeterage']+=met; a['drillHours']+=dh; a['compressorHours']+=ch; a['breakdownHours']+=bd
+        total['holes']+=int(r.holes or 0)
+        if r.rom_ob_holes is None or r.bhj_bhq_holes is None:
+            total['unclassifiedHoles']+=int(r.holes or 0)
+        else:
+            total['romObHoles']+=int(r.rom_ob_holes);total['bhjBhqHoles']+=int(r.bhj_bhq_holes)
+        total['romObMeterage']+=rom; total['bhjBhqMeterage']+=bhj; total['totalMeterage']+=met; total['drillHours']+=dh; total['compressorHours']+=ch; total['breakdownHours']+=bd
     out=[]
     for sid,a in agg.items():
         st=sets.get(sid); fuel=(hsd.get(st.drill_machine_id,Decimal('0'))+hsd.get(st.compressor_machine_id,Decimal('0'))) if st else Decimal('0')
@@ -3435,8 +3472,12 @@ def _tiom_mis_productivity_summary(db,from_day,to_day,shift='ALL'):
         else:
             a['otherTrips']+=1; a['otherQty']+=q
 
-    # HMR-only equipment must still appear, even with zero trips.
+    # HMR-only loader/excavator appears, but unrelated trucks, compressors,
+    # drilling and graders must not be displayed as zero-production loaders.
     for mid in meters_by_machine:
+        machine=eq.get(mid)
+        if not machine or not (machine.group=='LOADING' or 'LOADER' in str(machine.type or '').upper() or 'EXCAV' in str(machine.type or '').upper()):
+            continue
         agg.setdefault(mid,{
             'machineId':mid,'romTrips':0,'romQty':Decimal('0'),
             'obTrips':0,'obQty':Decimal('0'),'otherTrips':0,'otherQty':Decimal('0')
@@ -3444,6 +3485,9 @@ def _tiom_mis_productivity_summary(db,from_day,to_day,shift='ALL'):
 
     out=[]
     for mid,a in sorted(agg.items()):
+        machine=eq.get(mid)
+        if not machine or not (machine.group=='LOADING' or 'LOADER' in str(machine.type or '').upper() or 'EXCAV' in str(machine.type or '').upper()):
+            continue
         meter_list=meters_by_machine.get(mid,[])
         opening=None; closing=None; hrs=Decimal('0'); shifts_worked=set(); days_worked=set()
         for m in meter_list:
@@ -3481,6 +3525,34 @@ def _tiom_mis_productivity_summary(db,from_day,to_day,shift='ALL'):
             'productivity':float(productivity) if productivity is not None else None
         })
 
+    # Driver/tripper productivity belongs to a different equipment category.
+    # Keep vehicle trips on their parent reports and never attribute them as
+    # loading-machine trips simply because HMR was recorded for the truck.
+    vehicle_agg={}
+    for report in reports:
+        meter_hrs=None
+        if report.opening_kmr is not None and report.closing_kmr is not None and report.closing_kmr>=report.opening_kmr:
+            meter_hrs=float(report.closing_kmr-report.opening_kmr)
+        target=vehicle_agg.setdefault(report.vehicle_id,{'vehicleId':report.vehicle_id,'trips':0,'tonnes':Decimal('0'),'unweighedTrips':0,
+                                                           'operatorIds':set(),'kmRun':0.0,'kmKnown':False})
+        if report.operator_id:target['operatorIds'].add(report.operator_id)
+        if meter_hrs is not None:target['kmRun']+=meter_hrs;target['kmKnown']=True
+    report_for_id={r.report_id:r for r in reports}
+    for row in rows_:
+        parent=report_for_id.get(row.report_id)
+        if not parent:continue
+        v=vehicle_agg[parent.vehicle_id]
+        detail=details.get(row.row_id)
+        v['trips']+=1
+        if detail and detail.calculated_qty_mt is not None:
+            v['tonnes']+=Decimal(detail.calculated_qty_mt)
+        else:v['unweighedTrips']+=1
+    vehicle_rows=[{'vehicleId':x['vehicleId'],'label':_tiom_asset_label(eq[x['vehicleId']]) if x['vehicleId'] in eq else x['vehicleId'],
+                   'trips':x['trips'],'tonnes':round(float(x['tonnes']),2),'unweighedTrips':x['unweighedTrips'],
+                   'operatorIds':sorted(x['operatorIds']),'kmRun':round(x['kmRun'],2) if x['kmKnown'] else None,
+                   'averagePayloadMt':round(float(x['tonnes'])/(x['trips']-x['unweighedTrips']),2) if x['trips']>x['unweighedTrips'] else None}
+                  for x in vehicle_agg.values()]
+    vehicle_rows.sort(key=lambda x:(-x['trips'],x['vehicleId']))
     totals={
         'hrsRun':sum((Decimal(str(x['hrsRun'])) for x in out),Decimal('0')),
         'romTrips':sum(x['romTrips'] for x in out),
@@ -3493,7 +3565,7 @@ def _tiom_mis_productivity_summary(db,from_day,to_day,shift='ALL'):
     totals['productivity']=(totals['totalQty']/totals['hrsRun']) if totals['hrsRun']>0 else None
     return {
         'fromDate':str(from_day),'toDate':str(to_day),'shift':shift,
-        'rows':out,
+        'rows':out,'vehicleRows':vehicle_rows,
         'totals':{k:(float(v) if isinstance(v,Decimal) else v) for k,v in totals.items()}
     }
 
@@ -3504,6 +3576,7 @@ def _tiom_mis_shift_summary(db,day,sh):
 def _tiom_source_deployments(db, day, sh):
     locations={x.location_id:x for x in db.scalars(select(Location))}
     equipment={x.machine_id:x for x in db.scalars(select(Equipment))}
+    people={x.employee_id:x for x in db.scalars(select(Person))}
     source_contexts=_tiom_source_context_map(db,day,sh)
     meters={x.asset_id:x for x in db.scalars(select(SiteAssetMeter).where(
         SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,
@@ -3525,6 +3598,8 @@ def _tiom_source_deployments(db, day, sh):
             'sourceLabel':(f'{loc.location_name} · {loc.location_id}' if loc else r.source_location_id),
             'benchRl':_tiom_bench_rl_from_location(db,r.source_location_id) or (source_contexts.get(r.source_location_id).bench_rl_m if source_contexts.get(r.source_location_id) else None),
             'machineId':r.machine_id,
+            'operatorId':r.operator_id or '',
+            'operatorName':people[r.operator_id].name if r.operator_id in people else '',
             'machineLabel':(_tiom_asset_label(eq) if eq else r.machine_id),
             'activity':r.activity or 'EXCAVATION',
             'fromTime':r.from_at.astimezone(TZ).strftime('%H:%M') if r.from_at else '',
@@ -3568,11 +3643,13 @@ def save_tiom_source_deployments(db,user,p):
         if not isinstance(item,dict): continue
         source_id=str(item.get('sourceLocationId') or '').strip()
         machine_id=str(item.get('machineId') or '').strip()
+        operator_id=str(item.get('operatorId') or '').strip() or None
         if not source_id and not machine_id: continue
         if not source_id: raise HTTPException(422,f'Deployment row {idx}: select source.')
         if not machine_id: raise HTTPException(422,f'Deployment row {idx}: select equipment / machine.')
         source=active_resource(db,Location,source_id)
         machine=active_resource(db,Equipment,machine_id)
+        if operator_id: active_resource(db,Person,operator_id)
         if machine.group in {'TRANSPORT','HSD_TANKER'}: raise HTTPException(422,f'Deployment row {idx}: choose working HMR equipment; transport/tanker equipment belongs in its own operational entry.')
         activity=short(str(item.get('activity') or '').strip().upper())[:40]
         if not activity: raise HTTPException(422,f'Deployment row {idx}: activity is required.')
@@ -3599,29 +3676,45 @@ def save_tiom_source_deployments(db,user,p):
         key=(source.location_id,machine.machine_id,from_at.isoformat() if from_at else '',to_at.isoformat() if to_at else '')
         if key in seen: raise HTTPException(409,f'Deployment row {idx}: duplicate source/machine period.')
         seen.add(key)
-        parsed.append((source,machine,activity,from_at,to_at,short(str(item.get('notes') or ''))))
+        parsed.append((source,machine,activity,from_at,to_at,short(str(item.get('notes') or '')),operator_id))
     if not parsed: raise HTTPException(422,'Add at least one source-machine deployment.')
     if incoming_contexts is not None:
         context_ids=set(_tiom_source_context_map(db,day,sh))
         missing=sorted({x[0].location_id for x in parsed if x[0].location_id not in context_ids})
         if missing: raise HTTPException(422,'Enter Bench RL once in Face / Bench Setup for: '+', '.join(missing))
+    # Save submitted assignments individually; do not delete unrelated
+    # machine allocations or meters when a field user updates one row.
     before=_tiom_source_deployments(db,day,sh)
-    db.execute(delete(TiomSourceDeployment).where(
-        TiomSourceDeployment.operating_date==day,TiomSourceDeployment.shift==sh
-    ))
-    for source,machine,activity,from_at,to_at,notes in parsed:
-        db.add(TiomSourceDeployment(
-            deployment_id=str(uuid4()),operating_date=day,shift=sh,source_location_id=source.location_id,
-            machine_id=machine.machine_id,activity=activity,from_at=from_at,to_at=to_at,active=True,
-            notes=notes,entered_by=user.login_id,entered_at=now_local()
-        ))
-    deployed_ids={x[1].machine_id for x in parsed}
-    stale=list(db.scalars(select(SiteAssetMeter).where(
-        SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,SiteAssetMeter.shift==sh,
-        SiteAssetMeter.meter_type=='HMR',SiteAssetMeter.source_type=='TIOM_DEPLOYMENT'
-    )))
-    for meter in stale:
-        if meter.asset_id not in deployed_ids: db.delete(meter)
+    all_existing=list(db.scalars(select(TiomSourceDeployment).where(
+        TiomSourceDeployment.operating_date==day,TiomSourceDeployment.shift==sh,
+        TiomSourceDeployment.active.is_(True))))
+    existing_by_key={}
+    for record in all_existing:
+        key=(record.source_location_id,record.machine_id,record.from_at,record.to_at)
+        existing_by_key.setdefault(key,record)
+    # Never allocate the same machine to two overlapping locations. A null
+    # time is a whole-shift reservation and must be explicitly closed before a transfer.
+    combined=list(all_existing)
+    def conflicts(a_from,a_to,b_from,b_to):
+        return not (a_from and a_to and b_from and b_to and
+                    (a_to<=b_from or b_to<=a_from))
+    for source,machine,activity,from_at,to_at,notes,operator_id in parsed:
+        key=(source.location_id,machine.machine_id,from_at,to_at)
+        existing=existing_by_key.get(key)
+        for other in combined:
+            if other is existing or other.machine_id!=machine.machine_id or other.source_location_id==source.location_id:
+                continue
+            if conflicts(from_at,to_at,other.from_at,other.to_at):
+                raise HTTPException(409,f'{machine.machine_id} already allocated to {other.source_location_id} in this shift. Close the earlier time range before transferring.')
+        entry=existing or TiomSourceDeployment(
+            deployment_id=str(uuid4()),operating_date=day,shift=sh,
+            source_location_id=source.location_id,machine_id=machine.machine_id,
+            entered_by=user.login_id,entered_at=now_local())
+        entry.operator_id=operator_id
+        entry.activity=activity;entry.from_at=from_at;entry.to_at=to_at
+        entry.notes=notes;entry.active=True;entry.entered_by=user.login_id;entry.entered_at=now_local()
+        if not existing:
+            db.add(entry);combined.append(entry);existing_by_key[key]=entry
     for machine_id,(opening,closing,reset,meter_note) in meter_by_machine.items():
         usage=(closing-opening) if opening is not None and closing is not None and closing>=opening and not reset else None
         meter=db.scalar(select(SiteAssetMeter).where(
@@ -3738,6 +3831,13 @@ def tiom_mis_desk(db,user,p):
     locations=list(db.scalars(select(Location).where(Location.active).order_by(Location.location_name)))
     source_locations=location_options(db,'SOURCE')
     destination_locations=location_options(db,'DESTINATION')
+    deployment_locations=list(source_locations)
+    registered={x['id'] for x in deployment_locations}
+    for location in locations:
+        label=(str(location.location_name or '')+' '+str(location.location_id)).upper()
+        if (location.location_type in {'SCREEN','CRUSHER','PLANT'} or re.search(r'\bMSP\s*-?\s*\d+\b',label)) and location.location_id not in registered:
+            deployment_locations.append({'id':location.location_id,'label':location.location_name})
+            registered.add(location.location_id)
     products=list(db.scalars(select(Product).where(Product.active).order_by(Product.name)))
     activities=list(db.scalars(select(ActivityMaster).where(ActivityMaster.active).order_by(ActivityMaster.activity)))
     lead_rules=list(db.scalars(select(TiomLeadDistance).where(TiomLeadDistance.active).order_by(
@@ -3763,16 +3863,30 @@ def tiom_mis_desk(db,user,p):
         TiomMisReport.operating_date.desc(),TiomMisReport.shift,TiomMisReport.entered_at.desc()
     ).limit(500)))
 
+    # Carry forward ONLY readings from chronologically earlier shifts.
+    # The previous implementation included current/future shifts on the same
+    # date and ordered by edit timestamp, which could silently cross-fill HMR.
+    shift_order={x.shift:i for i,x in enumerate(sorted(
+        db.scalars(select(ShiftMaster).where(ShiftMaster.active.is_(True))),
+        key=lambda x:x.start_time))}
+    preceding={name for name,idx in shift_order.items() if idx<shift_order.get(sh,0)}
+    def prior_meter_date(row):
+        return row.operating_date<day or (row.operating_date==day and row.shift in preceding)
+    def previous_key(row):
+        return (row.operating_date,shift_order.get(row.shift,-1),
+                row.entered_at.isoformat() if row.entered_at else '')
+    historical_reports=[r for r in db.scalars(select(TiomMisReport).where(
+        TiomMisReport.closing_kmr.is_not(None),TiomMisReport.operating_date<=day,
+        TiomMisReport.status=='SUBMITTED')) if prior_meter_date(r)]
     prev_kmr={}
-    for r in db.scalars(select(TiomMisReport).where(
-        TiomMisReport.closing_kmr.is_not(None),TiomMisReport.operating_date<=day
-    ).order_by(TiomMisReport.operating_date.desc(),TiomMisReport.entered_at.desc())):
+    for r in sorted(historical_reports,key=previous_key,reverse=True):
         prev_kmr.setdefault(r.vehicle_id,float(r.closing_kmr))
-    prev_hmr={}
-    for m in db.scalars(select(SiteAssetMeter).where(
+    historical_meters=[m for m in db.scalars(select(SiteAssetMeter).where(
         SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.meter_type=='HMR',
         SiteAssetMeter.closing_reading.is_not(None),SiteAssetMeter.operating_date<=day
-    ).order_by(SiteAssetMeter.operating_date.desc(),SiteAssetMeter.entered_at.desc())):
+    )) if prior_meter_date(m)]
+    prev_hmr={}
+    for m in sorted(historical_meters,key=previous_key,reverse=True):
         prev_hmr.setdefault(m.asset_id,float(m.closing_reading))
 
     trip_machines=[e for e in equipment if e.group=='LOADING']
@@ -3801,6 +3915,7 @@ def tiom_mis_desk(db,user,p):
             'destinationLocationId':x.destination_location_id,'routeMode':x.route_mode,
             'leadKm':float(x.lead_km),'materialScope':x.material_scope or ''
         } for x in lead_rules],
+        'deploymentLocations':[{'id':x['id'],'label':_tiom_location_display(x['label'],x['id'])} for x in deployment_locations],
         'sourceContexts':_tiom_source_context_rows(db,day,sh),  # legacy compatibility only
         'operators':[{'id':x.employee_id,'label':f'{x.name} · {x.employee_id} · {x.role}'} for x in persons],
         'locations':[{'id':x.location_id,'label':_tiom_location_display(x.location_name,x.location_id),'role':x.role or 'UNCLASSIFIED'} for x in locations],
@@ -3842,11 +3957,17 @@ def get_tiom_wb_suggestions(db,user,p):
     deployments=list(db.scalars(select(TiomSourceDeployment).where(
         TiomSourceDeployment.operating_date==day,TiomSourceDeployment.shift==sh,TiomSourceDeployment.active.is_(True)
     )))
-    out=[]
+    aliases={norm_vehicle(x.alias) for x in db.scalars(select(VehicleAlias).where(
+        VehicleAlias.machine_id==vehicle.machine_id,VehicleAlias.active.is_(True)))}
+    out=[];other_linked=0;other_vehicle=0
     for wb in wb_rows:
-        if not tiom_wb_vehicle_matches(wb,vehicle): continue
+        matched=tiom_wb_vehicle_matches(wb,vehicle) or bool(
+            aliases.intersection({norm_vehicle(wb.vehicle_raw),norm_vehicle(wb.vehicle_id)}))
+        if not matched:
+            other_vehicle+=1;continue
         rec=linked.get(wb.movement_key)
-        if rec and rec.row_id not in own_row_ids: continue
+        if rec and rec.row_id not in own_row_ids:
+            other_linked+=1;continue
         item=tiom_wb_payload(db,wb)
         source_id=item.get('sourceLocationId') or ''
         machines=sorted({d.machine_id for d in deployments if d.source_location_id==source_id}) if source_id else []
@@ -3855,7 +3976,9 @@ def get_tiom_wb_suggestions(db,user,p):
         item['linkedToThisReport']=bool(rec and rec.row_id in own_row_ids)
         out.append(item)
     return {'rows':out,'batch':{'batchId':batch.batch_id,'fileName':batch.file_name,'confirmedAt':batch.confirmed_at.isoformat() if batch.confirmed_at else ''},
-            'message':f'{len(out)} confirmed WB movement(s) available for {vehicle.machine_id}.'}
+            'diagnostics':{'batchValid':len(wb_rows),'otherVehicle':other_vehicle,'alreadyLinked':other_linked,
+                           'available':len(out),'unmappedRows':sum(not (x.get('materialId') and x.get('sourceLocationId') and x.get('destinationLocationId')) for x in out)},
+            'message':f'{len(out)} available; {other_linked} already linked to another MIS report; {other_vehicle} WB movements belong to other vehicles. Latest confirmed batch: {batch.file_name}.'}
 
 def get_tiom_mis_report(db,user,p):
     require(user,'PRODUCTION'); report=db.get(TiomMisReport,str((p or {}).get('reportId') or ''))
@@ -3988,6 +4111,14 @@ def save_tiom_mis_report(db,user,p,submit=False):
             unloading+=timedelta(days=1)
         dep_matches=[d for d in deployments if d.source_location_id==source_id and d.machine_id==machine_id]
         if not dep_matches:
+            # Existing assignment at another source must be closed before
+            # this machine can be used here; do not silently create a second
+            # overlapping allocation from a trip row.
+            for other in deployments:
+                if other.machine_id!=machine_id or other.source_location_id==source_id:continue
+                if (not loading or not other.from_at or not other.to_at or
+                    aware(other.from_at)<=aware(loading)<aware(other.to_at)):
+                    raise HTTPException(409,f'Row {i}: {machine_id} is already assigned to {other.source_location_id}. Close or time-bound the previous allocation in Machine Setup first.')
             activity='EXCAVATION' if 'EXCAV' in str(machine.type or '').upper() else 'LOADING'
             if not db.get(ActivityMaster,activity):
                 db.add(ActivityMaster(activity=activity,vehicle_required=False,active=True))
@@ -4678,6 +4809,7 @@ def tiom_drilling_desk(db,user,p):
             'drillMachineId':st.drill_machine_id,'drillMachineLabel':_tiom_asset_label(equipment.get(st.drill_machine_id)) if equipment.get(st.drill_machine_id) else st.drill_machine_id,
             'compressorMachineId':st.compressor_machine_id,'compressorMachineLabel':_tiom_asset_label(equipment.get(st.compressor_machine_id)) if equipment.get(st.compressor_machine_id) else st.compressor_machine_id,
             'sourceLocationId':r.source_location_id if r else '', 'holes':r.holes if r else 0,
+            'romObHoles':r.rom_ob_holes if r else None,'bhjBhqHoles':r.bhj_bhq_holes if r else None,
             'romObMeterage':float(r.rom_ob_meterage) if r else 0,'bhjBhqMeterage':float(r.bhj_bhq_meterage) if r else 0,
             'drillOpenHmr':float(r.drill_open_hmr) if r and r.drill_open_hmr is not None else None,'drillCloseHmr':float(r.drill_close_hmr) if r and r.drill_close_hmr is not None else None,
             'compressorOpenHmr':float(r.compressor_open_hmr) if r and r.compressor_open_hmr is not None else None,'compressorCloseHmr':float(r.compressor_close_hmr) if r and r.compressor_close_hmr is not None else None,
@@ -4708,6 +4840,15 @@ def save_tiom_drilling_shift(db,user,p):
         try: holes=int(holes_raw or 0)
         except Exception: raise HTTPException(422,f'Drilling row {idx}: Holes must be a whole number.')
         if holes<0: raise HTTPException(422,f'Drilling row {idx}: Holes cannot be negative.')
+        rom_holes_raw=item.get('romObHoles');bhj_holes_raw=item.get('bhjBhqHoles')
+        if (rom_holes_raw in (None,'')) != (bhj_holes_raw in (None,'')):
+            raise HTTPException(422,f'Drilling row {idx}: enter both ROM/OB and BHJ/BHQ hole counts (use zero where none).')
+        if rom_holes_raw not in (None,'') and bhj_holes_raw not in (None,''):
+            try:rom_holes=int(rom_holes_raw);bhj_holes=int(bhj_holes_raw)
+            except Exception:raise HTTPException(422,f'Drilling row {idx}: Enter integer hole counts.')
+            if rom_holes<0 or bhj_holes<0:raise HTTPException(422,f'Drilling row {idx}: Hole counts must be nonnegative.')
+            holes=rom_holes+bhj_holes
+        else:rom_holes=None;bhj_holes=None
         rom=dec(rom_raw,f'ROM/OB meterage row {idx}',True); bhj=dec(bhj_raw,f'BHJ/BHQ meterage row {idx}',True)
         do=dec(item.get('drillOpenHmr'),f'Drill HMR opening row {idx}'); dc=dec(item.get('drillCloseHmr'),f'Drill HMR closing row {idx}')
         co=dec(item.get('compressorOpenHmr'),f'Compressor HMR opening row {idx}'); cc=dec(item.get('compressorCloseHmr'),f'Compressor HMR closing row {idx}')
@@ -4716,7 +4857,9 @@ def save_tiom_drilling_shift(db,user,p):
         if co is not None and cc is not None and cc<co: raise HTTPException(422,f'Drilling row {idx}: Compressor closing HMR cannot be below opening HMR.')
         existing=db.scalar(select(TiomDrillingShift).where(TiomDrillingShift.operating_date==day,TiomDrillingShift.shift==sh,TiomDrillingShift.drill_set_id==set_id))
         obj=existing or TiomDrillingShift(drilling_id=str(uuid4()),operating_date=day,shift=sh,drill_set_id=set_id,entered_by=user.login_id,entered_at=now_local())
-        obj.source_location_id=source_id or None; obj.holes=holes; obj.rom_ob_meterage=rom; obj.bhj_bhq_meterage=bhj
+        obj.source_location_id=source_id or None; obj.holes=holes
+        obj.rom_ob_holes=rom_holes;obj.bhj_bhq_holes=bhj_holes
+        obj.rom_ob_meterage=rom; obj.bhj_bhq_meterage=bhj
         obj.drill_open_hmr=do; obj.drill_close_hmr=dc; obj.compressor_open_hmr=co; obj.compressor_close_hmr=cc
         obj.breakdown_hours=bd; obj.remarks=short(str(item.get('remarks') or '')); obj.entered_by=user.login_id; obj.entered_at=now_local(); db.add(obj)
         _tiom_upsert_hmr(db,user,day,sh,st.drill_machine_id,do,dc,'TIOM_DRILLING',f'[DRILL_SET:{set_id}]')
@@ -4783,11 +4926,117 @@ def tiom_hsd_desk(db,user,p):
             'report':_tiom_hsd_report(db,day,report_from,report_to)}
 
 
+
+
+# WB reporting is read-only and uses the latest confirmed batch per date/shift.
+# Previous uploaded versions remain in history but must not double-count movement.
+def _tiom_wb_history_rows(db,user,p):
+    require(user,'WB')
+    p=p or {}
+    today=operating_context()[0]
+    from_day=_parse_ui_date_v2(p.get('fromDate'),'WB report From') if p.get('fromDate') else today-timedelta(days=6)
+    to_day=_parse_ui_date_v2(p.get('toDate'),'WB report To') if p.get('toDate') else today
+    if to_day<from_day or (to_day-from_day).days>366:
+        raise HTTPException(422,'WB report range must be chronological and at most 367 days.')
+    sh=str(p.get('shift') or 'ALL').upper()
+    all_shifts={x.shift for x in db.scalars(select(ShiftMaster).where(ShiftMaster.active.is_(True)))}
+    if sh!='ALL' and sh not in all_shifts:raise HTTPException(422,'Invalid shift filter.')
+    allowed=all_shifts if user.admin or 'ALL' in user.shifts.split(',') else all_shifts.intersection(user.shifts.split(','))
+    if sh!='ALL':
+        require(user,shift=sh)
+        allowed={sh}
+    if not allowed: return [],{'fromDate':str(from_day),'toDate':str(to_day),'shift':sh}
+    batches=list(db.scalars(select(WbImportBatch).where(
+        WbImportBatch.operating_date>=from_day,WbImportBatch.operating_date<=to_day,
+        WbImportBatch.status=='CONFIRMED',WbImportBatch.confirmed_at.is_not(None),
+        WbImportBatch.shift.in_(allowed)).order_by(
+        WbImportBatch.operating_date,WbImportBatch.shift,WbImportBatch.confirmed_at.desc()
+    )))
+    latest={}
+    for b in batches:latest.setdefault((b.operating_date,b.shift),b)
+    ids=[x.batch_id for x in latest.values()]
+    raw=list(db.scalars(select(WbMovement).where(WbMovement.batch_id.in_(ids)).order_by(
+        WbMovement.operating_date,WbMovement.shift,WbMovement.weigh_at,WbMovement.movement_no
+    ))) if ids else []
+    filters={key:str(p.get(key) or '').strip().upper() for key in
+             ('vehicleFilter','materialFilter','sourceFilter','destinationFilter','status')}
+    def eligible(row):
+        return (filters['status'] in ('','ALL') or str(row.row_status or '').upper()==filters['status']) and (
+            not filters['vehicleFilter'] or filters['vehicleFilter'] in (str(row.vehicle_raw or '')+' '+str(row.vehicle_id or '')).upper()) and (
+            not filters['materialFilter'] or filters['materialFilter'] in (str(row.material_code or '')+' '+str(row.material_name or '')).upper()) and (
+            not filters['sourceFilter'] or filters['sourceFilter'] in str(row.source_raw or '').upper()) and (
+            not filters['destinationFilter'] or filters['destinationFilter'] in str(row.destination_raw or '').upper())
+    rows=[r for r in raw if eligible(r)]
+    meta={'fromDate':str(from_day),'toDate':str(to_day),'shift':sh,
+          'batchCount':len(latest),'filteredRecords':len(rows),'latestConfirmedOnly':True}
+    return rows,meta
+
+
+def get_tiom_wb_history(db,user,p):
+    rows,meta=_tiom_wb_history_rows(db,user,p)
+    valid=[r for r in rows if r.row_status=='VALID']
+    mt=sum((Decimal(r.net_kg or 0) for r in valid),Decimal('0'))/Decimal('1000')
+    distinct={str(r.vehicle_id or r.vehicle_raw or '') for r in valid if r.vehicle_id or r.vehicle_raw}
+    groups={}
+    for r in valid:
+        m=str(r.material_name or r.material_code or 'Unclassified')
+        group=groups.setdefault(m,{'material':m,'trips':0,'tonnes':Decimal('0')})
+        group['trips']+=1;group['tonnes']+=Decimal(r.net_kg or 0)/Decimal('1000')
+    return {**meta,'kpis':{
+        'validMovements':len(valid),'reviewMovements':sum(r.row_status=='REVIEW' for r in rows),
+        'validTonnes':round(float(mt),2),'uniqueVehicles':len(distinct),
+        'avgPayloadMt':round(float(mt/len(valid)),2) if valid else None,
+        'batches':meta['batchCount']},
+        'materials':[{**g,'tonnes':round(float(g['tonnes']),2)} for g in sorted(groups.values(),key=lambda g:g['tonnes'],reverse=True)[:12]],
+        'rows':[{'date':str(x.operating_date),'shift':x.shift,'movementNo':x.movement_no,
+                 'vehicle':x.vehicle_raw,'material':x.material_name or x.material_code,
+                 'source':x.source_raw,'destination':x.destination_raw,
+                 'netMt':round(float(Decimal(x.net_kg or 0)/Decimal('1000')),3),
+                 'status':x.row_status,'issue':x.issue or ''}
+                for x in rows[:120]],
+        'previewCount':min(120,len(rows))}
+
+
+@router.get('/wb/full-export')
+def tiom_full_wb_export(request:Request,fromDate:str='',toDate:str='',shift:str='ALL',
+                       vehicleFilter:str='',materialFilter:str='',sourceFilter:str='',
+                       destinationFilter:str='',status:str='ALL',db:Session=Depends(get_db)):
+    user=get_user(db,request)
+    rows,meta=_tiom_wb_history_rows(db,user,{
+        'fromDate':fromDate,'toDate':toDate,'shift':shift,'vehicleFilter':vehicleFilter,
+        'materialFilter':materialFilter,'sourceFilter':sourceFilter,
+        'destinationFilter':destinationFilter,'status':status})
+    if len(rows)>50000:
+        raise HTTPException(422,'More than 50,000 WB rows matched. Narrow the date range before exporting.')
+    book=Workbook();sheet=book.active;sheet.title='WB Full Data'
+    sheet.append(['Operating Date','Shift','WB Movement No','Vehicle','Vehicle Master ID',
+                  'Material Code','Material Name','Source','Destination','Tare KG','Gross KG',
+                  'Net KG','Net MT','Weigh Time','Status','Exception','WB Batch'])
+    def safe_cell(value):
+        v=str(value or '')
+        return "'"+v if v.lstrip().startswith(('=','+','-','@')) else v
+    for x in rows:
+        sheet.append([str(x.operating_date),safe_cell(x.shift),safe_cell(x.movement_no),
+            safe_cell(x.vehicle_raw),safe_cell(x.vehicle_id),safe_cell(x.material_code),
+            safe_cell(x.material_name),safe_cell(x.source_raw),safe_cell(x.destination_raw),
+            float(x.tare_kg or 0),float(x.gross_kg or 0),float(x.net_kg or 0),
+            round(float(Decimal(x.net_kg or 0)/Decimal('1000')),3),
+            x.weigh_at.astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if x.weigh_at else '',
+            safe_cell(x.row_status),safe_cell(x.issue),safe_cell(x.batch_id)])
+    sheet.freeze_panes='A2';sheet.auto_filter.ref=sheet.dimensions
+    for col in 'ABCDEFGHIJKLMNOPQ':sheet.column_dimensions[col].width=17
+    for col in ['G','H','I','P']:sheet.column_dimensions[col].width=25
+    buf=BytesIO();book.save(buf);buf.seek(0)
+    name=f"TIOM_WB_Full_{meta['fromDate']}_to_{meta['toDate']}.xlsx"
+    return StreamingResponse(buf,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      headers={'Content-Disposition':f'attachment; filename="{name}"',
+               'Cache-Control':'no-store'})
+
 @router.post('/rpc')
 def rpc(p: RPC, request: Request, db: Session = Depends(get_db)):
     csrf(request)
     user = get_user(db, request)
-    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'getTiomWbSuggestions', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
+    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
     if p.method not in read_methods:
         lock(db)
     try:
@@ -4841,6 +5090,7 @@ def dispatch(db, user, method, args):
     if method == 'getTiomMisDesk': return tiom_mis_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomMisReport': return get_tiom_mis_report(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomWbSuggestions': return get_tiom_wb_suggestions(db,user,args[0] if args and isinstance(args[0],dict) else {})
+    if method == 'getTiomWbHistory': return get_tiom_wb_history(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomShiftProductionDesk': return get_tiom_shift_production_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomDrillingDesk': return tiom_drilling_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomHsdDesk': return tiom_hsd_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
