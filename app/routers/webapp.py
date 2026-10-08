@@ -813,6 +813,15 @@ def dashboard_desk(db, user, p):
     elif allowed_shifts:
         ctx_stmt=ctx_stmt.where(TiomSourceContext.shift.in_(allowed_shifts))
     source_contexts={(x.operating_date,x.shift,x.source_location_id):x.bench_rl_m for x in db.scalars(ctx_stmt)}
+    # One approved master lookup per distinct path/bench for dashboard WB + MIS.
+    # This avoids re-querying Route and Lead Masters for every trip of a large shift.
+    dashboard_lead_cache={}
+    def dashboard_lead(source_id, bench_rl, dest_id, mode='WITH_WB', wb_linked=False):
+        key=(source_id,bench_rl,dest_id,mode,bool(wb_linked))
+        if key not in dashboard_lead_cache:
+            dashboard_lead_cache[key]=_tiom_resolve_lead(
+                db,source_id,bench_rl,dest_id,mode,wb_linked=wb_linked)
+        return dashboard_lead_cache[key]
 
     def _unique_wb_rows(*groups):
         out=[]; seen=set()
@@ -840,7 +849,7 @@ def dashboard_desk(db, user, p):
             bench=_tiom_bench_rl_from_location(db,src_id) if src_id else None
             if bench is None and src_id:
                 bench=source_contexts.get((row.operating_date,row.shift,src_id))
-            lead=_tiom_resolve_lead(db,src_id,bench,dst_id,'WITH_WB',wb_linked=True)
+            lead=dashboard_lead(src_id,bench,dst_id,'WITH_WB',wb_linked=True)
             if lead.get('leadKm') is None:
                 missing+=1; continue
             lk=float(lead['leadKm']); q=tonnes(row)
@@ -1017,7 +1026,7 @@ def dashboard_desk(db, user, p):
         bench_rl=_tiom_bench_rl_from_location(db,src_id) if src_id else None
         if bench_rl is None and src_id:
             bench_rl=source_contexts.get((w.operating_date,w.shift,src_id))
-        lead_result=_tiom_resolve_lead(db,src_id,bench_rl,dst_id,'WITH_WB',wb_linked=True)
+        lead_result=dashboard_lead(src_id,bench_rl,dst_id,'WITH_WB',wb_linked=True)
         add_haulage(src_id,dst_id,src,dst,'WITH_WB',t,stamp,lead_result.get('leadKm'),lead_result.get('status'))
         vk = (w.vehicle_id or w.vehicle_raw or 'Unknown').strip(); vr = add_metric(vehicles, vk, t); vr['vehicle']=vk
         u = label.upper()
@@ -1431,6 +1440,14 @@ def dashboard_desk(db, user, p):
             month_other_old_stock_excluded,max(0,len(month_excluded_keys)-month_process_trips.get('OLD_STOCK_BLEND_10_40',0)),
             prod_pct(other_old_stock_excluded),'EXCLUDED')
     ]
+    if allocation_pending:
+        # Retain gross crusher product measurements but suppress unsupported
+        # NET and TOTAL fresh production rows until feed evidence is complete.
+        for item in production_material_rows:
+            if item['kind'] in {'NET','TOTAL'}:
+                item['tonnes']=None
+                item['pct']=None
+                item['status']='ALLOCATION_PENDING'
 
     source_rows=[{'label':r['label'],'trips':r['trips'],'tonnes':round(r['tonnes'],2),'avgPayload':round(r['tonnes']/r['trips'],2) if r['trips'] else 0,
                   'pct':round(r['tonnes']/wb_tonnes*100,1) if wb_tonnes else 0} for r in sorted(sources.values(),key=lambda x:x['tonnes'],reverse=True)]
@@ -1477,7 +1494,6 @@ def dashboard_desk(db, user, p):
     lead_resolved_trips=0; lead_missing_trips=0; lead_with_wb=0; lead_without_wb=0
     lead_covered_qty=Decimal('0'); lead_ton_km=Decimal('0')
     lead_review=[]; qty_pending=[]
-    lead_lookup={}
     mis_materials={}; mis_sources={}; mis_destinations={}; mis_vehicles={}; mis_machines={}; lead_routes={}
     for r in mis_rows:
         d=mis_details.get(r.row_id)
@@ -1510,12 +1526,9 @@ def dashboard_desk(db, user, p):
         if bench_rl is None and d.source_location_id:
             bench_rl=_tiom_bench_rl_from_location(db,d.source_location_id)
         mode_for_lead='WITH_WB' if rec and rec.wb_movement_key else 'WITHOUT_WB'
-        lead_key=(d.source_location_id,bench_rl,d.destination_location_id,mode_for_lead)
-        if lead_key not in lead_lookup:
-            lead_lookup[lead_key]=_tiom_resolve_lead(
-                db,d.source_location_id,bench_rl,d.destination_location_id,
-                mode_for_lead,wb_linked=bool(rec and rec.wb_movement_key))
-        fresh_lead=lead_lookup[lead_key]
+        fresh_lead=dashboard_lead(
+            d.source_location_id,bench_rl,d.destination_location_id,mode_for_lead,
+            wb_linked=bool(rec and rec.wb_movement_key))
         resolved_km=(fresh_lead.get('leadKm') if fresh_lead.get('status')=='OK' else None)
         lead_status=fresh_lead.get('status') or 'ROUTE_NOT_CONFIGURED'
         if resolved_km is None:
