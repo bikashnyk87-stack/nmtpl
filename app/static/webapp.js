@@ -32,7 +32,7 @@ function showLogin(setup) {
 async function enterApp(){
   const boot=await request('rpc',{method:'getBootstrap',args:[]}); S.boot=boot;
   text('userName',boot.user.name);setContext(boot.today,boot.shift,boot.time);
-  document.getElementById('signOutBtn').hidden=false;buildNav();render(boot.user.modules.includes('DASHBOARD')?'DASHBOARD':'HOME');
+  document.getElementById('signOutBtn').hidden=false;buildNav();render(boot.user.isManagement?'HOME':(boot.user.modules.includes('DASHBOARD')?'DASHBOARD':'HOME'));
 }
 async function signOut(){const uid=S.boot?.user?.loginId;try{await request('logout',{})}finally{if(uid)NMTPLNet.clearUserDrafts(uid);if(typeof window.NMTPLClearTiomDrafts==='function')window.NMTPLClearTiomDrafts();showLogin(false)}}
 function buildNav(){
