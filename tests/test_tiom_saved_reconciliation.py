@@ -46,9 +46,30 @@ class TiomSavedReconciliationTests(unittest.TestCase):
         self.assertIn("'Material Summary'",api)
         self.assertIn("'Route Summary'",api)
 
+    def test_entry_export_uses_real_trip_time_fields(self):
+        api=(ROOT/'app'/'routers'/'webapp.py').read_text('utf-8')
+        block=api[api.index("def tiom_mis_entry_export"):api.index("@router.post('/rpc')")]
+        self.assertNotIn('loading_raw',block)
+        self.assertNotIn('unloading_raw',block)
+        self.assertIn('local_time(row.loading_at)',block)
+        self.assertIn('local_time(row.unloading_at)',block)
+        self.assertIn('qty_index=26',block)
+
+    def test_reload_restores_module_and_subtabs(self):
+        web=(ROOT/'app'/'static'/'webapp.js').read_text('utf-8')
+        phase=(ROOT/'app'/'static'/'tiom_phase1.js').read_text('utf-8')
+        self.assertIn('screenStateKey',web)
+        self.assertIn('sessionStorage.setItem(screenStateKey(S.boot),screen)',web)
+        self.assertIn('allowedScreen(boot,saved)',web)
+        self.assertIn("getUiState('PROD_TAB'",phase)
+        self.assertIn("setUiState('PROD_TAB',tab)",phase)
+        self.assertIn("getUiState('HSD_TAB'",phase)
+        self.assertIn("setUiState('HSD_TAB',tab)",phase)
+
     def test_phase1_cache_bust_is_current(self):
         html=(ROOT/'app'/'static'/'index.html').read_text('utf-8')
-        self.assertIn('tiom_phase1.js?v=tiom-field-r29',html)
+        self.assertIn('webapp.js?v=tiom-overview-r26',html)
+        self.assertIn('tiom_phase1.js?v=tiom-field-r30',html)
 
 
 if __name__=='__main__':
