@@ -2,6 +2,9 @@
 (function(){
   const legacyLoadProduction = window.loadProduction;
   const T={prodTab:'SITE',mis:null,misReportId:'',misRows:15,depRows:20,faceRows:4,wbSuggestions:[],openReportAfterLoad:'',drill:null,shiftProd:null,shiftProdRows:6,hsdTab:'FILL',hsd:null,hsdRows:10};
+  function uiStateKey(kind){const u=NMTPLNet.safeUser(S.boot?.user?.loginId||S.boot?.user?.name||'anonymous');return `NMTPL_TIOM_UI:${u}:${kind}`}
+  function getUiState(kind,fallback){try{return sessionStorage.getItem(uiStateKey(kind))||fallback}catch(_){return fallback}}
+  function setUiState(kind,value){try{sessionStorage.setItem(uiStateKey(kind),String(value||''))}catch(_){}}
   const C={};
   const q=id=>document.getElementById(id);
   const v=id=>q(id)?q(id).value:'';
@@ -43,10 +46,11 @@
   window.renderProduction=function(){
     html('app',`<div class="tiom-sap-head"><div><b>TIOM / PRODUCTION</b><span>Site Entry + MIS Driver Shift Reports</span></div><div class="tiom-sap-context">Thakurani Iron Ore Mine</div></div>
       <div class="tiom-tabs tiom-prod-tabs"><button id="tp_site" onclick="tiomProdTab('SITE')">Site Entry</button><button id="tp_mis" onclick="tiomProdTab('MIS')">MIS Entry</button><button id="tp_drill" onclick="tiomProdTab('DRILL')">Drilling</button><button id="tp_shift" onclick="tiomProdTab('SHIFT')">Exceptions / Plant Output</button><button id="tp_saved" onclick="tiomProdTab('SAVED')">Saved Reports</button></div><div id="tiom_prod_body"></div>`);
+    T.prodTab=getUiState('PROD_TAB',T.prodTab||'SITE');
     tiomProdTab(T.prodTab);
   };
   window.tiomProdTab=function(tab){
-    T.prodTab=tab;
+    T.prodTab=tab;setUiState('PROD_TAB',tab);
     ['tp_site','tp_mis','tp_drill','tp_shift','tp_saved'].forEach(id=>q(id)&&q(id).classList.remove('active'));
     q(tab==='SITE'?'tp_site':tab==='MIS'?'tp_mis':tab==='DRILL'?'tp_drill':tab==='SHIFT'?'tp_shift':'tp_saved')?.classList.add('active');
     if(tab==='SITE'){html('tiom_prod_body','<div id="prod_body"><div class="loading">Loading Site Entry…</div></div>');legacyLoadProduction();}
@@ -329,8 +333,8 @@
   window.emailShiftProductionImage=()=>emailCanvas(shiftProductionCanvas(),`TIOM_Shift_Production_${T.shiftProd?.report?.date||v('sp_date')}_${T.shiftProd?.report?.shift||v('sp_shift')}.png`,`TIOM Shift Production Report - ${T.shiftProd?.report?.date||v('sp_date')} Shift ${T.shiftProd?.report?.shift||v('sp_shift')}`,'SHIFT_PRODUCTION');
 
   window.renderHsd=function(){html('app',`<div class="tiom-sap-head"><div><b>TIOM / HSD</b><span>Office MIS + Field Supervisor Fuel Control</span></div><div class="tiom-sap-context">Thakurani Iron Ore Mine</div></div><div class="tiom-mis-toolbar"><label>Entry Date<input id="th_date" type="date" value="${safe((T.hsd&&T.hsd.date)||S.boot.today)}"></label><label>Shift<select id="th_shift">${shiftOpts((T.hsd&&T.hsd.shift)||S.boot.shift)}</select></label><label>Report From<input id="th_report_from" type="date" value="${safe((T.hsd&&T.hsd.reportFrom)||S.boot.today)}"></label><label>Report To<input id="th_report_to" type="date" value="${safe((T.hsd&&T.hsd.reportTo)||S.boot.today)}"></label><button class="btn primary small" onclick="loadTiomHsd()">Load</button><span class="tiom-state">Previous date / shift entry is allowed and remains audit-stamped with actual user + entry time.</span></div><div id="th_tokens"></div><div class="tiom-tabs"><button id="th_office" onclick="tiomHsdTab('OFFICE')">Office MIS Entry</button><button id="th_field" onclick="tiomHsdTab('FIELD')">Field Supervisor Entry</button><button id="th_receive" onclick="tiomHsdTab('RECEIVE')">Receive / Opening</button><button id="th_stock" onclick="tiomHsdTab('STOCK')">Stock / Closing</button><button id="th_report" onclick="tiomHsdTab('REPORT')">Management Report</button></div><div id="tiom_hsd_body"><div class="loading">Loading HSD…</div></div>`);loadTiomHsd()};
-  window.loadTiomHsd=function(){appRun(function(d){T.hsd=d;if(!T.hsdTab||T.hsdTab==='FILL')T.hsdTab='OFFICE';renderHsdTokens();renderHsdTab()},function(e){html('tiom_hsd_body',`<div class="bad">${safe(e.message)}</div>`)}).getTiomHsdDesk({date:v('th_date')||S.boot.today,shift:v('th_shift')||S.boot.shift,reportFrom:v('th_report_from')||v('th_date')||S.boot.today,reportTo:v('th_report_to')||v('th_date')||S.boot.today})};
-  window.tiomHsdTab=function(tab){T.hsdTab=tab;renderHsdTab()};
+  window.loadTiomHsd=function(){appRun(function(d){T.hsd=d;T.hsdTab=getUiState('HSD_TAB',(!T.hsdTab||T.hsdTab==='FILL')?'OFFICE':T.hsdTab);renderHsdTokens();renderHsdTab()},function(e){html('tiom_hsd_body',`<div class="bad">${safe(e.message)}</div>`)}).getTiomHsdDesk({date:v('th_date')||S.boot.today,shift:v('th_shift')||S.boot.shift,reportFrom:v('th_report_from')||v('th_date')||S.boot.today,reportTo:v('th_report_to')||v('th_date')||S.boot.today})};
+  window.tiomHsdTab=function(tab){T.hsdTab=tab;setUiState('HSD_TAB',tab);renderHsdTab()};
   function renderHsdTokens(){const d=T.hsd||{},x=d.entrySummary||{},tankers=d.tankers||[];const tankerMini=tankers.map(t=>`<span><b>${safe(t.id)}</b> ${n(t.stock)} L</span>`).join('');html('th_tokens',`<div class="hsd-token-strip"><div><span>Opening Book</span><b>${n(x.openingBook||0)} L</b></div><div><span>Opening Set</span><b>${n(x.openingSet||0)} L</b></div><div><span>Received · Date</span><b>+${n(x.received||0)} L</b></div><div><span>Issued · Shift ${safe(d.shift||'')}</span><b>−${n(x.issuedShift||0)} L</b></div><div class="available"><span>Fuel Available Now</span><b>${n(x.availableNow||0)} L</b></div><div><span>Book Closing · Date</span><b>${n(x.closingBook||0)} L</b></div></div><div class="hsd-tanker-mini">${tankerMini||'<span>No active HSD tanker.</span>'}</div>`)}
   function renderHsdTab(){const d=T.hsd;if(!d)return;['office','field','receive','stock','report'].forEach(x=>q('th_'+x)?.classList.toggle('active',T.hsdTab===x.toUpperCase()));if(T.hsdTab==='FIELD')renderHsdField();else if(T.hsdTab==='RECEIVE')renderHsdReceive();else if(T.hsdTab==='STOCK')renderHsdStock();else if(T.hsdTab==='REPORT')renderHsdReport();else renderHsdFill()}
   function tankerOptions(){return opts((T.hsd?.tankers||[]).map(x=>({id:x.id,label:`${x.label} · Available ${n(x.stock)} L`})))}
