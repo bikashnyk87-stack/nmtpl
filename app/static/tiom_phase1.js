@@ -1,7 +1,7 @@
 /* TIOM Phase 1.6 — ERP hardening, compact software UI and deployment-owned HMR. */
 (function(){
   const legacyLoadProduction = window.loadProduction;
-  const T={prodTab:'SITE',mis:null,misReportId:'',misRows:15,depRows:20,faceRows:4,wbSuggestions:[],openReportAfterLoad:'',drill:null,shiftProd:null,shiftProdRows:6,hsdTab:'FILL',hsd:null,hsdRows:10};
+  const T={prodTab:'SITE',mis:null,misReportId:'',misReportStatus:'',misRows:15,depRows:20,faceRows:4,wbSuggestions:[],openReportAfterLoad:'',unlockAfterLoad:false,misEditMode:false,misEditKey:'',misEditReason:'',currentMisReport:null,drill:null,shiftProd:null,shiftProdRows:6,hsdTab:'FILL',hsd:null,hsdRows:10};
   function uiStateKey(kind){const u=NMTPLNet.safeUser(S.boot?.user?.loginId||S.boot?.user?.name||'anonymous');return `NMTPL_TIOM_UI:${u}:${kind}`}
   function getUiState(kind,fallback){try{return sessionStorage.getItem(uiStateKey(kind))||fallback}catch(_){return fallback}}
   function setUiState(kind,value){try{sessionStorage.setItem(uiStateKey(kind),String(value||''))}catch(_){}}
@@ -62,14 +62,14 @@
 
   function tiomDraftUser(){return NMTPLNet.safeUser(S.boot?.user?.loginId||S.boot?.user?.name||'anonymous')}
   function misDraftKey(){return `NMTPL_TIOM_DRAFT:${tiomDraftUser()}:MIS:${v('tm_date')||S.boot.today}:${v('tm_shift')||S.boot.shift}`}
-  function draftSave(){try{localStorage.setItem(misDraftKey(),JSON.stringify(collectMis(false)));const x=q('tm_draft_state');if(x)x.textContent='Local draft saved';}catch(_){}}
+  function draftSave(){if(T.misEditMode||T.misReportStatus==='SUBMITTED'||T.misReportStatus==='VOID')return;try{localStorage.setItem(misDraftKey(),JSON.stringify(collectMis(false)));const x=q('tm_draft_state');if(x)x.textContent='Local draft saved';}catch(_){}}
   function draftRestore(){try{const raw=localStorage.getItem(misDraftKey());if(!raw)return;fillMisForm(JSON.parse(raw),true)}catch(_){}}
   function renderMisEntry(){
     const d=T.mis;
-    html('tiom_prod_body',`<div class="tiom-mis-toolbar"><b>MIS DRIVER SHIFT ENTRY</b><label>Date<input id="tm_date" type="date" value="${safe(d?.date||S.boot.today)}"></label><label>Shift<select id="tm_shift">${shiftOpts(d?.shift||S.boot.shift)}</select></label><button class="btn primary small" onclick="loadTiomMis()">Load</button><span id="tm_draft_state" class="tiom-state"></span></div><div id="tiom_mis_body"><div class="loading">Loading MIS entry…</div></div>`);
+    html('tiom_prod_body',`<div class="tiom-mis-toolbar"><b>MIS DRIVER SHIFT ENTRY</b><label>Date<input id="tm_date" type="date" value="${safe(d?.date||S.boot.today)}"></label><label>Shift<select id="tm_shift">${shiftOpts(d?.shift||S.boot.shift)}</select></label><button id="tm_load" class="btn primary small" onclick="loadTiomMis()">Load</button><span id="tm_draft_state" class="tiom-state"></span></div><div id="tiom_mis_body"><div class="loading">Loading MIS entry…</div></div>`);
     loadTiomMis();
   }
-  window.loadTiomMis=function(){appRun(function(d){T.mis=d;T.misReportId='';T.depRows=Math.max(20,(d.deployments||[]).length);T.misRows=15;renderMisDesk();setTimeout(()=>{draftRestore();if(T.openReportAfterLoad){const id=T.openReportAfterLoad;T.openReportAfterLoad='';loadMisReport(id)}},0)},function(e){html('tiom_mis_body',`<div class="bad">${safe(e.message)}</div>`)}).getTiomMisDesk({date:v('tm_date')||S.boot.today,shift:v('tm_shift')||S.boot.shift})};
+  window.loadTiomMis=function(){appRun(function(d){T.mis=d;T.misReportId='';T.misReportStatus='';T.currentMisReport=null;T.depRows=Math.max(20,(d.deployments||[]).length);T.misRows=15;renderMisDesk();setTimeout(()=>{draftRestore();if(T.openReportAfterLoad){const id=T.openReportAfterLoad,unlock=T.unlockAfterLoad;T.openReportAfterLoad='';T.unlockAfterLoad=false;loadMisReport(id,unlock)}},0)},function(e){html('tiom_mis_body',`<div class="bad">${safe(e.message)}</div>`)}).getTiomMisDesk({date:v('tm_date')||S.boot.today,shift:v('tm_shift')||S.boot.shift})};
 
   function renderMisDesk(){
     const d=T.mis;if(!d)return;
