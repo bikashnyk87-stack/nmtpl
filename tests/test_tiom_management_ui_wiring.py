@@ -18,9 +18,10 @@ class TiomManagementUiWiringTests(unittest.TestCase):
         phase1 = (STATIC / "tiom_phase1.js").read_text(encoding="utf-8")
         self.assertNotIn("window.renderHome=function()", phase1)
 
-    def test_management_login_opens_overview(self):
+    def test_management_login_defaults_to_overview_but_reload_can_restore_page(self):
         web = (STATIC / "webapp.js").read_text(encoding="utf-8")
-        self.assertIn("render(boot.user.isManagement?'HOME'", web)
+        self.assertIn("const fallback=boot.user.isManagement?'HOME'", web)
+        self.assertIn("render(allowedScreen(boot,saved)?saved:fallback)", web)
 
     def test_live_summary_present_and_operational_drilldowns_retained(self):
         owner = (STATIC / "tiom_management_ui.js").read_text(encoding="utf-8")
