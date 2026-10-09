@@ -29,10 +29,23 @@ function showLogin(setup) {
     catch(error){text('login_status',error.message);button.disabled=false;}
   };
 }
+function screenStateKey(boot){const u=(boot&&boot.user&&(boot.user.loginId||boot.user.name))||'anonymous';return 'NMTPL_TIOM_SCREEN:'+String(u)}
+function allowedScreen(boot,screen){
+  if(!boot||!boot.user)return false;
+  const modules=boot.user.modules||[];
+  if(screen==='HOME')return true;
+  if(screen==='VOLVO')return !!(boot.user.isManagement||modules.includes('DASHBOARD'));
+  if(screen==='MECHANICAL')return !!(boot.user.isManagement||modules.includes('MECHANICAL'));
+  if(screen==='USERS')return !!boot.user.isManagement;
+  return modules.includes(screen);
+}
 async function enterApp(){
   const boot=await request('rpc',{method:'getBootstrap',args:[]}); S.boot=boot;
   text('userName',boot.user.name);setContext(boot.today,boot.shift,boot.time);
-  document.getElementById('signOutBtn').hidden=false;buildNav();render(boot.user.isManagement?'HOME':(boot.user.modules.includes('DASHBOARD')?'DASHBOARD':'HOME'));
+  document.getElementById('signOutBtn').hidden=false;buildNav();
+  let saved='';try{saved=sessionStorage.getItem(screenStateKey(boot))||''}catch(_){}
+  const fallback=boot.user.isManagement?'HOME':(boot.user.modules.includes('DASHBOARD')?'DASHBOARD':'HOME');
+  render(allowedScreen(boot,saved)?saved:fallback);
 }
 async function signOut(){const uid=S.boot?.user?.loginId;try{await request('logout',{})}finally{if(uid)NMTPLNet.clearUserDrafts(uid);if(typeof window.NMTPLClearTiomDrafts==='function')window.NMTPLClearTiomDrafts();showLogin(false)}}
 function buildNav(){
@@ -46,7 +59,8 @@ function buildNav(){
   nav.innerHTML=items.map(([id,label])=>'<button id="nav_'+id+'" onclick="render(\''+id+'\')">'+label+'</button>').join('');
 }
 function render(screen){
-  S.screen=screen;document.querySelectorAll('#nav button').forEach(b=>b.classList.remove('active'));
+  S.screen=screen;try{if(S.boot)sessionStorage.setItem(screenStateKey(S.boot),screen)}catch(_){}
+  document.querySelectorAll('#nav button').forEach(b=>b.classList.remove('active'));
   const button=document.getElementById('nav_'+screen);if(button)button.classList.add('active');
   ({VOLVO:renderVolvo,DASHBOARD:renderDashboard,HOME:renderHome,ATTENDANCE:renderAttendance,SHIFT_CONTROL:renderShiftControl,PRODUCTION:renderProduction,WB:renderWb,HSD:renderHsd,MASTERS:renderMasters,MECHANICAL:window.renderMechanical,USERS:renderUsers}[screen]||renderHome)();
   window.scrollTo(0,0);
