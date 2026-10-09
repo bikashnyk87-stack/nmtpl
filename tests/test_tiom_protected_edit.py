@@ -17,8 +17,9 @@ def test_submitted_edit_requires_server_side_key_and_reason():
         "TIOM_MIS_EDIT_SUBMITTED",
         "before_snapshot=_tiom_mis_edit_snapshot",
         "after_snapshot=_tiom_mis_edit_snapshot",
-        "report.approved_by=user.login_id",
-        "report.approved_at=now_local()",
+        "def _tiom_mis_correction_meta",
+        "correctedBy",
+        "correctedAt",
         "'Correction Audit'",
     ):
         assert term in api
@@ -34,6 +35,9 @@ def test_edit_key_is_hashed_not_stored_plaintext():
     block = api[start:end]
     assert "value=_tiom_mis_edit_key_hash(key)" in block
     assert "value=key" not in block
+    assert "hashlib.pbkdf2_hmac" in api
+    assert "secrets.token_bytes(16)" in api
+    assert "_tiom_mis_edit_key_matches" in api
     assert "hmac.compare_digest" in api
 
 
