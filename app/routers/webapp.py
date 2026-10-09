@@ -5721,13 +5721,32 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
 
     audit_rows=[[
         str(r.operating_date),r.shift,r.report_id,r.vehicle_id,label_eq(r.vehicle_id),r.operator_id or '',label_person(r.operator_id),
-        r.paper_ref or '',r.status,r.opening_kmr,r.closing_kmr,r.opening_hmr,r.closing_hmr,r.notes or '',
-        r.entered_by,local_dt(r.entered_at),r.submitted_by or '',local_dt(r.submitted_at)
+        r.paper_ref or '',r.status,r.version or 1,r.opening_kmr,r.closing_kmr,r.opening_hmr,r.closing_hmr,r.notes or '',
+        r.entered_by,local_dt(r.entered_at),r.submitted_by or '',local_dt(r.submitted_at),r.approved_by or '',local_dt(r.approved_at)
     ] for r in reports]
     add_sheet('Saved Report Audit',[
-        'Date','Shift','Report ID','Vehicle ID','Tripper','Driver ID','Driver','Report Ref','Status',
-        'Opening KMR','Closing KMR','Opening HMR','Closing HMR','Notes','Entered By','Entered At','Submitted By','Submitted At'
-    ],audit_rows,[12,8,38,15,26,14,26,16,12,12,12,12,12,38,15,20,15,20])
+        'Date','Shift','Report ID','Vehicle ID','Tripper','Driver ID','Driver','Report Ref','Status','Version',
+        'Opening KMR','Closing KMR','Opening HMR','Closing HMR','Notes','Entered By','Entered At','Submitted By','Submitted At','Last Corrected By','Last Corrected At'
+    ],audit_rows,[12,8,38,15,26,14,26,16,12,10,12,12,12,12,38,15,20,15,20,18,20])
+
+    edit_logs=list(db.scalars(select(AuditLog).where(
+        AuditLog.action=='TIOM_MIS_EDIT_SUBMITTED',
+        AuditLog.entity=='tiom_mis_report',
+        AuditLog.entity_id.in_(report_ids)
+    ).order_by(AuditLog.created_at))) if report_ids else []
+    correction_rows=[]
+    for log_row in edit_logs:
+        try: detail=json.loads(log_row.detail or '{}')
+        except Exception: detail={}
+        correction_rows.append([
+            local_dt(log_row.created_at),log_row.actor,log_row.entity_id,
+            detail.get('fromVersion'),detail.get('toVersion'),detail.get('reason') or '',
+            detail.get('rows'),detail.get('wbLinkedRows'),detail.get('leadResolvedRows'),detail.get('leadMissingRows')
+        ])
+    add_sheet('Correction Audit',[
+        'Corrected At','Corrected By','Report ID','From Version','To Version','Edit Reason',
+        'Trip Rows','WB-linked Rows','Lead Resolved','Lead Missing'
+    ],correction_rows,[20,18,38,12,12,48,12,14,14,14])
 
     buf=BytesIO();book.save(buf);buf.seek(0)
     name=f"TIOM_Entry_Detail_{from_day}_to_{to_day}_{shift}.xlsx"
@@ -5739,7 +5758,7 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
 def rpc(p: RPC, request: Request, db: Session = Depends(get_db)):
     csrf(request)
     user = get_user(db, request)
-    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'getTiomMisReconciliation', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
+    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'verifyTiomMisEditKey', 'getTiomMisReconciliation', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
     if p.method not in read_methods:
         lock(db)
     try:
