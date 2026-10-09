@@ -1723,10 +1723,12 @@ def dashboard_desk(db, user, p):
     if selected_shift!='ALL': wb_period_stmt=wb_period_stmt.where(WbImportBatch.shift==selected_shift)
     elif allowed_shifts: wb_period_stmt=wb_period_stmt.where(WbImportBatch.shift.in_(allowed_shifts))
     for r in db.scalars(wb_period_stmt): prod_periods.add((r.operating_date,r.shift))
-    shift_excavation=Decimal('0'); shift_processed=Decimal('0')
+    shift_excavation=Decimal('0'); shift_processed=Decimal('0'); shift_waste=Decimal('0')
     for pd,ps in prod_periods:
         f=_tiom_shift_ftd(db,pd,ps,False)
-        shift_excavation+=f.get('TOTAL_EXCAVATION',Decimal('0')); shift_processed+=f.get('TOTAL_PRODUCTION',Decimal('0'))
+        shift_excavation+=f.get('TOTAL_EXCAVATION',Decimal('0'))
+        shift_processed+=f.get('TOTAL_PRODUCTION',Decimal('0'))
+        shift_waste+=f.get('WASTE',Decimal('0'))
 
     drilling=_tiom_drilling_summary(db,start_day,end_day,selected_shift)
     drill_totals=drilling.get('totals',{})
@@ -1821,6 +1823,7 @@ def dashboard_desk(db, user, p):
             'leadWithWbTrips':lead_with_wb,'leadWithoutWbTrips':lead_without_wb,
             'avgLeadKm':round(float(weighted_avg_lead),3),'leadTonKm':round(float(lead_ton_km),2),
             'misObTrips':mis_ob_trips,'misObQty':round(float(mis_ob_qty),2),'misRomTrips':mis_rom_trips,'misRomQty':round(float(mis_rom_qty),2),
+            'obRemovedMt':round(float(shift_waste),2),
             'shiftExcavationMt':round(float(shift_excavation),2),'shiftProcessedMt':round(float(shift_processed),2),
             'romInputMt':production_summary['romInputMt'],'finalProductionMt':production_summary['finalProductionMt'],
             'finalRecoveryPct':production_summary['finalRecoveryPct'],'oldStockExcludedMt':production_summary['oldStockExcludedMt'],

@@ -66,7 +66,7 @@
     const hs=S.tiomOwnerHsd||null;const isPending=!!p.allocationPending;
     const cards=[
       metric('FRESH ROM',fmt(p.romInputMt,1,' t'),'Mine-origin movement','teal'),
-      metric('OB REMOVED',fmt(k.misObQty,1,' t'),'MIS trip-factor quantity','blue'),
+      metric('OB REMOVED',fmt(k.obRemovedMt??k.wasteTonnes??k.misObQty,1,' t'),'Confirmed WB weight · MIS fallback for legacy shifts','blue'),
       metric('FRESH OUTPUT',isPending?'Allocation pending':fmt(p.finalProductionMt,1,' t'),isPending?'Crusher feed evidence required':'Recorded / allocated','amber'),
       metric('REHANDLING',fmt(p.oldStockExcludedMt,1,' t'),'Excluded from fresh output','blue'),
       metric('HSD ISSUED',fmt(k.hsdLitres,1,' L'),'Selected period','green'),
