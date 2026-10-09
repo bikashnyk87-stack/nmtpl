@@ -7,6 +7,7 @@ from openpyxl.utils import get_column_letter
 from pathlib import Path
 from uuid import uuid4
 import hashlib
+import hmac
 import json
 import re
 import logging
@@ -4092,6 +4093,80 @@ def _tiom_mis_reconciliation_snapshot(db,user,p,detail_limit=500):
 def get_tiom_mis_reconciliation(db,user,p):
     return _tiom_mis_reconciliation_snapshot(db,user,p,detail_limit=(p or {}).get('limit',500))
 
+
+TIOM_MIS_EDIT_KEY_CATEGORY='TIOM_MIS_EDIT_KEY_HASH'
+
+
+def _tiom_mis_edit_key_hash(value):
+    raw=str(value or '')
+    return hashlib.sha256(('TIOM_MIS_EDIT|'+raw).encode('utf-8')).hexdigest()
+
+
+def _tiom_mis_edit_key_configured(db):
+    return (db.scalar(select(func.count()).select_from(MasterOption).where(
+        MasterOption.category==TIOM_MIS_EDIT_KEY_CATEGORY
+    )) or 0)>0
+
+
+def _require_tiom_mis_edit_key(db,value):
+    raw=str(value or '')
+    row=db.scalar(select(MasterOption).where(
+        MasterOption.category==TIOM_MIS_EDIT_KEY_CATEGORY
+    ).limit(1))
+    if not row:
+        raise HTTPException(409,'Submitted-report Edit Key is not configured. Ask management to set it first.')
+    if not raw or not hmac.compare_digest(str(row.value),_tiom_mis_edit_key_hash(raw)):
+        raise HTTPException(403,'Invalid Edit Key.')
+    return True
+
+
+def save_tiom_mis_edit_key(db,user,p):
+    require(user,admin=True); p=p or {}
+    key=str(p.get('key') or '')
+    if len(key)<8 or len(key)>64:
+        raise HTTPException(422,'Edit Key must be 8–64 characters.')
+    db.execute(delete(MasterOption).where(MasterOption.category==TIOM_MIS_EDIT_KEY_CATEGORY))
+    db.add(MasterOption(category=TIOM_MIS_EDIT_KEY_CATEGORY,value=_tiom_mis_edit_key_hash(key)))
+    audit(db,user,'TIOM_MIS_EDIT_KEY_SET','master_options',TIOM_MIS_EDIT_KEY_CATEGORY,{'configured':True})
+    return {'ok':True,'message':'Submitted-report Edit Key saved. The key itself is not stored in plain text.'}
+
+
+def verify_tiom_mis_edit_key(db,user,p):
+    require(user,'PRODUCTION'); p=p or {}
+    _require_tiom_mis_edit_key(db,p.get('key'))
+    return {'ok':True,'message':'Edit Key verified.'}
+
+
+def _tiom_mis_edit_snapshot(db,report):
+    rows_,details=_tiom_report_rows(db,report.report_id)
+    row_ids=[r.row_id for r in rows_]
+    recs={x.row_id:x for x in db.scalars(select(TiomMisReconciliation).where(
+        TiomMisReconciliation.row_id.in_(row_ids)
+    ))} if row_ids else {}
+    return {
+        'reportId':report.report_id,'version':report.version or 1,'status':report.status,
+        'date':str(report.operating_date),'shift':report.shift,'vehicleId':report.vehicle_id,
+        'operatorId':report.operator_id or '','paperRef':report.paper_ref or '',
+        'openingKmr':float(report.opening_kmr) if report.opening_kmr is not None else None,
+        'closingKmr':float(report.closing_kmr) if report.closing_kmr is not None else None,
+        'openingHmr':float(report.opening_hmr) if report.opening_hmr is not None else None,
+        'closingHmr':float(report.closing_hmr) if report.closing_hmr is not None else None,
+        'notes':report.notes or '',
+        'rows':[{
+            'rowNo':r.row_no,
+            'loadingAt':aware(r.loading_at).astimezone(TZ).isoformat() if r.loading_at else None,
+            'unloadingAt':aware(r.unloading_at).astimezone(TZ).isoformat() if r.unloading_at else None,
+            'materialId':details[r.row_id].material_id if r.row_id in details else '',
+            'sourceLocationId':details[r.row_id].source_location_id if r.row_id in details else '',
+            'destinationLocationId':details[r.row_id].destination_location_id if r.row_id in details else '',
+            'machineId':details[r.row_id].machine_id if r.row_id in details else '',
+            'qtyMt':float(details[r.row_id].calculated_qty_mt) if r.row_id in details and details[r.row_id].calculated_qty_mt is not None else None,
+            'wbMovementKey':recs[r.row_id].wb_movement_key if r.row_id in recs else '',
+            'remarks':r.remarks or ''
+        } for r in rows_]
+    }
+
+
 def tiom_mis_desk(db,user,p):
     require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p)
     factors=_ensure_tiom_trip_factors(db,user)
@@ -4218,9 +4293,10 @@ def tiom_mis_desk(db,user,p):
         'factors':[{'id':x.factor_id,'materialCode':x.material_code,'factor':float(x.factor_mt_per_trip),'effectiveFrom':str(x.effective_from),'effectiveTo':str(x.effective_to) if x.effective_to else '','active':x.active,'notes':x.notes or ''} for x in factors],
         'deployments':_tiom_source_deployments(db,day,sh),
         'managementRecipients':_tiom_management_recipients(db),
+        'editKeyConfigured':_tiom_mis_edit_key_configured(db),
         'reports':[{
             'reportId':x.report_id,'date':str(x.operating_date),'shift':x.shift,
-            'vehicleId':x.vehicle_id,'operatorId':x.operator_id or '','status':x.status,
+            'vehicleId':x.vehicle_id,'operatorId':x.operator_id or '','status':x.status,'version':x.version or 1,
             'paperRef':x.paper_ref or '',
             'openingKmr':float(x.opening_kmr) if x.opening_kmr is not None else None,
             'closingKmr':float(x.closing_kmr) if x.closing_kmr is not None else None,
@@ -4231,7 +4307,9 @@ def tiom_mis_desk(db,user,p):
             'totalQtyMt':round(float(report_stats.get(x.report_id,{}).get('qty',0)),2),
             'wbLinkedTrips':report_stats.get(x.report_id,{}).get('wb',0),
             'factorTrips':report_stats.get(x.report_id,{}).get('factor',0),
-            'pendingTrips':report_stats.get(x.report_id,{}).get('pending',0)
+            'pendingTrips':report_stats.get(x.report_id,{}).get('pending',0),
+            'correctedBy':x.approved_by or '',
+            'correctedAt':x.approved_at.strftime('%d-%m %H:%M') if x.approved_at else ''
         } for x in reports],
         'summary':summary_today,
         'summaryToday':summary_today,
@@ -4308,6 +4386,9 @@ def get_tiom_mis_report(db,user,p):
         'closingHmr':float(report.closing_hmr) if report.closing_hmr is not None else None,
         'hmrRun':float(hmr_run) if hmr_run is not None else None,
         'paperRef':report.paper_ref or '','notes':report.notes or '','status':report.status,
+        'version':report.version or 1,'correctedBy':report.approved_by or '',
+        'correctedAt':report.approved_at.strftime('%d-%m-%Y %H:%M') if report.approved_at else '',
+        'editKeyConfigured':_tiom_mis_edit_key_configured(db),
         'rows':trip_rows,
         'meters':[], 'hmrSource':'CENTRAL_SITE_ASSET_METER',
         'siblingReports':[{'reportId':x.report_id,'vehicleId':x.vehicle_id,'vehicle':_tiom_asset_label(db.get(Equipment,x.vehicle_id)) if db.get(Equipment,x.vehicle_id) else x.vehicle_id,'operatorId':x.operator_id or '','operator':(db.get(Person,x.operator_id).name if x.operator_id and db.get(Person,x.operator_id) else x.operator_id or ''),'paperRef':x.paper_ref or '','status':x.status} for x in siblings]}
