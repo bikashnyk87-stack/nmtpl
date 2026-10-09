@@ -7,6 +7,8 @@ from openpyxl.utils import get_column_letter
 from pathlib import Path
 from uuid import uuid4
 import hashlib
+import hmac
+import secrets
 import json
 import re
 import logging
@@ -4092,6 +4094,121 @@ def _tiom_mis_reconciliation_snapshot(db,user,p,detail_limit=500):
 def get_tiom_mis_reconciliation(db,user,p):
     return _tiom_mis_reconciliation_snapshot(db,user,p,detail_limit=(p or {}).get('limit',500))
 
+
+TIOM_MIS_EDIT_KEY_CATEGORY='TIOM_MIS_EDIT_KEY_HASH'
+
+
+def _tiom_mis_edit_key_hash(value):
+    raw=str(value or '').encode('utf-8')
+    salt=secrets.token_bytes(16)
+    digest=hashlib.pbkdf2_hmac('sha256',raw,salt,200_000,dklen=20)
+    # 7 + 32 + 1 + 40 = exactly 80 chars; fits MasterOption.value.
+    return "pbkdf2:"+salt.hex()+":"+digest.hex()
+
+
+def _tiom_mis_edit_key_matches(value,stored):
+    try:
+        kind,salt_hex,expected=str(stored or '').split(':',2)
+        if kind!='pbkdf2':
+            return False
+        actual=hashlib.pbkdf2_hmac(
+            'sha256',str(value or '').encode('utf-8'),
+            bytes.fromhex(salt_hex),200_000,dklen=20
+        ).hex()
+        return hmac.compare_digest(actual,expected)
+    except (ValueError,TypeError):
+        return False
+
+
+def _tiom_mis_edit_key_configured(db):
+    return (db.scalar(select(func.count()).select_from(MasterOption).where(
+        MasterOption.category==TIOM_MIS_EDIT_KEY_CATEGORY
+    )) or 0)>0
+
+
+def _require_tiom_mis_edit_key(db,value):
+    raw=str(value or '')
+    row=db.scalar(select(MasterOption).where(
+        MasterOption.category==TIOM_MIS_EDIT_KEY_CATEGORY
+    ).limit(1))
+    if not row:
+        raise HTTPException(409,'Submitted-report Edit Key is not configured. Ask management to set it first.')
+    if not raw or not _tiom_mis_edit_key_matches(raw,row.value):
+        raise HTTPException(403,'Invalid Edit Key.')
+    return True
+
+
+def save_tiom_mis_edit_key(db,user,p):
+    require(user,admin=True); p=p or {}
+    key=str(p.get('key') or '')
+    if len(key)<8 or len(key)>64:
+        raise HTTPException(422,'Edit Key must be 8–64 characters.')
+    db.execute(delete(MasterOption).where(MasterOption.category==TIOM_MIS_EDIT_KEY_CATEGORY))
+    db.add(MasterOption(category=TIOM_MIS_EDIT_KEY_CATEGORY,value=_tiom_mis_edit_key_hash(key)))
+    audit(db,user,'TIOM_MIS_EDIT_KEY_SET','master_options',TIOM_MIS_EDIT_KEY_CATEGORY,{'configured':True})
+    return {'ok':True,'message':'Submitted-report Edit Key saved. The key itself is not stored in plain text.'}
+
+
+def verify_tiom_mis_edit_key(db,user,p):
+    require(user,'PRODUCTION'); p=p or {}
+    _require_tiom_mis_edit_key(db,p.get('key'))
+    return {'ok':True,'message':'Edit Key verified.'}
+
+
+def _tiom_mis_correction_meta(db,report_ids):
+    ids=[str(x) for x in (report_ids or []) if x]
+    if not ids:return {}
+    out={}
+    logs=list(db.scalars(select(AuditLog).where(
+        AuditLog.action=='TIOM_MIS_EDIT_SUBMITTED',
+        AuditLog.entity=='tiom_mis_report',
+        AuditLog.entity_id.in_(ids)
+    ).order_by(AuditLog.created_at.desc(),AuditLog.id.desc())))
+    for row in logs:
+        if row.entity_id not in out:
+            try: detail=json.loads(row.detail or '{}')
+            except Exception: detail={}
+            out[row.entity_id]={
+                'correctedBy':row.actor,
+                'correctedAt':aware(row.created_at).astimezone(TZ).strftime('%d-%m %H:%M') if row.created_at else '',
+                'correctedAtFull':aware(row.created_at).astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if row.created_at else '',
+                'reason':detail.get('reason') or '',
+                'fromVersion':detail.get('fromVersion'),
+                'toVersion':detail.get('toVersion')
+            }
+    return out
+
+
+def _tiom_mis_edit_snapshot(db,report):
+    rows_,details=_tiom_report_rows(db,report.report_id)
+    row_ids=[r.row_id for r in rows_]
+    recs={x.row_id:x for x in db.scalars(select(TiomMisReconciliation).where(
+        TiomMisReconciliation.row_id.in_(row_ids)
+    ))} if row_ids else {}
+    return {
+        'reportId':report.report_id,'version':report.version or 1,'status':report.status,
+        'date':str(report.operating_date),'shift':report.shift,'vehicleId':report.vehicle_id,
+        'operatorId':report.operator_id or '','paperRef':report.paper_ref or '',
+        'openingKmr':float(report.opening_kmr) if report.opening_kmr is not None else None,
+        'closingKmr':float(report.closing_kmr) if report.closing_kmr is not None else None,
+        'openingHmr':float(report.opening_hmr) if report.opening_hmr is not None else None,
+        'closingHmr':float(report.closing_hmr) if report.closing_hmr is not None else None,
+        'notes':report.notes or '',
+        'rows':[{
+            'rowNo':r.row_no,
+            'loadingAt':aware(r.loading_at).astimezone(TZ).isoformat() if r.loading_at else None,
+            'unloadingAt':aware(r.unloading_at).astimezone(TZ).isoformat() if r.unloading_at else None,
+            'materialId':details[r.row_id].material_id if r.row_id in details else '',
+            'sourceLocationId':details[r.row_id].source_location_id if r.row_id in details else '',
+            'destinationLocationId':details[r.row_id].destination_location_id if r.row_id in details else '',
+            'machineId':details[r.row_id].machine_id if r.row_id in details else '',
+            'qtyMt':float(details[r.row_id].calculated_qty_mt) if r.row_id in details and details[r.row_id].calculated_qty_mt is not None else None,
+            'wbMovementKey':recs[r.row_id].wb_movement_key if r.row_id in recs else '',
+            'remarks':r.remarks or ''
+        } for r in rows_]
+    }
+
+
 def tiom_mis_desk(db,user,p):
     require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p)
     factors=_ensure_tiom_trip_factors(db,user)
@@ -4186,6 +4303,7 @@ def tiom_mis_desk(db,user,p):
     deployment_machines=[e for e in equipment if e.group not in {'TRANSPORT','HSD_TANKER'}]
     summary_today=_tiom_mis_productivity_summary(db,day,day,sh)
     summary_range=_tiom_mis_productivity_summary(db,report_from,report_to,report_shift)
+    correction_meta=_tiom_mis_correction_meta(db,[x.report_id for x in reports])
 
     return {'date':str(day),'shift':sh,
         'reportFrom':str(report_from),'reportTo':str(report_to),'reportShift':report_shift,
@@ -4218,9 +4336,10 @@ def tiom_mis_desk(db,user,p):
         'factors':[{'id':x.factor_id,'materialCode':x.material_code,'factor':float(x.factor_mt_per_trip),'effectiveFrom':str(x.effective_from),'effectiveTo':str(x.effective_to) if x.effective_to else '','active':x.active,'notes':x.notes or ''} for x in factors],
         'deployments':_tiom_source_deployments(db,day,sh),
         'managementRecipients':_tiom_management_recipients(db),
+        'editKeyConfigured':_tiom_mis_edit_key_configured(db),
         'reports':[{
             'reportId':x.report_id,'date':str(x.operating_date),'shift':x.shift,
-            'vehicleId':x.vehicle_id,'operatorId':x.operator_id or '','status':x.status,
+            'vehicleId':x.vehicle_id,'operatorId':x.operator_id or '','status':x.status,'version':x.version or 1,
             'paperRef':x.paper_ref or '',
             'openingKmr':float(x.opening_kmr) if x.opening_kmr is not None else None,
             'closingKmr':float(x.closing_kmr) if x.closing_kmr is not None else None,
@@ -4231,7 +4350,10 @@ def tiom_mis_desk(db,user,p):
             'totalQtyMt':round(float(report_stats.get(x.report_id,{}).get('qty',0)),2),
             'wbLinkedTrips':report_stats.get(x.report_id,{}).get('wb',0),
             'factorTrips':report_stats.get(x.report_id,{}).get('factor',0),
-            'pendingTrips':report_stats.get(x.report_id,{}).get('pending',0)
+            'pendingTrips':report_stats.get(x.report_id,{}).get('pending',0),
+            'correctedBy':correction_meta.get(x.report_id,{}).get('correctedBy',''),
+            'correctedAt':correction_meta.get(x.report_id,{}).get('correctedAt',''),
+            'correctionReason':correction_meta.get(x.report_id,{}).get('reason','')
         } for x in reports],
         'summary':summary_today,
         'summaryToday':summary_today,
@@ -4298,6 +4420,7 @@ def get_tiom_mis_report(db,user,p):
             'benchRl':lead.bench_rl_m if lead else None,'routeMode':lead.route_mode if lead else '','leadKm':float(lead.lead_km) if lead and lead.lead_km is not None else None,'leadStatus':lead.lead_status if lead else 'NOT_CAPTURED',
             'wbMovementKey':rec.wb_movement_key if rec and rec.wb_movement_key else '', 'wbMovementNo':wb.movement_no if wb else '', 'quantitySource':'WB' if wb else 'TRIP_FACTOR'})
     hmr_run=(report.closing_hmr-report.opening_hmr) if report.opening_hmr is not None and report.closing_hmr is not None and report.closing_hmr>=report.opening_hmr else None
+    correction_meta=_tiom_mis_correction_meta(db,[report.report_id]).get(report.report_id,{})
     siblings=list(db.scalars(select(TiomMisReport).where(
         TiomMisReport.operating_date==report.operating_date,TiomMisReport.shift==report.shift
     ).order_by(TiomMisReport.vehicle_id,TiomMisReport.entered_at)))
@@ -4308,18 +4431,39 @@ def get_tiom_mis_report(db,user,p):
         'closingHmr':float(report.closing_hmr) if report.closing_hmr is not None else None,
         'hmrRun':float(hmr_run) if hmr_run is not None else None,
         'paperRef':report.paper_ref or '','notes':report.notes or '','status':report.status,
+        'version':report.version or 1,'correctedBy':correction_meta.get('correctedBy',''),
+        'correctedAt':correction_meta.get('correctedAtFull',''),'correctionReason':correction_meta.get('reason',''),
+        'editKeyConfigured':_tiom_mis_edit_key_configured(db),
         'rows':trip_rows,
         'meters':[], 'hmrSource':'CENTRAL_SITE_ASSET_METER',
         'siblingReports':[{'reportId':x.report_id,'vehicleId':x.vehicle_id,'vehicle':_tiom_asset_label(db.get(Equipment,x.vehicle_id)) if db.get(Equipment,x.vehicle_id) else x.vehicle_id,'operatorId':x.operator_id or '','operator':(db.get(Person,x.operator_id).name if x.operator_id and db.get(Person,x.operator_id) else x.operator_id or ''),'paperRef':x.paper_ref or '','status':x.status} for x in siblings]}
 
 def save_tiom_mis_report(db,user,p,submit=False):
-    require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p); open_shift(db,day,sh); _ensure_tiom_trip_factors(db,user)
+    require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p); _ensure_tiom_trip_factors(db,user)
+    report_id=str(p.get('reportId') or '').strip(); report=db.get(TiomMisReport,report_id) if report_id else None
+    if report and report.status=='VOID':
+        raise HTTPException(409,'VOID report is immutable.')
+    is_correction=bool(report and report.status=='SUBMITTED')
+    edit_reason=''
+    before_snapshot=None
+    correction_wb_keys=set()
+    old_version=(report.version or 1) if report else None
+    old_vehicle_id=report.vehicle_id if report else None
+    if is_correction:
+        if not submit:
+            raise HTTPException(409,'A submitted report correction must be saved directly as a corrected submitted version.')
+        _require_tiom_mis_edit_key(db,p.get('editKey'))
+        edit_reason=short(str(p.get('editReason') or '')).strip()
+        if len(edit_reason)<5:
+            raise HTTPException(422,'Enter a clear Edit Reason (minimum 5 characters).')
+        before_snapshot=_tiom_mis_edit_snapshot(db,report)
+        correction_wb_keys={str(x.get('wbMovementKey') or '') for x in before_snapshot.get('rows',[]) if x.get('wbMovementKey')}
+    else:
+        open_shift(db,day,sh)
     vehicle=active_resource(db,Equipment,str(p.get('vehicleId') or '').strip())
     if vehicle.group!='TRANSPORT': raise HTTPException(422,'Choose a tripper/dumper vehicle.')
     operator_id=str(p.get('operatorId') or '').strip() or None
     if operator_id: active_resource(db,Person,operator_id)
-    report_id=str(p.get('reportId') or '').strip(); report=db.get(TiomMisReport,report_id) if report_id else None
-    if report and report.status in {'SUBMITTED','VOID'}: raise HTTPException(409,'Submitted/void report is immutable. Void the submitted report and create a new corrected report.')
     if not report:
         report=TiomMisReport(report_id=str(uuid4()),operating_date=day,shift=sh,vehicle_id=vehicle.machine_id,operator_id=operator_id,status='DRAFT',entered_by=user.login_id,entered_at=now_local(),version=1)
         db.add(report); db.flush()
@@ -4338,8 +4482,18 @@ def save_tiom_mis_report(db,user,p,submit=False):
         raise HTTPException(422,'Closing HMR cannot be below opening HMR.')
 
     # Driver HMR uses the same central shift-level meter ledger as Shift Deployment.
+    marker=f'[DRIVER_REPORT:{report.report_id}]'
+    # Correct only the meter owned by this exact driver report.
+    if old_vehicle_id:
+        old_meter=db.scalar(select(SiteAssetMeter).where(
+            SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,SiteAssetMeter.shift==sh,
+            SiteAssetMeter.asset_id==old_vehicle_id,SiteAssetMeter.meter_type=='HMR'
+        ))
+        if old_meter and old_meter.source_type=='TIOM_DRIVER_REPORT' and marker in str(old_meter.remarks or '') and (
+            old_vehicle_id!=vehicle.machine_id or (report.opening_hmr is None and report.closing_hmr is None)
+        ):
+            db.delete(old_meter); db.flush()
     if report.opening_hmr is not None or report.closing_hmr is not None:
-        marker=f'[DRIVER_REPORT:{report.report_id}]'
         meter=db.scalar(select(SiteAssetMeter).where(
             SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,SiteAssetMeter.shift==sh,
             SiteAssetMeter.asset_id==vehicle.machine_id,SiteAssetMeter.meter_type=='HMR'
@@ -4381,6 +4535,13 @@ def save_tiom_mis_report(db,user,p,submit=False):
     )))
     batch,wb_rows=tiom_authoritative_wb(db,day,sh)
     wbmap={w.movement_key:w for w in wb_rows}
+    # A historical correction may reference the exact WB rows already owned by
+    # this report even if a later confirmed batch superseded them. Allow only
+    # those pre-existing keys; never expose unrelated superseded WB movements.
+    missing_owned=correction_wb_keys-set(wbmap)
+    if missing_owned:
+        for old_wb in db.scalars(select(WbMovement).where(WbMovement.movement_key.in_(missing_owned))):
+            wbmap[old_wb.movement_key]=old_wb
     already_linked={r.wb_movement_key:r.row_id for r in db.scalars(select(TiomMisReconciliation).where(TiomMisReconciliation.wb_movement_key.is_not(None)))}
     source_contexts=_tiom_source_context_map(db,day,sh)
     kept=0; linked_count=0; lead_ok_count=0; lead_missing_count=0
@@ -4390,7 +4551,7 @@ def save_tiom_mis_report(db,user,p,submit=False):
         material_id=str(item.get('materialId') or '').strip(); source_id=str(item.get('sourceLocationId') or '').strip(); dest_id=str(item.get('destinationLocationId') or '').strip(); machine_id=str(item.get('machineId') or '').strip(); lt=str(item.get('loadingTime') or '').strip(); ut=str(item.get('unloadingTime') or '').strip()
         if not any([wb_key,material_id,source_id,dest_id,machine_id,lt,ut]): continue
         wb=wbmap.get(wb_key) if wb_key else None
-        if wb_key and not wb: raise HTTPException(409,f'Row {i}: selected WB movement is not in the active confirmed WB batch for {day} Shift {sh}.')
+        if wb_key and not wb: raise HTTPException(409,f'Row {i}: selected WB movement is not in the active confirmed WB batch for {day} Shift {sh}, and it was not already linked to this report.')
         if wb and not tiom_wb_vehicle_matches(wb,vehicle): raise HTTPException(422,f'Row {i}: WB movement {wb.movement_no} belongs to a different vehicle.')
         if wb_key and wb_key in already_linked: raise HTTPException(409,f'Row {i}: WB movement {wb.movement_no} is already linked to another MIS trip.')
         if wb:
@@ -4413,6 +4574,8 @@ def save_tiom_mis_report(db,user,p,submit=False):
             unloading+=timedelta(days=1)
         dep_matches=[d for d in deployments if d.source_location_id==source_id and d.machine_id==machine_id]
         if not dep_matches:
+            if is_correction:
+                raise HTTPException(409,f'Row {i}: corrected source / loader assignment is not in Machine Setup for {day} Shift {sh}. Update Machine Setup first, then save the correction.')
             # Existing assignment at another source must be closed before
             # this machine can be used here; do not silently create a second
             # overlapping allocation from a trip row.
@@ -4482,11 +4645,23 @@ def save_tiom_mis_report(db,user,p,submit=False):
         if not meter:
             meter=SiteAssetMeter(reading_id=str(uuid4()),site_id='TIOM',operating_date=day,shift=sh,asset_id=asset.machine_id,meter_type='HMR',entered_by=user.login_id,entered_at=now_local()); db.add(meter)
         meter.opening_reading=opening; meter.closing_reading=closing; meter.usage=usage; meter.source_type='TIOM_DEPLOYMENT'; meter.remarks=short(str(item.get('remarks') or 'Legacy MIS HMR migrated to Shift Deployment')); meter.entered_by=user.login_id; meter.entered_at=now_local(); legacy_hmr+=1
-    report.status='SUBMITTED' if submit else 'DRAFT'
-    if submit: report.submitted_by=user.login_id; report.submitted_at=now_local()
-    audit(db,user,'TIOM_MIS_SUBMIT' if submit else 'TIOM_MIS_DRAFT','tiom_mis_report',report.report_id,{'date':str(day),'shift':sh,'vehicle':vehicle.machine_id,'rows':kept,'wbLinkedRows':linked_count,'leadResolvedRows':lead_ok_count,'leadMissingRows':lead_missing_count,'legacyHmrMigrated':legacy_hmr})
+    if is_correction:
+        report.status='SUBMITTED'
+        db.flush()
+        after_snapshot=_tiom_mis_edit_snapshot(db,report)
+        audit(db,user,'TIOM_MIS_EDIT_SUBMITTED','tiom_mis_report',report.report_id,{
+            'reason':edit_reason,'fromVersion':old_version,'toVersion':report.version,
+            'before':before_snapshot,'after':after_snapshot,
+            'rows':kept,'wbLinkedRows':linked_count,'leadResolvedRows':lead_ok_count,'leadMissingRows':lead_missing_count
+        })
+        message=f'Submitted report corrected and saved as version {report.version}.'
+    else:
+        report.status='SUBMITTED' if submit else 'DRAFT'
+        if submit: report.submitted_by=user.login_id; report.submitted_at=now_local()
+        audit(db,user,'TIOM_MIS_SUBMIT' if submit else 'TIOM_MIS_DRAFT','tiom_mis_report',report.report_id,{'date':str(day),'shift':sh,'vehicle':vehicle.machine_id,'rows':kept,'wbLinkedRows':linked_count,'leadResolvedRows':lead_ok_count,'leadMissingRows':lead_missing_count,'legacyHmrMigrated':legacy_hmr})
+        message='MIS shift report submitted.' if submit else 'MIS draft saved.'
     db.flush()
-    return {'ok':True,'message':('MIS shift report submitted.' if submit else 'MIS draft saved.'),'reportId':report.report_id,'status':report.status,'wbLinkedRows':linked_count,'leadResolvedRows':lead_ok_count,'leadMissingRows':lead_missing_count,'summary':_tiom_mis_shift_summary(db,day,sh)}
+    return {'ok':True,'message':message,'reportId':report.report_id,'status':report.status,'version':report.version or 1,'corrected':is_correction,'wbLinkedRows':linked_count,'leadResolvedRows':lead_ok_count,'leadMissingRows':lead_missing_count,'summary':_tiom_mis_shift_summary(db,day,sh)}
 
 def save_tiom_trip_factor(db,user,p):
     require(user,admin=True); p=p or {}; code=str(p.get('materialCode') or '').strip().upper()
@@ -5596,15 +5771,37 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
         'Machine ID','Loader / Excavator','Qty MT','Remarks','Entered By','Entered At','Submitted By','Submitted At'
     ],detail_rows,[12,8,14,38,16,15,26,14,26,12,12,12,12,12,12,8,12,12,15,30,15,30,15,30,18,28,12,38,15,20,15,20])
 
+    export_correction_meta=_tiom_mis_correction_meta(db,report_ids)
     audit_rows=[[
         str(r.operating_date),r.shift,r.report_id,r.vehicle_id,label_eq(r.vehicle_id),r.operator_id or '',label_person(r.operator_id),
-        r.paper_ref or '',r.status,r.opening_kmr,r.closing_kmr,r.opening_hmr,r.closing_hmr,r.notes or '',
-        r.entered_by,local_dt(r.entered_at),r.submitted_by or '',local_dt(r.submitted_at)
+        r.paper_ref or '',r.status,r.version or 1,r.opening_kmr,r.closing_kmr,r.opening_hmr,r.closing_hmr,r.notes or '',
+        r.entered_by,local_dt(r.entered_at),r.submitted_by or '',local_dt(r.submitted_at),
+        export_correction_meta.get(r.report_id,{}).get('correctedBy',''),
+        export_correction_meta.get(r.report_id,{}).get('correctedAtFull','')
     ] for r in reports]
     add_sheet('Saved Report Audit',[
-        'Date','Shift','Report ID','Vehicle ID','Tripper','Driver ID','Driver','Report Ref','Status',
-        'Opening KMR','Closing KMR','Opening HMR','Closing HMR','Notes','Entered By','Entered At','Submitted By','Submitted At'
-    ],audit_rows,[12,8,38,15,26,14,26,16,12,12,12,12,12,38,15,20,15,20])
+        'Date','Shift','Report ID','Vehicle ID','Tripper','Driver ID','Driver','Report Ref','Status','Version',
+        'Opening KMR','Closing KMR','Opening HMR','Closing HMR','Notes','Entered By','Entered At','Submitted By','Submitted At','Last Corrected By','Last Corrected At'
+    ],audit_rows,[12,8,38,15,26,14,26,16,12,10,12,12,12,12,38,15,20,15,20,18,20])
+
+    edit_logs=list(db.scalars(select(AuditLog).where(
+        AuditLog.action=='TIOM_MIS_EDIT_SUBMITTED',
+        AuditLog.entity=='tiom_mis_report',
+        AuditLog.entity_id.in_(report_ids)
+    ).order_by(AuditLog.created_at))) if report_ids else []
+    correction_rows=[]
+    for log_row in edit_logs:
+        try: detail=json.loads(log_row.detail or '{}')
+        except Exception: detail={}
+        correction_rows.append([
+            local_dt(log_row.created_at),log_row.actor,log_row.entity_id,
+            detail.get('fromVersion'),detail.get('toVersion'),detail.get('reason') or '',
+            detail.get('rows'),detail.get('wbLinkedRows'),detail.get('leadResolvedRows'),detail.get('leadMissingRows')
+        ])
+    add_sheet('Correction Audit',[
+        'Corrected At','Corrected By','Report ID','From Version','To Version','Edit Reason',
+        'Trip Rows','WB-linked Rows','Lead Resolved','Lead Missing'
+    ],correction_rows,[20,18,38,12,12,48,12,14,14,14])
 
     buf=BytesIO();book.save(buf);buf.seek(0)
     name=f"TIOM_Entry_Detail_{from_day}_to_{to_day}_{shift}.xlsx"
@@ -5616,7 +5813,7 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
 def rpc(p: RPC, request: Request, db: Session = Depends(get_db)):
     csrf(request)
     user = get_user(db, request)
-    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'getTiomMisReconciliation', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
+    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'verifyTiomMisEditKey', 'getTiomMisReconciliation', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
     if p.method not in read_methods:
         lock(db)
     try:
@@ -5669,6 +5866,7 @@ def dispatch(db, user, method, args):
     if method == 'getProductionDesk': return production_desk(db,user)
     if method == 'getTiomMisDesk': return tiom_mis_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomMisReport': return get_tiom_mis_report(db,user,args[0] if args and isinstance(args[0],dict) else {})
+    if method == 'verifyTiomMisEditKey': return verify_tiom_mis_edit_key(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomMisReconciliation': return get_tiom_mis_reconciliation(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomWbSuggestions': return get_tiom_wb_suggestions(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomWbHistory': return get_tiom_wb_history(db,user,args[0] if args and isinstance(args[0],dict) else {})
@@ -5692,6 +5890,7 @@ def dispatch(db, user, method, args):
     if method == 'markTripLoaded': return transition_trip(db,user,args[0] if args else {},'LOADED')
     if method == 'markTripUnloaded': return transition_trip(db,user,args[0] if args else {},'UNLOADED')
     if method == 'saveTiomMisDraft': return save_tiom_mis_report(db,user,args[0] if args else {},False)
+    if method == 'saveTiomMisEditKey': return save_tiom_mis_edit_key(db,user,args[0] if args else {})
     if method == 'submitTiomMisReport': return save_tiom_mis_report(db,user,args[0] if args else {},True)
     if method == 'saveTiomSourceDeployments': return save_tiom_source_deployments(db,user,args[0] if args else {})
     if method == 'saveTiomDrillingShift': return save_tiom_drilling_shift(db,user,args[0] if args else {})

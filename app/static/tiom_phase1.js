@@ -1,7 +1,7 @@
 /* TIOM Phase 1.6 — ERP hardening, compact software UI and deployment-owned HMR. */
 (function(){
   const legacyLoadProduction = window.loadProduction;
-  const T={prodTab:'SITE',mis:null,misReportId:'',misRows:15,depRows:20,faceRows:4,wbSuggestions:[],openReportAfterLoad:'',drill:null,shiftProd:null,shiftProdRows:6,hsdTab:'FILL',hsd:null,hsdRows:10};
+  const T={prodTab:'SITE',mis:null,misReportId:'',misReportStatus:'',misRows:15,depRows:20,faceRows:4,wbSuggestions:[],openReportAfterLoad:'',unlockAfterLoad:false,misEditMode:false,misEditKey:'',misEditReason:'',currentMisReport:null,drill:null,shiftProd:null,shiftProdRows:6,hsdTab:'FILL',hsd:null,hsdRows:10};
   function uiStateKey(kind){const u=NMTPLNet.safeUser(S.boot?.user?.loginId||S.boot?.user?.name||'anonymous');return `NMTPL_TIOM_UI:${u}:${kind}`}
   function getUiState(kind,fallback){try{return sessionStorage.getItem(uiStateKey(kind))||fallback}catch(_){return fallback}}
   function setUiState(kind,value){try{sessionStorage.setItem(uiStateKey(kind),String(value||''))}catch(_){}}
@@ -62,14 +62,14 @@
 
   function tiomDraftUser(){return NMTPLNet.safeUser(S.boot?.user?.loginId||S.boot?.user?.name||'anonymous')}
   function misDraftKey(){return `NMTPL_TIOM_DRAFT:${tiomDraftUser()}:MIS:${v('tm_date')||S.boot.today}:${v('tm_shift')||S.boot.shift}`}
-  function draftSave(){try{localStorage.setItem(misDraftKey(),JSON.stringify(collectMis(false)));const x=q('tm_draft_state');if(x)x.textContent='Local draft saved';}catch(_){}}
+  function draftSave(){if(T.misEditMode||T.misReportStatus==='SUBMITTED'||T.misReportStatus==='VOID')return;try{localStorage.setItem(misDraftKey(),JSON.stringify(collectMis(false)));const x=q('tm_draft_state');if(x)x.textContent='Local draft saved';}catch(_){}}
   function draftRestore(){try{const raw=localStorage.getItem(misDraftKey());if(!raw)return;fillMisForm(JSON.parse(raw),true)}catch(_){}}
   function renderMisEntry(){
     const d=T.mis;
-    html('tiom_prod_body',`<div class="tiom-mis-toolbar"><b>MIS DRIVER SHIFT ENTRY</b><label>Date<input id="tm_date" type="date" value="${safe(d?.date||S.boot.today)}"></label><label>Shift<select id="tm_shift">${shiftOpts(d?.shift||S.boot.shift)}</select></label><button class="btn primary small" onclick="loadTiomMis()">Load</button><span id="tm_draft_state" class="tiom-state"></span></div><div id="tiom_mis_body"><div class="loading">Loading MIS entry…</div></div>`);
+    html('tiom_prod_body',`<div class="tiom-mis-toolbar"><b>MIS DRIVER SHIFT ENTRY</b><label>Date<input id="tm_date" type="date" value="${safe(d?.date||S.boot.today)}"></label><label>Shift<select id="tm_shift">${shiftOpts(d?.shift||S.boot.shift)}</select></label><button id="tm_load" class="btn primary small" onclick="loadTiomMis()">Load</button><span id="tm_draft_state" class="tiom-state"></span></div><div id="tiom_mis_body"><div class="loading">Loading MIS entry…</div></div>`);
     loadTiomMis();
   }
-  window.loadTiomMis=function(){appRun(function(d){T.mis=d;T.misReportId='';T.depRows=Math.max(20,(d.deployments||[]).length);T.misRows=15;renderMisDesk();setTimeout(()=>{draftRestore();if(T.openReportAfterLoad){const id=T.openReportAfterLoad;T.openReportAfterLoad='';loadMisReport(id)}},0)},function(e){html('tiom_mis_body',`<div class="bad">${safe(e.message)}</div>`)}).getTiomMisDesk({date:v('tm_date')||S.boot.today,shift:v('tm_shift')||S.boot.shift})};
+  window.loadTiomMis=function(){appRun(function(d){T.mis=d;T.misReportId='';T.misReportStatus='';T.currentMisReport=null;T.depRows=Math.max(20,(d.deployments||[]).length);T.misRows=15;renderMisDesk();setTimeout(()=>{draftRestore();if(T.openReportAfterLoad){const id=T.openReportAfterLoad,unlock=T.unlockAfterLoad;T.openReportAfterLoad='';T.unlockAfterLoad=false;loadMisReport(id,unlock)}},0)},function(e){html('tiom_mis_body',`<div class="bad">${safe(e.message)}</div>`)}).getTiomMisDesk({date:v('tm_date')||S.boot.today,shift:v('tm_shift')||S.boot.shift})};
 
   function renderMisDesk(){
     const d=T.mis;if(!d)return;
@@ -202,24 +202,81 @@
     const output=[...filled,original,...Array.from({length:copies},()=>({...safeCopy}))];
     T.misRows=Math.max(15,output.length);renderMisRows(output);draftSave();
   };
-  window.saveMis=function(submit){const payload=collectMis(true);appRun(function(r){T.misReportId=r.reportId;toast(r.message);try{localStorage.removeItem(misDraftKey())}catch(_){}loadTiomMis()},function(e){toast(e.message,true)})[submit?'submitTiomMisReport':'saveTiomMisDraft'](payload)};
-  window.clearMisForm=function(){if(!confirm('Clear this driver shift form? Unsaved entries in this form will be removed.'))return;try{localStorage.removeItem(misDraftKey())}catch(_){}T.misReportId='';T.depRows=Math.max(20,(T.mis?.deployments||[]).length);T.misRows=15;T.lastVehicleId='';renderMisDesk()};
-  window.newMisReport=function(){T.misReportId='';T.depRows=Math.max(20,(T.mis?.deployments||[]).length);T.misRows=15;T.lastVehicleId='';renderMisDesk()};
-  window.loadMisReport=function(id){appRun(function(r){T.misReportId=id;fillMisForm(r,false);const b=q('mis_status_badge');if(b)b.textContent=r.status},function(e){toast(e.message,true)}).getTiomMisReport({reportId:id})};
+  function resetMisEditState(){T.misEditMode=false;T.misEditKey='';T.misEditReason=''}
+  function setMisContextLocked(locked){['tm_date','tm_shift','tm_load'].forEach(id=>{if(q(id))q(id).disabled=!!locked})}
+  function renderMisEditBanner(){
+    var old=q('mis_edit_banner');if(old)old.remove();
+    if(!T.misEditMode||!T.currentMisReport)return;
+    var el=document.createElement('div');el.id='mis_edit_banner';el.className='panel tiom-sap-card';
+    el.innerHTML='<div class="tiom-card-title"><div><b>AUTHORIZED CORRECTION MODE</b><span>Submitted report · version '+safe(T.currentMisReport.version||1)+' → '+safe(Number(T.currentMisReport.version||1)+1)+'</span></div><button class="btn secondary tiny" onclick="cancelMisEdit()">Cancel Edit</button></div><div class="tiom-help"><b>Reason:</b> '+safe(T.misEditReason)+' · The original submitted version remains in the audit trail.</div>';
+    if(q('tm_driver_panel'))q('tm_driver_panel').before(el);
+    if(q('tm_save_draft'))q('tm_save_draft').disabled=true;
+    if(q('tm_submit')){q('tm_submit').disabled=false;q('tm_submit').textContent='Save Corrected Version'}
+    if(q('tm_draft_state'))q('tm_draft_state').textContent='Correction mode — changes are audit logged.';
+  }
+  window.saveMis=function(submit){
+    const payload=collectMis(true);
+    if(T.misEditMode){
+      payload.editKey=T.misEditKey;payload.editReason=T.misEditReason;
+      appRun(function(r){const id=r.reportId;toast(r.message);resetMisEditState();T.openReportAfterLoad=id;loadTiomMis()},function(e){toast(e.message,true)}).submitTiomMisReport(payload);
+      return;
+    }
+    appRun(function(r){T.misReportId=r.reportId;toast(r.message);try{localStorage.removeItem(misDraftKey())}catch(_){}loadTiomMis()},function(e){toast(e.message,true)})[submit?'submitTiomMisReport':'saveTiomMisDraft'](payload)
+  };
+  window.clearMisForm=function(){if(!confirm('Clear this driver shift form? Unsaved entries in this form will be removed.'))return;try{localStorage.removeItem(misDraftKey())}catch(_){}resetMisEditState();T.misReportId='';T.misReportStatus='';T.currentMisReport=null;T.depRows=Math.max(20,(T.mis?.deployments||[]).length);T.misRows=15;T.lastVehicleId='';setMisContextLocked(false);renderMisDesk()};
+  window.newMisReport=function(){resetMisEditState();T.misReportId='';T.misReportStatus='';T.currentMisReport=null;T.depRows=Math.max(20,(T.mis?.deployments||[]).length);T.misRows=15;T.lastVehicleId='';setMisContextLocked(false);renderMisDesk()};
+  window.loadMisReport=function(id,unlockAfter){
+    resetMisEditState();
+    appRun(function(r){T.misReportId=id;T.misReportStatus=r.status||'';T.currentMisReport=r;fillMisForm(r,false);const b=q('mis_status_badge');if(b)b.textContent=r.status+(r.version?' · v'+r.version:'');if(unlockAfter&&r.status==='SUBMITTED')setTimeout(requestMisEdit,0)},function(e){toast(e.message,true)}).getTiomMisReport({reportId:id})
+  };
   function renderMisViewNav(r){
     var old=q('mis_view_nav');if(old)old.remove();
     if(!r||!r.reportId||!Array.isArray(r.siblingReports))return;
     var options=r.siblingReports.map(function(x){
       return '<option value="'+safe(x.reportId)+'" '+(x.reportId===r.reportId?'selected':'')+'>'+safe(x.vehicle||x.vehicleId)+' · '+safe(x.operator||x.operatorId||'No driver')+' · '+safe(x.paperRef||'No ref')+' · '+safe(x.status)+'</option>';
     }).join('');
+    var editButton=r.status==='SUBMITTED'?'<button class="btn primary tiny" onclick="requestMisEdit()">Edit (Key)</button>':'';
+    var corrected=r.correctedBy?'<span>Last corrected by '+safe(r.correctedBy)+(r.correctedAt?' · '+safe(r.correctedAt):'')+'</span>':'';
     var el=document.createElement('div');el.id='mis_view_nav';el.className='panel tiom-sap-card tiom-report-switcher';
-    el.innerHTML='<div class="tiom-card-title"><div><b>VIEWING SAVED TRIPPER REPORT</b><span>'+safe(r.date)+' · Shift '+safe(r.shift)+' · switch trippers without leaving this screen</span></div><div class="report-buttons"><button class="btn secondary tiny" onclick="backToSavedReports()">← Saved Reports</button><button class="btn primary tiny" onclick="newMisReport()">New Report</button></div></div><div class="tiom-driver-grid"><label>Select another Tripper / Report<select id="tm_report_switch" onchange="viewSiblingMisReport(this.value)">'+options+'</select></label><label>Current status<input readonly value="'+safe(r.status)+'"></label></div>';
+    el.innerHTML='<div class="tiom-card-title"><div><b>VIEWING SAVED TRIPPER REPORT</b><span>'+safe(r.date)+' · Shift '+safe(r.shift)+' · version '+safe(r.version||1)+'</span>'+corrected+'</div><div class="report-buttons">'+editButton+'<button class="btn secondary tiny" onclick="backToSavedReports()">← Saved Reports</button><button class="btn primary tiny" onclick="newMisReport()">New Report</button></div></div><div class="tiom-driver-grid"><label>Select another Tripper / Report<select id="tm_report_switch" onchange="viewSiblingMisReport(this.value)">'+options+'</select></label><label>Current status<input readonly value="'+safe(r.status)+' · v'+safe(r.version||1)+'"></label></div>';
     if(q('tm_driver_panel'))q('tm_driver_panel').before(el);
   }
-  window.viewSiblingMisReport=function(id){if(id&&id!==T.misReportId)loadMisReport(id)};
-  window.backToSavedReports=function(){T.prodTab='SAVED';tiomProdTab('SAVED')};
-  function setMisLocked(locked){['tm_driver_panel','tm_trip_panel'].forEach(id=>q(id)?.querySelectorAll('input,select,button').forEach(el=>el.disabled=!!locked));q('tm_save_draft')&&(q('tm_save_draft').disabled=!!locked);q('tm_submit')&&(q('tm_submit').disabled=!!locked);if(locked&&q('tm_draft_state'))q('tm_draft_state').textContent='Submitted report is read-only. Void and re-enter for correction.'}
-  function fillMisForm(r,local){if(!r)return;if(r.date&&q('tm_date'))q('tm_date').value=r.date;if(r.shift&&q('tm_shift'))q('tm_shift').value=r.shift;comboSet('tm_vehicle',r.vehicleId||'');comboSet('tm_operator',r.operatorId||'');if(q('tm_ref'))q('tm_ref').value=r.paperRef||'';if(q('tm_open_kmr'))q('tm_open_kmr').value=r.openingKmr??'';if(q('tm_close_kmr'))q('tm_close_kmr').value=r.closingKmr??'';if(q('tm_open_hmr'))q('tm_open_hmr').value=r.openingHmr??'';if(q('tm_close_hmr'))q('tm_close_hmr').value=r.closingHmr??'';if(q('tm_notes'))q('tm_notes').value=r.notes||'';T.misRows=Math.max(15,Math.min(80,(r.rows||[]).length||15));renderMisRows(r.rows||[]);wireKmrCalc();wireDriverMeterCalc();setMisLocked(r.status==='SUBMITTED'||r.status==='VOID');renderMisViewNav(local?null:r);if(local&&q('tm_draft_state'))q('tm_draft_state').textContent='Local draft restored'}
+  window.viewSiblingMisReport=function(id){if(id&&id!==T.misReportId)loadMisReport(id,false)};
+  window.backToSavedReports=function(){resetMisEditState();T.prodTab='SAVED';tiomProdTab('SAVED')};
+  function setMisLocked(locked){
+    ['tm_driver_panel','tm_trip_panel'].forEach(id=>q(id)?.querySelectorAll('input,select,button').forEach(el=>el.disabled=!!locked));
+    if(q('tm_save_draft'))q('tm_save_draft').disabled=!!locked;
+    if(q('tm_submit')){q('tm_submit').disabled=!!locked;q('tm_submit').textContent='Submit Shift Report'}
+    if(locked&&q('tm_draft_state'))q('tm_draft_state').textContent=T.misReportStatus==='VOID'?'VOID report is permanently read-only.':'Submitted report is read-only. Use Edit (Key) for an authorized correction.';
+  }
+  function fillMisForm(r,local){
+    if(!r)return;
+    T.misReportStatus=r.status||'';T.currentMisReport=local?null:r;
+    if(r.date&&q('tm_date'))q('tm_date').value=r.date;if(r.shift&&q('tm_shift'))q('tm_shift').value=r.shift;
+    comboSet('tm_vehicle',r.vehicleId||'');comboSet('tm_operator',r.operatorId||'');if(q('tm_ref'))q('tm_ref').value=r.paperRef||'';
+    if(q('tm_open_kmr'))q('tm_open_kmr').value=r.openingKmr??'';if(q('tm_close_kmr'))q('tm_close_kmr').value=r.closingKmr??'';
+    if(q('tm_open_hmr'))q('tm_open_hmr').value=r.openingHmr??'';if(q('tm_close_hmr'))q('tm_close_hmr').value=r.closingHmr??'';
+    if(q('tm_notes'))q('tm_notes').value=r.notes||'';
+    T.misRows=Math.max(15,Math.min(80,(r.rows||[]).length||15));renderMisRows(r.rows||[]);wireKmrCalc();wireDriverMeterCalc();
+    setMisContextLocked(!local&&!!r.reportId);
+    setMisLocked(r.status==='SUBMITTED'||r.status==='VOID');
+    renderMisViewNav(local?null:r);
+    if(local&&q('tm_draft_state'))q('tm_draft_state').textContent='Local draft restored'
+  }
+  window.requestMisEdit=function(){
+    var r=T.currentMisReport;if(!r||r.status!=='SUBMITTED'){toast('Open a submitted report first.',true);return}
+    if(!r.editKeyConfigured){toast('Submitted-report Edit Key is not configured. Management must set it first.',true);return}
+    var dlg=q('option_dialog');if(!dlg)return;
+    dlg.innerHTML='<form method="dialog" class="panel" onsubmit="event.preventDefault();confirmMisEditUnlock()"><h3>Unlock Submitted Report Edit</h3><p class="note">Report '+safe(r.vehicleId)+' · '+safe(r.date)+' · Shift '+safe(r.shift)+' · version '+safe(r.version||1)+'</p><label>Edit Key<input id="tm_edit_key" type="password" autocomplete="off" minlength="8" maxlength="64" required></label><label>Edit Reason<textarea id="tm_edit_reason" minlength="5" maxlength="300" required placeholder="Why is this submitted entry being corrected?"></textarea></label><div id="tm_edit_error" class="bad-text"></div><div class="btnrow"><button type="button" class="btn secondary" onclick="option_dialog.close()">Cancel</button><button type="submit" class="btn primary">Unlock Edit</button></div></form>';
+    dlg.showModal();setTimeout(()=>q('tm_edit_key')?.focus(),0)
+  };
+  window.confirmMisEditUnlock=function(){
+    var key=v('tm_edit_key'),reason=v('tm_edit_reason').trim();
+    if(key.length<8){if(q('tm_edit_error'))q('tm_edit_error').textContent='Enter the Edit Key.';return}
+    if(reason.length<5){if(q('tm_edit_error'))q('tm_edit_error').textContent='Enter a clear Edit Reason.';return}
+    appRun(function(){T.misEditMode=true;T.misEditKey=key;T.misEditReason=reason;q('option_dialog')?.close();setMisLocked(false);setMisContextLocked(true);renderMisEditBanner();toast('Submitted report unlocked for this correction only.')},function(e){if(q('tm_edit_error'))q('tm_edit_error').textContent=e.message}).verifyTiomMisEditKey({key:key})
+  };
+  window.cancelMisEdit=function(){var id=T.misReportId;resetMisEditState();if(id)loadMisReport(id,false)};
   function renderMisSummary(s){
   const entries=s?.rows||[],total=s?.totals||{},vehicles=s?.vehicleRows||[];
   const cards=entries.map(x=>'<div class="erp-machine-card"><div><b>'+safe(x.label)+'</b><small>'+n(x.hrsRun)+' Hrs</small></div><div><span>Trips</span><b>'+n(x.totalTrips)+'</b></div><div><span>Qty</span><b>'+n(x.totalQty)+' MT</b></div><div><span>MT/Hr</span><b>'+(x.productivity==null?'—':n(x.productivity))+'</b></div></div>').join('');
@@ -244,7 +301,8 @@
   function renderSavedReports(){
     var d=T.mis||{},remember=T.savedFilter||{};
     var from=remember.from||d.reportFrom||d.date||S.boot.today,to=remember.to||d.reportTo||d.date||S.boot.today,shift=remember.shift||d.reportShift||'ALL';
-    html('tiom_prod_body','<div class="tiom-mis-toolbar"><b>SAVED DRIVER SHIFT REPORTS</b><label>From<input id="ts_from" type="date" value="'+safe(from)+'"></label><label>To<input id="ts_to" type="date" value="'+safe(to)+'"></label><label>Shift<select id="ts_shift"><option value="ALL">All shifts</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label><label>Search<input id="ts_search" value="'+safe(remember.search||'')+'" placeholder="Date / tripper / driver / ref / status" oninput="filterSavedReports()"></label><button class="btn primary small" onclick="loadSavedReports()">Load Range</button><button class="btn secondary small" onclick="downloadSavedEntryReport()">Download Detailed Entry Report</button></div><div id="ts_body"><div class="loading">Loading saved reports…</div></div>');
+    var keyCtl=S.boot.user.isManagement?'<button id="ts_key_btn" class="btn secondary small" onclick="configureMisEditKey()">'+(d.editKeyConfigured?'Change Edit Key':'Set Edit Key')+'</button>':'';
+    html('tiom_prod_body','<div class="tiom-mis-toolbar"><b>SAVED DRIVER SHIFT REPORTS</b><label>From<input id="ts_from" type="date" value="'+safe(from)+'"></label><label>To<input id="ts_to" type="date" value="'+safe(to)+'"></label><label>Shift<select id="ts_shift"><option value="ALL">All shifts</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label><label>Search<input id="ts_search" value="'+safe(remember.search||'')+'" placeholder="Date / tripper / driver / ref / status" oninput="filterSavedReports()"></label><button class="btn primary small" onclick="loadSavedReports()">Load Range</button><button class="btn secondary small" onclick="downloadSavedEntryReport()">Download Detailed Entry Report</button>'+keyCtl+'<span id="ts_key_state" class="tiom-state">Submitted edit: '+(d.editKeyConfigured?'Key protected':'Key not configured')+'</span></div><div id="ts_body"><div class="loading">Loading saved reports…</div></div>');
     if(q('ts_shift'))q('ts_shift').value=shift;
     loadSavedReports();
   }
@@ -252,16 +310,27 @@
     var from=v('ts_from')||S.boot.today,to=v('ts_to')||S.boot.today,reportShift=v('ts_shift')||'ALL',search=v('ts_search')||'';
     T.savedFilter={from:from,to:to,shift:reportShift,search:search};
     appRun(function(d){
-      T.mis=d;T.savedReports=d.reports||[];renderSavedTable(T.savedReports);filterSavedReports();
+      T.mis=d;T.savedReports=d.reports||[];
+      if(q('ts_key_btn'))q('ts_key_btn').textContent=d.editKeyConfigured?'Change Edit Key':'Set Edit Key';
+      if(q('ts_key_state'))q('ts_key_state').textContent='Submitted edit: '+(d.editKeyConfigured?'Key protected':'Key not configured');
+      renderSavedTable(T.savedReports);filterSavedReports();
     },function(e){html('ts_body','<div class="bad">'+safe(e.message)+'</div>')}).getTiomMisDesk({date:to,shift:S.boot.shift,reportFrom:from,reportTo:to,reportShift:reportShift});
   };
   function renderSavedTable(rows){
     var body=(rows||[]).map(function(x){
-      var del=x.status==='DRAFT'?'<button class="btn danger tiny" onclick="removeMisReport(\''+safe(x.reportId)+'\',\'DRAFT\')">Delete Draft</button>':(S.boot.user.isManagement&&x.status==='SUBMITTED'?'<button class="btn danger tiny" onclick="removeMisReport(\''+safe(x.reportId)+'\',\'SUBMITTED\')">Void</button>':'');
+      var actions='';
+      if(x.status==='DRAFT'){
+        actions='<button class="btn secondary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\',false)">Edit</button><button class="btn danger tiny" onclick="removeMisReport(\''+safe(x.reportId)+'\',\'DRAFT\')">Delete Draft</button>';
+      }else if(x.status==='SUBMITTED'){
+        actions='<button class="btn secondary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\',false)">View</button><button class="btn primary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\',true)">Edit (Key)</button>'+(S.boot.user.isManagement?'<button class="btn danger tiny" onclick="removeMisReport(\''+safe(x.reportId)+'\',\'SUBMITTED\')">Void</button>':'');
+      }else{
+        actions='<button class="btn secondary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\',false)">View</button>';
+      }
       var h=(x.openingHmr!=null&&x.closingHmr!=null)?n(Number(x.closingHmr)-Number(x.openingHmr)):'—';
-      return '<tr data-search="'+safe((x.date+' '+x.shift+' '+x.vehicleId+' '+(x.paperRef||'')+' '+x.status+' '+(x.operatorId||'')).toLowerCase())+'"><td>'+safe(x.date)+'</td><td>'+safe(x.shift)+'</td><td>'+safe(x.vehicleId)+'</td><td>'+safe(x.operatorId||'—')+'</td><td>'+safe(x.paperRef||'—')+'</td><td><b>'+n(x.tripCount||0)+'</b></td><td><b>'+n(x.totalQtyMt||0)+' MT</b></td><td>'+h+'</td><td>'+safe(x.status)+'</td><td>'+safe(x.enteredAt)+'</td><td><button class="btn secondary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\')">'+(x.status==='DRAFT'?'Edit':'View Trips')+'</button>'+del+'</td></tr>';
-    }).join('')||'<tr><td colspan="11" class="note">No saved reports in this date range.</td></tr>';
-    html('ts_body','<div class="panel tiom-sap-card"><div class="tiom-card-title"><div><b>SAVED TRIPPER REPORTS</b><span>Entry data only. No WB reconciliation is being performed.</span></div><span class="tiom-state">'+(rows||[]).length+' reports</span></div><div class="table-wrap"><table class="tiom-entry-table"><thead><tr><th>Date</th><th>Shift</th><th>Tripper</th><th>Driver</th><th>Report Ref</th><th>Trips</th><th>Qty</th><th>HMR Hrs</th><th>Status</th><th>Entered</th><th>Action</th></tr></thead><tbody id="ts_rows">'+body+'</tbody></table></div><div class="tiom-help">Download Detailed Entry Report exports the selected period exactly from saved entry records. No WB comparison or reconciliation status is created.</div></div>');
+      var corrected=x.correctedBy?safe(x.correctedBy)+(x.correctedAt?' · '+safe(x.correctedAt):''):'—';
+      return '<tr data-search="'+safe((x.date+' '+x.shift+' '+x.vehicleId+' '+(x.paperRef||'')+' '+x.status+' '+(x.operatorId||'')+' '+(x.correctedBy||'')).toLowerCase())+'"><td>'+safe(x.date)+'</td><td>'+safe(x.shift)+'</td><td>'+safe(x.vehicleId)+'</td><td>'+safe(x.operatorId||'—')+'</td><td>'+safe(x.paperRef||'—')+'</td><td><b>'+n(x.tripCount||0)+'</b></td><td><b>'+n(x.totalQtyMt||0)+' MT</b></td><td>'+h+'</td><td>'+safe(x.status)+'</td><td><b>v'+safe(x.version||1)+'</b></td><td>'+safe(x.enteredAt)+'</td><td>'+corrected+'</td><td><div class="report-buttons">'+actions+'</div></td></tr>';
+    }).join('')||'<tr><td colspan="13" class="note">No saved reports in this date range.</td></tr>';
+    html('ts_body','<div class="panel tiom-sap-card"><div class="tiom-card-title"><div><b>SAVED TRIPPER REPORTS</b><span>Submitted reports are read-only unless unlocked with the Edit Key. Every correction creates a new version and audit trail.</span></div><span class="tiom-state">'+(rows||[]).length+' reports</span></div><div class="table-wrap"><table class="tiom-entry-table"><thead><tr><th>Date</th><th>Shift</th><th>Tripper</th><th>Driver</th><th>Report Ref</th><th>Trips</th><th>Qty</th><th>HMR Hrs</th><th>Status</th><th>Ver</th><th>Entered</th><th>Last Corrected</th><th>Action</th></tr></thead><tbody id="ts_rows">'+body+'</tbody></table></div><div class="tiom-help"><b>Control:</b> View never unlocks editing. Edit (Key) requires the protected key + a correction reason. The original values remain in the server audit history.</div></div>');
   }
   window.filterSavedReports=function(){
     var term=String(v('ts_search')||'').trim().toLowerCase();
@@ -272,9 +341,21 @@
     var from=v('ts_from')||(T.savedFilter&&T.savedFilter.from)||S.boot.today,to=v('ts_to')||(T.savedFilter&&T.savedFilter.to)||S.boot.today,shift=v('ts_shift')||(T.savedFilter&&T.savedFilter.shift)||'ALL';
     var qs=new URLSearchParams({fromDate:from,toDate:to,shift:shift});window.location.assign('/api/web/tiom/mis-entry-export.xlsx?'+qs.toString());
   };
-  window.editSavedReport=function(id){
+  window.editSavedReport=function(id,unlock){
     T.savedFilter={from:v('ts_from')||(T.savedFilter&&T.savedFilter.from)||S.boot.today,to:v('ts_to')||(T.savedFilter&&T.savedFilter.to)||S.boot.today,shift:v('ts_shift')||(T.savedFilter&&T.savedFilter.shift)||'ALL',search:v('ts_search')||(T.savedFilter&&T.savedFilter.search)||''};
-    T.openReportAfterLoad=id;T.prodTab='MIS';tiomProdTab('MIS');
+    T.openReportAfterLoad=id;T.unlockAfterLoad=!!unlock;T.prodTab='MIS';tiomProdTab('MIS');
+  };
+  window.configureMisEditKey=function(){
+    if(!S.boot.user.isManagement){toast('Management access required.',true);return}
+    var dlg=q('option_dialog');if(!dlg)return;
+    dlg.innerHTML='<form method="dialog" class="panel" onsubmit="event.preventDefault();saveConfiguredMisEditKey()"><h3>Set Submitted Report Edit Key</h3><p class="note">Use the key you want authorized staff to enter before changing an already submitted report. The server stores only a one-way hash.</p><label>New Edit Key<input id="tm_new_edit_key" type="password" minlength="8" maxlength="64" autocomplete="new-password" required></label><label>Confirm Edit Key<input id="tm_new_edit_key2" type="password" minlength="8" maxlength="64" autocomplete="new-password" required></label><div id="tm_key_error" class="bad-text"></div><div class="btnrow"><button type="button" class="btn secondary" onclick="option_dialog.close()">Cancel</button><button type="submit" class="btn primary">Save Edit Key</button></div></form>';
+    dlg.showModal();setTimeout(()=>q('tm_new_edit_key')?.focus(),0)
+  };
+  window.saveConfiguredMisEditKey=function(){
+    var a=v('tm_new_edit_key'),b=v('tm_new_edit_key2');
+    if(a.length<8){if(q('tm_key_error'))q('tm_key_error').textContent='Use at least 8 characters.';return}
+    if(a!==b){if(q('tm_key_error'))q('tm_key_error').textContent='The two keys do not match.';return}
+    appRun(function(r){q('option_dialog')?.close();if(T.mis)T.mis.editKeyConfigured=true;toast(r.message);renderSavedReports()},function(e){if(q('tm_key_error'))q('tm_key_error').textContent=e.message}).saveTiomMisEditKey({key:a})
   };
   window.removeMisReport=function(id,status){var action=status==='DRAFT'?'delete this draft':'mark this submitted report VOID';if(!confirm('Are you sure you want to '+action+'?'))return;var reason=status==='DRAFT'?'':prompt('Reason for VOID:','Incorrect submitted report')||'Incorrect submitted report';appRun(function(r){toast(r.message);loadSavedReports()},function(e){toast(e.message,true)}).removeTiomMisReport({reportId:id,reason:reason})};
 
