@@ -4137,6 +4137,30 @@ def verify_tiom_mis_edit_key(db,user,p):
     return {'ok':True,'message':'Edit Key verified.'}
 
 
+def _tiom_mis_correction_meta(db,report_ids):
+    ids=[str(x) for x in (report_ids or []) if x]
+    if not ids:return {}
+    out={}
+    logs=list(db.scalars(select(AuditLog).where(
+        AuditLog.action=='TIOM_MIS_EDIT_SUBMITTED',
+        AuditLog.entity=='tiom_mis_report',
+        AuditLog.entity_id.in_(ids)
+    ).order_by(AuditLog.created_at.desc(),AuditLog.id.desc())))
+    for row in logs:
+        if row.entity_id not in out:
+            try: detail=json.loads(row.detail or '{}')
+            except Exception: detail={}
+            out[row.entity_id]={
+                'correctedBy':row.actor,
+                'correctedAt':aware(row.created_at).astimezone(TZ).strftime('%d-%m %H:%M') if row.created_at else '',
+                'correctedAtFull':aware(row.created_at).astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if row.created_at else '',
+                'reason':detail.get('reason') or '',
+                'fromVersion':detail.get('fromVersion'),
+                'toVersion':detail.get('toVersion')
+            }
+    return out
+
+
 def _tiom_mis_edit_snapshot(db,report):
     rows_,details=_tiom_report_rows(db,report.report_id)
     row_ids=[r.row_id for r in rows_]
@@ -4261,6 +4285,7 @@ def tiom_mis_desk(db,user,p):
     deployment_machines=[e for e in equipment if e.group not in {'TRANSPORT','HSD_TANKER'}]
     summary_today=_tiom_mis_productivity_summary(db,day,day,sh)
     summary_range=_tiom_mis_productivity_summary(db,report_from,report_to,report_shift)
+    correction_meta=_tiom_mis_correction_meta(db,[x.report_id for x in reports])
 
     return {'date':str(day),'shift':sh,
         'reportFrom':str(report_from),'reportTo':str(report_to),'reportShift':report_shift,
@@ -4308,8 +4333,9 @@ def tiom_mis_desk(db,user,p):
             'wbLinkedTrips':report_stats.get(x.report_id,{}).get('wb',0),
             'factorTrips':report_stats.get(x.report_id,{}).get('factor',0),
             'pendingTrips':report_stats.get(x.report_id,{}).get('pending',0),
-            'correctedBy':x.approved_by or '',
-            'correctedAt':x.approved_at.strftime('%d-%m %H:%M') if x.approved_at else ''
+            'correctedBy':correction_meta.get(x.report_id,{}).get('correctedBy',''),
+            'correctedAt':correction_meta.get(x.report_id,{}).get('correctedAt',''),
+            'correctionReason':correction_meta.get(x.report_id,{}).get('reason','')
         } for x in reports],
         'summary':summary_today,
         'summaryToday':summary_today,
@@ -4376,6 +4402,7 @@ def get_tiom_mis_report(db,user,p):
             'benchRl':lead.bench_rl_m if lead else None,'routeMode':lead.route_mode if lead else '','leadKm':float(lead.lead_km) if lead and lead.lead_km is not None else None,'leadStatus':lead.lead_status if lead else 'NOT_CAPTURED',
             'wbMovementKey':rec.wb_movement_key if rec and rec.wb_movement_key else '', 'wbMovementNo':wb.movement_no if wb else '', 'quantitySource':'WB' if wb else 'TRIP_FACTOR'})
     hmr_run=(report.closing_hmr-report.opening_hmr) if report.opening_hmr is not None and report.closing_hmr is not None and report.closing_hmr>=report.opening_hmr else None
+    correction_meta=_tiom_mis_correction_meta(db,[report.report_id]).get(report.report_id,{})
     siblings=list(db.scalars(select(TiomMisReport).where(
         TiomMisReport.operating_date==report.operating_date,TiomMisReport.shift==report.shift
     ).order_by(TiomMisReport.vehicle_id,TiomMisReport.entered_at)))
@@ -4386,8 +4413,8 @@ def get_tiom_mis_report(db,user,p):
         'closingHmr':float(report.closing_hmr) if report.closing_hmr is not None else None,
         'hmrRun':float(hmr_run) if hmr_run is not None else None,
         'paperRef':report.paper_ref or '','notes':report.notes or '','status':report.status,
-        'version':report.version or 1,'correctedBy':report.approved_by or '',
-        'correctedAt':report.approved_at.strftime('%d-%m-%Y %H:%M') if report.approved_at else '',
+        'version':report.version or 1,'correctedBy':correction_meta.get('correctedBy',''),
+        'correctedAt':correction_meta.get('correctedAtFull',''),'correctionReason':correction_meta.get('reason',''),
         'editKeyConfigured':_tiom_mis_edit_key_configured(db),
         'rows':trip_rows,
         'meters':[], 'hmrSource':'CENTRAL_SITE_ASSET_METER',
@@ -4602,8 +4629,6 @@ def save_tiom_mis_report(db,user,p,submit=False):
         meter.opening_reading=opening; meter.closing_reading=closing; meter.usage=usage; meter.source_type='TIOM_DEPLOYMENT'; meter.remarks=short(str(item.get('remarks') or 'Legacy MIS HMR migrated to Shift Deployment')); meter.entered_by=user.login_id; meter.entered_at=now_local(); legacy_hmr+=1
     if is_correction:
         report.status='SUBMITTED'
-        report.approved_by=user.login_id
-        report.approved_at=now_local()
         db.flush()
         after_snapshot=_tiom_mis_edit_snapshot(db,report)
         audit(db,user,'TIOM_MIS_EDIT_SUBMITTED','tiom_mis_report',report.report_id,{
@@ -5728,10 +5753,13 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
         'Machine ID','Loader / Excavator','Qty MT','Remarks','Entered By','Entered At','Submitted By','Submitted At'
     ],detail_rows,[12,8,14,38,16,15,26,14,26,12,12,12,12,12,12,8,12,12,15,30,15,30,15,30,18,28,12,38,15,20,15,20])
 
+    export_correction_meta=_tiom_mis_correction_meta(db,report_ids)
     audit_rows=[[
         str(r.operating_date),r.shift,r.report_id,r.vehicle_id,label_eq(r.vehicle_id),r.operator_id or '',label_person(r.operator_id),
         r.paper_ref or '',r.status,r.version or 1,r.opening_kmr,r.closing_kmr,r.opening_hmr,r.closing_hmr,r.notes or '',
-        r.entered_by,local_dt(r.entered_at),r.submitted_by or '',local_dt(r.submitted_at),r.approved_by or '',local_dt(r.approved_at)
+        r.entered_by,local_dt(r.entered_at),r.submitted_by or '',local_dt(r.submitted_at),
+        export_correction_meta.get(r.report_id,{}).get('correctedBy',''),
+        export_correction_meta.get(r.report_id,{}).get('correctedAtFull','')
     ] for r in reports]
     add_sheet('Saved Report Audit',[
         'Date','Shift','Report ID','Vehicle ID','Tripper','Driver ID','Driver','Report Ref','Status','Version',
