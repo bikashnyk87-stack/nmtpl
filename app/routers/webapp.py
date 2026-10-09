@@ -2,6 +2,8 @@ from datetime import date, datetime, timedelta, time as dtime
 from decimal import Decimal, InvalidOperation
 from io import BytesIO
 from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.utils import get_column_letter
 from pathlib import Path
 from uuid import uuid4
 import hashlib
@@ -3814,6 +3816,282 @@ def remove_tiom_mis_report(db,user,p):
     return {'ok':True,'message':'Submitted report marked VOID. Historical record retained.'}
 
 
+
+def _tiom_mis_reconciliation_snapshot(db,user,p,detail_limit=500):
+    """Selected-period MIS ↔ authoritative WB reconciliation.
+
+    Operational totals use SUBMITTED driver reports only. DRAFT / VOID records
+    remain visible in report audit and WB-link state so reconciliation never
+    hides an occupied or superseded WB link.
+    """
+    require(user,'PRODUCTION')
+    p=p or {}
+    today=operating_context()[0]
+    from_day=_parse_ui_date_v2(p.get('fromDate'),'report from date') if p.get('fromDate') else today
+    to_day=_parse_ui_date_v2(p.get('toDate'),'report to date') if p.get('toDate') else from_day
+    if to_day < from_day or (to_day-from_day).days>366:
+        raise HTTPException(422,'Report range must be chronological and at most 367 days.')
+    shift=str(p.get('shift') or p.get('reportShift') or 'ALL').upper()
+    valid_shifts={x.shift for x in db.scalars(select(ShiftMaster).where(ShiftMaster.active.is_(True)))}
+    allowed=valid_shifts if user.admin or 'ALL' in str(user.shifts or '').split(',') else valid_shifts.intersection(str(user.shifts or '').split(','))
+    if shift!='ALL':
+        if shift not in valid_shifts: raise HTTPException(422,'Choose a valid report shift.')
+        require(user,shift=shift); allowed={shift}
+    if not allowed:
+        return {'fromDate':str(from_day),'toDate':str(to_day),'shift':shift,'summary':{},'trippers':[],'materials':[],'routes':[],'loaders':[],'tripDetails':[],'wbReconciliation':[],'savedReports':[]}
+
+    report_q=select(TiomMisReport).where(
+        TiomMisReport.operating_date>=from_day,TiomMisReport.operating_date<=to_day,
+        TiomMisReport.shift.in_(allowed)
+    )
+    reports=list(db.scalars(report_q.order_by(
+        TiomMisReport.operating_date,TiomMisReport.shift,TiomMisReport.vehicle_id,TiomMisReport.entered_at
+    )))
+    report_by_id={x.report_id:x for x in reports}
+    submitted=[x for x in reports if x.status=='SUBMITTED']
+    report_ids=list(report_by_id)
+    all_trip_rows=list(db.scalars(select(TiomMisTripRow).where(
+        TiomMisTripRow.report_id.in_(report_ids)
+    ).order_by(TiomMisTripRow.report_id,TiomMisTripRow.row_no))) if report_ids else []
+    row_by_id={x.row_id:x for x in all_trip_rows}
+    submitted_ids={x.report_id for x in submitted}
+    submitted_rows=[x for x in all_trip_rows if x.report_id in submitted_ids]
+    all_row_ids=list(row_by_id)
+    submitted_row_ids=[x.row_id for x in submitted_rows]
+    details={x.row_id:x for x in db.scalars(select(TiomMisTripDetail).where(
+        TiomMisTripDetail.row_id.in_(submitted_row_ids)
+    ))} if submitted_row_ids else {}
+    recs={x.row_id:x for x in db.scalars(select(TiomMisReconciliation).where(
+        TiomMisReconciliation.row_id.in_(all_row_ids)
+    ))} if all_row_ids else {}
+    leads={x.row_id:x for x in db.scalars(select(TiomMisTripLead).where(
+        TiomMisTripLead.row_id.in_(submitted_row_ids)
+    ))} if submitted_row_ids else {}
+
+    # Latest confirmed WB batch per date / shift is authoritative.
+    batches=list(db.scalars(select(WbImportBatch).where(
+        WbImportBatch.operating_date>=from_day,WbImportBatch.operating_date<=to_day,
+        WbImportBatch.shift.in_(allowed),WbImportBatch.status=='CONFIRMED',
+        WbImportBatch.confirmed_at.is_not(None)
+    ).order_by(WbImportBatch.operating_date,WbImportBatch.shift,WbImportBatch.confirmed_at.desc())))
+    latest={}
+    for b in batches: latest.setdefault((b.operating_date,b.shift),b)
+    batch_ids=[x.batch_id for x in latest.values()]
+    auth_wb=list(db.scalars(select(WbMovement).where(
+        WbMovement.batch_id.in_(batch_ids),WbMovement.row_status=='VALID'
+    ).order_by(WbMovement.operating_date,WbMovement.shift,WbMovement.weigh_at,WbMovement.movement_no))) if batch_ids else []
+    auth_wbmap={x.movement_key:x for x in auth_wb}
+
+    linked_keys=[x.wb_movement_key for x in recs.values() if x.wb_movement_key]
+    linked_wb={x.movement_key:x for x in db.scalars(select(WbMovement).where(
+        WbMovement.movement_key.in_(linked_keys)
+    ))} if linked_keys else {}
+
+    equipment={x.machine_id:x for x in db.scalars(select(Equipment))}
+    people={x.employee_id:x for x in db.scalars(select(Person))}
+    products={x.product_id:x for x in db.scalars(select(Product))}
+    locations={x.location_id:x for x in db.scalars(select(Location))}
+
+    def dval(x):
+        return Decimal(str(x or 0))
+    def label_eq(mid):
+        return _tiom_asset_label(equipment[mid]) if mid in equipment else (mid or '')
+    def label_person(pid):
+        return people[pid].name if pid in people else (pid or '')
+    def label_product(pid,raw=''):
+        p0=products.get(pid) if pid else None
+        return p0.name if p0 else (raw or pid or '')
+    def label_location(lid,raw=''):
+        loc=locations.get(lid) if lid else None
+        return _tiom_location_display(loc.location_name,loc.location_id) if loc else (raw or lid or '')
+    def local_dt(dt):
+        return aware(dt).astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if dt else ''
+    def local_time(dt):
+        return aware(dt).astimezone(TZ).strftime('%H:%M') if dt else ''
+
+    report_status_by_row={r.row_id:report_by_id[r.report_id].status for r in all_trip_rows if r.report_id in report_by_id}
+    report_id_by_row={r.row_id:r.report_id for r in all_trip_rows}
+    rec_by_wb={}
+    for rid,rec in recs.items():
+        if rec.wb_movement_key:
+            rec_by_wb[rec.wb_movement_key]=(rid,rec)
+
+    trip_details=[]
+    vehicle_agg={}; material_agg={}; route_agg={}; loader_agg={}
+    wb_submitted_keys=set(); wb_submitted_tonnes=Decimal('0')
+    factor_tonnes=Decimal('0'); pending_trips=0; mis_total=Decimal('0')
+    for row in submitted_rows:
+        report=report_by_id.get(row.report_id); detail=details.get(row.row_id); rec=recs.get(row.row_id); lead=leads.get(row.row_id)
+        wb_key=rec.wb_movement_key if rec and rec.wb_movement_key else ''
+        wb=linked_wb.get(wb_key) if wb_key else None
+        wb_authoritative=bool(wb_key and wb_key in auth_wbmap)
+        if rec and wb and wb_authoritative: recon_status=str(rec.match_status or 'MATCHED')
+        elif rec and wb: recon_status='SUPERSEDED_WB_LINK'
+        elif rec and wb_key: recon_status='BROKEN_WB_LINK'
+        else: recon_status='FIELD_WITHOUT_WB'
+        qty=dval(detail.calculated_qty_mt) if detail and detail.calculated_qty_mt is not None else None
+        wb_mt=(dval(wb.net_kg)/Decimal('1000')) if wb and wb.net_kg is not None else None
+        if wb:
+            qty_source='WB'
+            if wb_authoritative:
+                wb_submitted_keys.add(wb_key);wb_submitted_tonnes+=wb_mt or Decimal('0')
+        elif detail and detail.factor_mt_per_trip is not None:
+            qty_source='TRIP_FACTOR';factor_tonnes+=qty or Decimal('0')
+        else:
+            qty_source='PENDING';pending_trips+=1
+        if qty is not None: mis_total+=qty
+        material_id=detail.material_id if detail else ''
+        material_name=label_product(material_id,row.material_raw or '')
+        source_id=detail.source_location_id if detail else ''
+        dest_id=detail.destination_location_id if detail else ''
+        machine_id=detail.machine_id if detail else ''
+        km_run=(report.closing_kmr-report.opening_kmr) if report and report.opening_kmr is not None and report.closing_kmr is not None and report.closing_kmr>=report.opening_kmr else None
+        item={
+            'date':str(report.operating_date),'shift':report.shift,'reportId':report.report_id,
+            'reportRef':report.paper_ref or '','vehicleId':report.vehicle_id,'vehicle':label_eq(report.vehicle_id),
+            'driverId':report.operator_id or '','driver':label_person(report.operator_id),
+            'rowNo':row.row_no,'materialId':material_id,'material':material_name,
+            'sourceId':source_id,'source':label_location(source_id,row.source_raw or ''),
+            'destinationId':dest_id,'destination':label_location(dest_id,row.destination_raw or ''),
+            'machineId':machine_id,'machine':label_eq(machine_id),
+            'loadingTime':local_time(row.loading_at),'unloadingTime':local_time(row.unloading_at),
+            'qtySource':qty_source,'qtyMt':float(qty) if qty is not None else None,
+            'wbMovementNo':wb.movement_no if wb else '','wbMovementKey':wb_key,
+            'wbNetMt':float(wb_mt) if wb_mt is not None else None,'wbAuthoritative':wb_authoritative,
+            'reconciliationStatus':recon_status,'confidence':rec.confidence if rec else None,
+            'reconciliationReason':rec.reason or '' if rec else '',
+            'benchRl':lead.bench_rl_m if lead else None,'routeMode':lead.route_mode if lead else '',
+            'leadKm':float(lead.lead_km) if lead and lead.lead_km is not None else None,
+            'leadStatus':lead.lead_status if lead else 'NOT_CAPTURED',
+            'remarks':row.remarks or '','kmRun':float(km_run) if km_run is not None else None
+        }
+        trip_details.append(item)
+
+        va=vehicle_agg.setdefault(report.vehicle_id,{'vehicleId':report.vehicle_id,'vehicle':label_eq(report.vehicle_id),'reports':set(),'drivers':set(),'trips':0,'wbTrips':0,'factorTrips':0,'pendingTrips':0,'tonnes':Decimal('0'),'wbTonnes':Decimal('0'),'estimatedTonnes':Decimal('0'),'kmRun':Decimal('0'),'materials':{}})
+        va['reports'].add(report.report_id)
+        if report.operator_id: va['drivers'].add(label_person(report.operator_id))
+        va['trips']+=1
+        if qty is not None: va['tonnes']+=qty
+        if qty_source=='WB': va['wbTrips']+=1;va['wbTonnes']+=qty or Decimal('0')
+        elif qty_source=='TRIP_FACTOR': va['factorTrips']+=1;va['estimatedTonnes']+=qty or Decimal('0')
+        else: va['pendingTrips']+=1
+        if row.row_no==1 and km_run is not None: va['kmRun']+=Decimal(km_run)
+        vm=va['materials'].setdefault(material_name,{'trips':0,'tonnes':Decimal('0')});vm['trips']+=1;vm['tonnes']+=qty or Decimal('0')
+
+        ma=material_agg.setdefault((material_id,material_name),{'materialId':material_id,'material':material_name,'trips':0,'wbTrips':0,'factorTrips':0,'pendingTrips':0,'tonnes':Decimal('0'),'wbTonnes':Decimal('0'),'estimatedTonnes':Decimal('0'),'vehicles':set()})
+        ma['trips']+=1;ma['vehicles'].add(report.vehicle_id)
+        if qty is not None:ma['tonnes']+=qty
+        if qty_source=='WB':ma['wbTrips']+=1;ma['wbTonnes']+=qty or Decimal('0')
+        elif qty_source=='TRIP_FACTOR':ma['factorTrips']+=1;ma['estimatedTonnes']+=qty or Decimal('0')
+        else:ma['pendingTrips']+=1
+
+        route_key=(source_id,dest_id,material_id)
+        ra=route_agg.setdefault(route_key,{'sourceId':source_id,'source':item['source'],'destinationId':dest_id,'destination':item['destination'],'materialId':material_id,'material':material_name,'trips':0,'wbTrips':0,'factorTrips':0,'tonnes':Decimal('0'),'leadTonKm':Decimal('0'),'leadQty':Decimal('0')})
+        ra['trips']+=1;ra['tonnes']+=qty or Decimal('0')
+        if qty_source=='WB':ra['wbTrips']+=1
+        elif qty_source=='TRIP_FACTOR':ra['factorTrips']+=1
+        if qty is not None and lead and lead.lead_km is not None:
+            ra['leadTonKm']+=qty*Decimal(lead.lead_km);ra['leadQty']+=qty
+
+        la=loader_agg.setdefault(machine_id,{'machineId':machine_id,'machine':label_eq(machine_id),'trips':0,'tonnes':Decimal('0'),'materials':set(),'sources':set(),'vehicles':set()})
+        la['trips']+=1;la['tonnes']+=qty or Decimal('0');la['materials'].add(material_name);la['sources'].add(item['source']);la['vehicles'].add(report.vehicle_id)
+
+    trippers=[]
+    for x in vehicle_agg.values():
+        weighed=x['trips']-x['pendingTrips']
+        mix='; '.join(f"{k}: {v['trips']} trips / {float(v['tonnes']):.2f} MT" for k,v in sorted(x['materials'].items()))
+        trippers.append({
+            'vehicleId':x['vehicleId'],'vehicle':x['vehicle'],'reports':len(x['reports']),'drivers':', '.join(sorted(x['drivers'])),
+            'trips':x['trips'],'wbTrips':x['wbTrips'],'factorTrips':x['factorTrips'],'pendingTrips':x['pendingTrips'],
+            'tonnes':round(float(x['tonnes']),2),'wbTonnes':round(float(x['wbTonnes']),2),
+            'estimatedTonnes':round(float(x['estimatedTonnes']),2),'kmRun':round(float(x['kmRun']),2),
+            'avgPayloadMt':round(float(x['tonnes'])/weighed,2) if weighed>0 else None,'materialMix':mix
+        })
+    trippers.sort(key=lambda x:(-x['trips'],x['vehicleId']))
+
+    materials=[{
+        'materialId':x['materialId'],'material':x['material'],'trips':x['trips'],'wbTrips':x['wbTrips'],
+        'factorTrips':x['factorTrips'],'pendingTrips':x['pendingTrips'],'tonnes':round(float(x['tonnes']),2),
+        'wbTonnes':round(float(x['wbTonnes']),2),'estimatedTonnes':round(float(x['estimatedTonnes']),2),
+        'trippers':len(x['vehicles'])
+    } for x in material_agg.values()]
+    materials.sort(key=lambda x:(-x['tonnes'],-x['trips'],x['material']))
+
+    routes=[{
+        'sourceId':x['sourceId'],'source':x['source'],'destinationId':x['destinationId'],'destination':x['destination'],
+        'materialId':x['materialId'],'material':x['material'],'trips':x['trips'],'wbTrips':x['wbTrips'],'factorTrips':x['factorTrips'],
+        'tonnes':round(float(x['tonnes']),2),'avgLeadKm':round(float(x['leadTonKm']/x['leadQty']),3) if x['leadQty']>0 else None,
+        'tonKm':round(float(x['leadTonKm']),2)
+    } for x in route_agg.values()]
+    routes.sort(key=lambda x:(x['source'],x['destination'],x['material']))
+
+    loaders=[{
+        'machineId':x['machineId'],'machine':x['machine'],'trips':x['trips'],'tonnes':round(float(x['tonnes']),2),
+        'materials':', '.join(sorted(x['materials'])),'sources':', '.join(sorted(x['sources'])),'trippers':len(x['vehicles'])
+    } for x in loader_agg.values()]
+    loaders.sort(key=lambda x:(-x['trips'],x['machineId']))
+
+    wb_reconciliation=[]
+    draft_linked=void_linked=submitted_linked=0
+    for wb in auth_wb:
+        link=rec_by_wb.get(wb.movement_key);report=None;rec=None;row=None
+        if link:
+            rid,rec=link;row=row_by_id.get(rid);report=report_by_id.get(report_id_by_row.get(rid,''))
+        state='UNMATCHED'
+        if report:
+            if report.status=='SUBMITTED':state='MATCHED_SUBMITTED';submitted_linked+=1
+            elif report.status=='DRAFT':state='LINKED_TO_DRAFT';draft_linked+=1
+            elif report.status=='VOID':state='LINKED_TO_VOID';void_linked+=1
+            else:state='LINKED_'+str(report.status or 'UNKNOWN')
+        wb_reconciliation.append({
+            'date':str(wb.operating_date),'shift':wb.shift,'movementNo':wb.movement_no,
+            'vehicle':wb.vehicle_id or wb.vehicle_raw or '','materialCode':wb.material_code or '',
+            'material':wb.material_name or wb.material_code or '','source':wb.source_raw or '',
+            'destination':wb.destination_raw or '','netMt':round(float(dval(wb.net_kg)/Decimal('1000')),3),
+            'weighAt':local_dt(wb.weigh_at),'state':state,'reportId':report.report_id if report else '',
+            'reportRef':report.paper_ref or '' if report else '','reportStatus':report.status if report else '',
+            'tripRowNo':row.row_no if row else None,'matchStatus':rec.match_status if rec else '',
+            'confidence':rec.confidence if rec else None,'reason':rec.reason or '' if rec else ''
+        })
+
+    wb_total=sum((dval(x.net_kg)/Decimal('1000') for x in auth_wb),Decimal('0'))
+    submitted_wb_auth=sum(1 for x in wb_reconciliation if x['state']=='MATCHED_SUBMITTED')
+    unmatched=sum(1 for x in wb_reconciliation if x['state']=='UNMATCHED')
+    saved_audit=[]
+    for r in reports:
+        km=(r.closing_kmr-r.opening_kmr) if r.opening_kmr is not None and r.closing_kmr is not None and r.closing_kmr>=r.opening_kmr else None
+        saved_audit.append({'date':str(r.operating_date),'shift':r.shift,'reportId':r.report_id,'vehicleId':r.vehicle_id,'vehicle':label_eq(r.vehicle_id),
+            'driverId':r.operator_id or '','driver':label_person(r.operator_id),'reportRef':r.paper_ref or '','status':r.status,
+            'kmRun':float(km) if km is not None else None,'enteredBy':r.entered_by,'enteredAt':local_dt(r.entered_at),
+            'submittedBy':r.submitted_by or '','submittedAt':local_dt(r.submitted_at)})
+
+    summary={
+        'submittedReports':len(submitted),'draftReports':sum(x.status=='DRAFT' for x in reports),'voidReports':sum(x.status=='VOID' for x in reports),
+        'trippers':len(vehicle_agg),'submittedTrips':len(submitted_rows),'misTonnes':round(float(mis_total),2),
+        'wbLinkedTrips':sum(x['qtySource']=='WB' for x in trip_details),'wbLinkedTonnes':round(float(wb_submitted_tonnes),2),
+        'factorTrips':sum(x['qtySource']=='TRIP_FACTOR' for x in trip_details),'factorTonnes':round(float(factor_tonnes),2),
+        'pendingTrips':pending_trips,'authoritativeWbTrips':len(auth_wb),'authoritativeWbTonnes':round(float(wb_total),2),
+        'matchedSubmittedWb':submitted_wb_auth,'unmatchedWb':unmatched,'draftLinkedWb':draft_linked,'voidLinkedWb':void_linked,
+        'wbMatchRatePct':round((submitted_wb_auth/len(auth_wb)*100),2) if auth_wb else None,
+        'materials':len(materials),'routes':len(routes),'loadingEquipment':len(loaders)
+    }
+    if detail_limit is not None:
+        limit=max(1,min(int(detail_limit or 500),5000))
+        trip_out=trip_details[:limit];wb_out=wb_reconciliation[:limit]
+    else:
+        trip_out=trip_details;wb_out=wb_reconciliation
+    return {
+        'fromDate':str(from_day),'toDate':str(to_day),'shift':shift,'summary':summary,
+        'trippers':trippers,'materials':materials,'routes':routes,'loaders':loaders,
+        'tripDetails':trip_out,'wbReconciliation':wb_out,'savedReports':saved_audit,
+        'tripDetailsTotal':len(trip_details),'wbReconciliationTotal':len(wb_reconciliation),
+        'tripDetailsTruncated':len(trip_out)<len(trip_details),'wbReconciliationTruncated':len(wb_out)<len(wb_reconciliation)
+    }
+
+
+def get_tiom_mis_reconciliation(db,user,p):
+    return _tiom_mis_reconciliation_snapshot(db,user,p,detail_limit=(p or {}).get('limit',500))
+
 def tiom_mis_desk(db,user,p):
     require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p)
     factors=_ensure_tiom_trip_factors(db,user)
@@ -3862,6 +4140,21 @@ def tiom_mis_desk(db,user,p):
     reports=list(db.scalars(report_q.order_by(
         TiomMisReport.operating_date.desc(),TiomMisReport.shift,TiomMisReport.entered_at.desc()
     ).limit(500)))
+
+    report_ids=[x.report_id for x in reports]
+    report_stats={rid:{'trips':0,'qty':Decimal('0'),'wb':0,'factor':0,'pending':0} for rid in report_ids}
+    if report_ids:
+        stat_rows=list(db.scalars(select(TiomMisTripRow).where(TiomMisTripRow.report_id.in_(report_ids))))
+        stat_details={x.row_id:x for x in db.scalars(select(TiomMisTripDetail).where(TiomMisTripDetail.row_id.in_([r.row_id for r in stat_rows]))) } if stat_rows else {}
+        stat_recs={x.row_id:x for x in db.scalars(select(TiomMisReconciliation).where(TiomMisReconciliation.row_id.in_([r.row_id for r in stat_rows]))) } if stat_rows else {}
+        for row in stat_rows:
+            st=report_stats.setdefault(row.report_id,{'trips':0,'qty':Decimal('0'),'wb':0,'factor':0,'pending':0})
+            st['trips']+=1
+            d=stat_details.get(row.row_id);rec=stat_recs.get(row.row_id)
+            if d and d.calculated_qty_mt is not None:st['qty']+=Decimal(d.calculated_qty_mt)
+            if rec and rec.wb_movement_key:st['wb']+=1
+            elif d and d.factor_mt_per_trip is not None:st['factor']+=1
+            else:st['pending']+=1
 
     # Carry forward ONLY readings from chronologically earlier shifts.
     # The previous implementation included current/future shifts on the same
@@ -3933,7 +4226,12 @@ def tiom_mis_desk(db,user,p):
             'closingKmr':float(x.closing_kmr) if x.closing_kmr is not None else None,
             'openingHmr':float(x.opening_hmr) if x.opening_hmr is not None else None,
             'closingHmr':float(x.closing_hmr) if x.closing_hmr is not None else None,
-            'enteredAt':x.entered_at.strftime('%d-%m %H:%M') if x.entered_at else ''
+            'enteredAt':x.entered_at.strftime('%d-%m %H:%M') if x.entered_at else '',
+            'tripCount':report_stats.get(x.report_id,{}).get('trips',0),
+            'totalQtyMt':round(float(report_stats.get(x.report_id,{}).get('qty',0)),2),
+            'wbLinkedTrips':report_stats.get(x.report_id,{}).get('wb',0),
+            'factorTrips':report_stats.get(x.report_id,{}).get('factor',0),
+            'pendingTrips':report_stats.get(x.report_id,{}).get('pending',0)
         } for x in reports],
         'summary':summary_today,
         'summaryToday':summary_today,
@@ -4000,6 +4298,9 @@ def get_tiom_mis_report(db,user,p):
             'benchRl':lead.bench_rl_m if lead else None,'routeMode':lead.route_mode if lead else '','leadKm':float(lead.lead_km) if lead and lead.lead_km is not None else None,'leadStatus':lead.lead_status if lead else 'NOT_CAPTURED',
             'wbMovementKey':rec.wb_movement_key if rec and rec.wb_movement_key else '', 'wbMovementNo':wb.movement_no if wb else '', 'quantitySource':'WB' if wb else 'TRIP_FACTOR'})
     hmr_run=(report.closing_hmr-report.opening_hmr) if report.opening_hmr is not None and report.closing_hmr is not None and report.closing_hmr>=report.opening_hmr else None
+    siblings=list(db.scalars(select(TiomMisReport).where(
+        TiomMisReport.operating_date==report.operating_date,TiomMisReport.shift==report.shift
+    ).order_by(TiomMisReport.vehicle_id,TiomMisReport.entered_at)))
     return {'reportId':report.report_id,'date':str(report.operating_date),'shift':report.shift,'vehicleId':report.vehicle_id,'operatorId':report.operator_id or '',
         'openingKmr':float(report.opening_kmr) if report.opening_kmr is not None else None,
         'closingKmr':float(report.closing_kmr) if report.closing_kmr is not None else None,
@@ -4008,7 +4309,8 @@ def get_tiom_mis_report(db,user,p):
         'hmrRun':float(hmr_run) if hmr_run is not None else None,
         'paperRef':report.paper_ref or '','notes':report.notes or '','status':report.status,
         'rows':trip_rows,
-        'meters':[], 'hmrSource':'CENTRAL_SITE_ASSET_METER'}
+        'meters':[], 'hmrSource':'CENTRAL_SITE_ASSET_METER',
+        'siblingReports':[{'reportId':x.report_id,'vehicleId':x.vehicle_id,'vehicle':_tiom_asset_label(db.get(Equipment,x.vehicle_id)) if db.get(Equipment,x.vehicle_id) else x.vehicle_id,'operatorId':x.operator_id or '','operator':(db.get(Person,x.operator_id).name if x.operator_id and db.get(Person,x.operator_id) else x.operator_id or ''),'paperRef':x.paper_ref or '','status':x.status} for x in siblings]}
 
 def save_tiom_mis_report(db,user,p,submit=False):
     require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p); open_shift(db,day,sh); _ensure_tiom_trip_factors(db,user)
@@ -5032,11 +5334,112 @@ def tiom_full_wb_export(request:Request,fromDate:str='',toDate:str='',shift:str=
       headers={'Content-Disposition':f'attachment; filename="{name}"',
                'Cache-Control':'no-store'})
 
+
+@router.get('/tiom/mis-reconciliation-export.xlsx')
+def tiom_mis_reconciliation_export(request:Request,fromDate:str='',toDate:str='',shift:str='ALL',db:Session=Depends(get_db)):
+    user=get_user(db,request)
+    data=_tiom_mis_reconciliation_snapshot(db,user,{'fromDate':fromDate,'toDate':toDate,'shift':shift},detail_limit=None)
+    if data.get('tripDetailsTotal',0)+data.get('wbReconciliationTotal',0)>50000:
+        raise HTTPException(422,'More than 50,000 reconciliation rows matched. Narrow the selected period before exporting.')
+
+    book=Workbook();book.remove(book.active)
+    header_fill=PatternFill('solid',fgColor='1F4E78');section_fill=PatternFill('solid',fgColor='D9EAF7')
+    white='FFFFFF'
+    def safe(value):
+        if value is None:return ''
+        if isinstance(value,(int,float)):return value
+        v=str(value)
+        return "'"+v if v.lstrip().startswith(('=','+','-','@')) else v
+    def add_sheet(title,headers,rows,widths=None):
+        ws=book.create_sheet(title);ws.append([safe(x) for x in headers])
+        for c in ws[1]:
+            c.font=Font(bold=True,color=white);c.fill=header_fill;c.alignment=Alignment(horizontal='center',vertical='center',wrap_text=True)
+        for row in rows:ws.append([safe(x) for x in row])
+        ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+        for idx in range(1,len(headers)+1):
+            width=(widths[idx-1] if widths and idx-1<len(widths) else 16)
+            ws.column_dimensions[get_column_letter(idx)].width=width
+        return ws
+
+    sm=data.get('summary') or {}
+    ws=book.create_sheet('Summary')
+    ws.append(['TIOM MIS / WB RECONCILIATION REPORT'])
+    ws['A1'].font=Font(bold=True,size=16,color=white);ws['A1'].fill=header_fill
+    ws.merge_cells('A1:D1')
+    ws.append(['Selected Period',data.get('fromDate'),data.get('toDate'),'All shifts' if data.get('shift')=='ALL' else 'Shift '+str(data.get('shift'))])
+    ws.append([])
+    ws.append(['Metric','Value','Control Meaning','Source'])
+    for c in ws[4]:c.font=Font(bold=True,color=white);c.fill=header_fill
+    metrics=[
+        ('Submitted Reports',sm.get('submittedReports',0),'Operational reports counted','MIS'),
+        ('Draft Reports',sm.get('draftReports',0),'Audit only; not operational','MIS'),
+        ('VOID Reports',sm.get('voidReports',0),'Audit only; not operational','MIS'),
+        ('Trippers',sm.get('trippers',0),'Unique submitted vehicles','MIS'),
+        ('Submitted Trips',sm.get('submittedTrips',0),'Trip rows in submitted reports','MIS'),
+        ('MIS Operational Tonnes',sm.get('misTonnes',0),'WB + approved trip-factor quantity','MIS'),
+        ('WB-linked Trips',sm.get('wbLinkedTrips',0),'Submitted trips linked to WB','MIS↔WB'),
+        ('WB-linked Tonnes',sm.get('wbLinkedTonnes',0),'Authoritative linked quantity','MIS↔WB'),
+        ('Estimated Factor Trips',sm.get('factorTrips',0),'Trips without WB using approved factor','MIS'),
+        ('Estimated Factor Tonnes',sm.get('factorTonnes',0),'Estimated operational quantity','MIS'),
+        ('Tonnage Pending Trips',sm.get('pendingTrips',0),'No WB and no valid factor quantity','MIS'),
+        ('Authoritative WB Trips',sm.get('authoritativeWbTrips',0),'Latest confirmed VALID WB movements','WB'),
+        ('Authoritative WB Tonnes',sm.get('authoritativeWbTonnes',0),'Latest confirmed VALID WB tonnes','WB'),
+        ('Matched Submitted WB',sm.get('matchedSubmittedWb',0),'Authoritative WB linked to SUBMITTED MIS','Reconciliation'),
+        ('Unmatched WB',sm.get('unmatchedWb',0),'Authoritative WB with no report link','Reconciliation'),
+        ('WB Linked to Draft',sm.get('draftLinkedWb',0),'Reserved by DRAFT; not operational','Reconciliation'),
+        ('WB Linked to VOID',sm.get('voidLinkedWb',0),'Linked to VOID report; review','Reconciliation'),
+        ('WB Match Rate %',sm.get('wbMatchRatePct'),'Submitted matched WB / authoritative WB','Reconciliation'),
+        ('Materials',sm.get('materials',0),'Distinct submitted materials','MIS'),
+        ('Routes',sm.get('routes',0),'Source→destination→material groups','MIS'),
+        ('Loading Equipment',sm.get('loadingEquipment',0),'Loaders/excavators attributed','MIS')
+    ]
+    for r in metrics:ws.append([safe(x) for x in r])
+    for col,w in {'A':30,'B':18,'C':46,'D':18}.items():ws.column_dimensions[col].width=w
+    ws.freeze_panes='A5'
+
+    add_sheet('Tripper Summary',
+      ['Vehicle ID','Tripper','Reports','Drivers','Trips','WB Trips','Factor Trips','Pending Trips','Total MT','WB MT','Estimated MT','KM Run','Avg Payload MT','Material Mix'],
+      [[x['vehicleId'],x['vehicle'],x['reports'],x['drivers'],x['trips'],x['wbTrips'],x['factorTrips'],x['pendingTrips'],x['tonnes'],x['wbTonnes'],x['estimatedTonnes'],x['kmRun'],x['avgPayloadMt'],x['materialMix']] for x in data.get('trippers',[])],
+      [15,24,10,24,10,10,12,12,12,12,12,12,14,55])
+    add_sheet('Material Summary',
+      ['Material ID','Material','Trips','WB Trips','Factor Trips','Pending Trips','Total MT','WB MT','Estimated MT','Trippers'],
+      [[x['materialId'],x['material'],x['trips'],x['wbTrips'],x['factorTrips'],x['pendingTrips'],x['tonnes'],x['wbTonnes'],x['estimatedTonnes'],x['trippers']] for x in data.get('materials',[])],
+      [16,30,10,10,12,12,12,12,12,10])
+    add_sheet('Route Summary',
+      ['Source ID','Source','Destination ID','Destination','Material ID','Material','Trips','WB Trips','Factor Trips','Total MT','Avg Lead KM','Ton-KM'],
+      [[x['sourceId'],x['source'],x['destinationId'],x['destination'],x['materialId'],x['material'],x['trips'],x['wbTrips'],x['factorTrips'],x['tonnes'],x['avgLeadKm'],x['tonKm']] for x in data.get('routes',[])],
+      [15,28,15,28,15,28,10,10,12,12,12,14])
+    add_sheet('Loader Summary',
+      ['Machine ID','Loader / Excavator','Trips','Tonnes','Materials','Sources','Trippers'],
+      [[x['machineId'],x['machine'],x['trips'],x['tonnes'],x['materials'],x['sources'],x['trippers']] for x in data.get('loaders',[])],
+      [18,28,10,12,38,45,10])
+    add_sheet('Trip Details',
+      ['Date','Shift','Report Ref','Tripper ID','Tripper','Driver ID','Driver','Trip #','Material ID','Material','Source ID','Source','Destination ID','Destination','Loader/Excavator','Load Time','Unload Time','Qty Source','MIS Qty MT','WB Movement No','WB Net MT','WB Authoritative','Reconciliation','Confidence','Reason','Bench RL','Route Mode','Lead KM','Lead Status','Remarks'],
+      [[x['date'],x['shift'],x['reportRef'],x['vehicleId'],x['vehicle'],x['driverId'],x['driver'],x['rowNo'],x['materialId'],x['material'],x['sourceId'],x['source'],x['destinationId'],x['destination'],x['machine'],x['loadingTime'],x['unloadingTime'],x['qtySource'],x['qtyMt'],x['wbMovementNo'],x['wbNetMt'],'YES' if x['wbAuthoritative'] else 'NO',x['reconciliationStatus'],x['confidence'],x['reconciliationReason'],x['benchRl'],x['routeMode'],x['leadKm'],x['leadStatus'],x['remarks']] for x in data.get('tripDetails',[])],
+      [12,8,16,15,24,14,24,8,14,26,15,28,15,28,25,11,11,13,12,18,12,14,22,11,42,10,14,11,18,38])
+    add_sheet('WB Reconciliation',
+      ['Date','Shift','WB No','Vehicle','Material Code','Material','Source','Destination','Net MT','Weigh Time','Link State','Report Ref','Report Status','Trip Row','Match Status','Confidence','Reason'],
+      [[x['date'],x['shift'],x['movementNo'],x['vehicle'],x['materialCode'],x['material'],x['source'],x['destination'],x['netMt'],x['weighAt'],x['state'],x['reportRef'],x['reportStatus'],x['tripRowNo'],x['matchStatus'],x['confidence'],x['reason']] for x in data.get('wbReconciliation',[])],
+      [12,8,18,16,18,30,25,25,12,20,22,16,14,10,18,11,48])
+    add_sheet('Saved Report Audit',
+      ['Date','Shift','Report ID','Tripper ID','Tripper','Driver ID','Driver','Report Ref','Status','KM Run','Entered By','Entered At','Submitted By','Submitted At'],
+      [[x['date'],x['shift'],x['reportId'],x['vehicleId'],x['vehicle'],x['driverId'],x['driver'],x['reportRef'],x['status'],x['kmRun'],x['enteredBy'],x['enteredAt'],x['submittedBy'],x['submittedAt']] for x in data.get('savedReports',[])],
+      [12,8,38,15,24,14,24,16,12,12,15,20,15,20])
+
+    for ws0 in book.worksheets:
+        for row in ws0.iter_rows():
+            for c in row:c.alignment=Alignment(vertical='top',wrap_text=False)
+    buf=BytesIO();book.save(buf);buf.seek(0)
+    name=f"TIOM_Reconciliation_{data['fromDate']}_to_{data['toDate']}_{data['shift']}.xlsx"
+    return StreamingResponse(buf,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      headers={'Content-Disposition':f'attachment; filename="{name}"','Cache-Control':'no-store'})
+
+
 @router.post('/rpc')
 def rpc(p: RPC, request: Request, db: Session = Depends(get_db)):
     csrf(request)
     user = get_user(db, request)
-    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
+    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'getTiomMisReconciliation', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
     if p.method not in read_methods:
         lock(db)
     try:
@@ -5089,6 +5492,7 @@ def dispatch(db, user, method, args):
     if method == 'getProductionDesk': return production_desk(db,user)
     if method == 'getTiomMisDesk': return tiom_mis_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomMisReport': return get_tiom_mis_report(db,user,args[0] if args and isinstance(args[0],dict) else {})
+    if method == 'getTiomMisReconciliation': return get_tiom_mis_reconciliation(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomWbSuggestions': return get_tiom_wb_suggestions(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomWbHistory': return get_tiom_wb_history(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomShiftProductionDesk': return get_tiom_shift_production_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
