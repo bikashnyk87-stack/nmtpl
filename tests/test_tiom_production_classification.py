@@ -107,6 +107,18 @@ class TiomProductionClassificationTests(unittest.TestCase):
         self.assertIn("MSP_FEED", codes)
         self.assertNotIn("ROM", codes)
 
+    def test_waste_rock_thakurani_is_weighed_ob_excavation(self):
+        row = wb(
+            "Waste Rock Thakurani",
+            "BGA/RL-770",
+            "PIT2/OBDUMP/BF",
+            "43.68",
+        )
+        row.material_code = "TKOB0000400"
+        codes = contribution_codes(row)
+        self.assertIn("WASTE", codes)
+        self.assertEqual(dict(wb_report_contributions(row))["WASTE"], Decimal("43.68"))
+
 
 if __name__ == "__main__":
     unittest.main()

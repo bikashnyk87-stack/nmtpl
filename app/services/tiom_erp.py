@@ -38,6 +38,14 @@ def _norm(value) -> str:
     return re.sub(r'[^A-Z0-9]+', ' ', str(value or '').upper()).strip()
 
 
+# Stable SAP/WB material identities that TIOM must understand even before a
+# Material Alias row is manually configured. DB aliases still take priority.
+TIOM_WB_PRODUCT_DEFAULTS = {
+    'TKOB0000400': 'OB',
+    'WASTE ROCK THAKURANI': 'OB',
+}
+
+
 def vehicle_matches(wb: WbMovement, equipment: Equipment) -> bool:
     candidates = {
         norm_vehicle(wb.vehicle_id), norm_vehicle(wb.vehicle_raw),
@@ -57,12 +65,16 @@ def resolve_product_id(db: Session, wb: WbMovement) -> str | None:
         direct[_norm(p.product_id)] = p.product_id
         direct.setdefault(_norm(p.name), p.product_id)
     aliases = {_norm(a.alias): a.product_id for a in db.scalars(select(MaterialAlias).where(MaterialAlias.active))}
+    product_ids = {p.product_id for p in products}
     for raw in (wb.material_code, wb.material_name):
         key = _norm(raw)
         if not key:
             continue
         if key in aliases:
             return aliases[key]
+        default_product = TIOM_WB_PRODUCT_DEFAULTS.get(key)
+        if default_product in product_ids:
+            return default_product
         if key in direct:
             return direct[key]
         # Useful but conservative fuzzy fallback for values like "SCREEN FINES".
@@ -104,10 +116,12 @@ def _is_stack(text: str) -> bool:
 def wb_report_contributions(wb: WbMovement):
     """Map one confirmed WB movement to management-report fact(s).
 
-    OB/WASTE is intentionally excluded: TIOM business rule says OB is a
-    trip-factor quantity (currently 40 MT/trip), not a WB quantity.
-    A single movement can legitimately feed more than one report fact, e.g.
-    screen fines produced and the same tonnes shifted to stack.
+    Confirmed WB is authoritative for weighed movements, including OB/WASTE
+    now supplied by the TIOM SAP/WB export (for example Waste Rock Thakurani).
+    Legacy shifts without WB OB can still use the MIS trip-factor fallback in
+    the shift-report bundle. A single movement can legitimately feed more than
+    one report fact, e.g. screen fines produced and the same tonnes shifted to
+    stack.
     """
     qty = (wb.net_kg or Decimal('0')) / Decimal('1000')
     if qty <= 0:
@@ -117,9 +131,11 @@ def wb_report_contributions(wb: WbMovement):
     dst = _norm(wb.destination_raw)
     out: list[tuple[str, Decimal]] = []
 
-    # Explicitly keep OB/WASTE on the trip-factor side.
+    # OB/WASTE is now a weighed excavation movement whenever it exists in the
+    # confirmed WB batch. The shift-report layer suppresses the old MIS factor
+    # fallback for that shift so the quantity cannot be counted twice.
     if re.search(r'(^| )(OB|WASTE)( |$)', mat):
-        return []
+        return [('WASTE', qty)]
 
     # Rehandling must never become fresh production.  Stock/stack sources and
     # the Project Area fines source are physical movements of already produced

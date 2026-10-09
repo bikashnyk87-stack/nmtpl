@@ -4787,8 +4787,11 @@ def _tiom_shift_ftd_bundle(db, day, sh, include_draft=False):
     batch,wb_rows=tiom_authoritative_wb(db,day,sh)
     for wb in wb_rows:
         for code,qty in tiom_wb_report_contributions(wb): add(code,qty,'WB')
+    wb_has_waste=vals.get('WASTE',Decimal('0'))>0
 
-    # 2) Submitted MIS supplies only non-WB trips (OB/internal haulage/etc.).
+    # 2) Submitted MIS supplies only non-WB trips. For legacy shifts where the
+    # confirmed WB has no OB/WASTE, the old MIS trip-factor quantity remains a
+    # fallback. Once WB contains WASTE, WB is authoritative for the whole shift.
     reps=list(db.scalars(select(TiomMisReport).where(TiomMisReport.operating_date==day,TiomMisReport.shift==sh,TiomMisReport.status=='SUBMITTED')))
     ids=[r.report_id for r in reps]
     if ids:
@@ -4803,6 +4806,8 @@ def _tiom_shift_ftd_bundle(db, day, sh, include_draft=False):
             d=details.get(r.row_id)
             if not d: continue
             code=_tiom_classify_mis_line(pmap.get(d.material_id),lmap.get(d.source_location_id),lmap.get(d.destination_location_id))
+            if code=='WASTE' and wb_has_waste:
+                continue
             if code: add(code,Decimal(d.calculated_qty_mt or 0),'MIS')
 
     # 3) Manual Plant Output / Exception entry is only a fallback. If WB or MIS already
