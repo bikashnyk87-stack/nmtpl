@@ -20,22 +20,35 @@ class TiomSavedReconciliationTests(unittest.TestCase):
         ):
             self.assertIn(term,api)
 
-    def test_saved_reports_ui_has_export_reconciliation_and_tripper_switcher(self):
+    def test_saved_reports_ui_is_entry_only_and_keeps_tripper_switcher(self):
         ui=(ROOT/'app'/'static'/'tiom_phase1.js').read_text('utf-8')
         for term in (
-            'SAVED DRIVER SHIFT REPORTS & RECONCILIATION',
-            'Export Reconciliation Excel',
-            'getTiomMisReconciliation',
-            'Trip-level Reconciliation',
+            'SAVED DRIVER SHIFT REPORTS',
+            'Download Detailed Entry Report',
+            '/api/web/tiom/mis-entry-export.xlsx',
+            'No WB reconciliation is being performed.',
             'Select another Tripper / Report',
             'backToSavedReports',
             'View Trips',
         ):
             self.assertIn(term,ui)
+        saved=ui[ui.index('function renderSavedReports()'):ui.index("window.toggleFactorEditor=function()")]
+        self.assertNotIn('Pending',saved)
+        self.assertNotIn('Matched WB',saved)
+        self.assertNotIn('loadSavedReconciliation',saved)
+
+    def test_backend_has_entry_only_export(self):
+        api=(ROOT/'app'/'routers'/'webapp.py').read_text('utf-8')
+        self.assertIn("/tiom/mis-entry-export.xlsx",api)
+        self.assertIn("No WB reconciliation is performed here",api)
+        self.assertIn("'Entry Details'",api)
+        self.assertIn("'Tripper Summary'",api)
+        self.assertIn("'Material Summary'",api)
+        self.assertIn("'Route Summary'",api)
 
     def test_phase1_cache_bust_is_current(self):
         html=(ROOT/'app'/'static'/'index.html').read_text('utf-8')
-        self.assertIn('tiom_phase1.js?v=tiom-field-r28',html)
+        self.assertIn('tiom_phase1.js?v=tiom-field-r29',html)
 
 
 if __name__=='__main__':
