@@ -4394,13 +4394,29 @@ def get_tiom_mis_report(db,user,p):
         'siblingReports':[{'reportId':x.report_id,'vehicleId':x.vehicle_id,'vehicle':_tiom_asset_label(db.get(Equipment,x.vehicle_id)) if db.get(Equipment,x.vehicle_id) else x.vehicle_id,'operatorId':x.operator_id or '','operator':(db.get(Person,x.operator_id).name if x.operator_id and db.get(Person,x.operator_id) else x.operator_id or ''),'paperRef':x.paper_ref or '','status':x.status} for x in siblings]}
 
 def save_tiom_mis_report(db,user,p,submit=False):
-    require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p); open_shift(db,day,sh); _ensure_tiom_trip_factors(db,user)
+    require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p); _ensure_tiom_trip_factors(db,user)
+    report_id=str(p.get('reportId') or '').strip(); report=db.get(TiomMisReport,report_id) if report_id else None
+    if report and report.status=='VOID':
+        raise HTTPException(409,'VOID report is immutable.')
+    is_correction=bool(report and report.status=='SUBMITTED')
+    edit_reason=''
+    before_snapshot=None
+    old_version=(report.version or 1) if report else None
+    old_vehicle_id=report.vehicle_id if report else None
+    if is_correction:
+        if not submit:
+            raise HTTPException(409,'A submitted report correction must be saved directly as a corrected submitted version.')
+        _require_tiom_mis_edit_key(db,p.get('editKey'))
+        edit_reason=short(str(p.get('editReason') or '')).strip()
+        if len(edit_reason)<5:
+            raise HTTPException(422,'Enter a clear Edit Reason (minimum 5 characters).')
+        before_snapshot=_tiom_mis_edit_snapshot(db,report)
+    else:
+        open_shift(db,day,sh)
     vehicle=active_resource(db,Equipment,str(p.get('vehicleId') or '').strip())
     if vehicle.group!='TRANSPORT': raise HTTPException(422,'Choose a tripper/dumper vehicle.')
     operator_id=str(p.get('operatorId') or '').strip() or None
     if operator_id: active_resource(db,Person,operator_id)
-    report_id=str(p.get('reportId') or '').strip(); report=db.get(TiomMisReport,report_id) if report_id else None
-    if report and report.status in {'SUBMITTED','VOID'}: raise HTTPException(409,'Submitted/void report is immutable. Void the submitted report and create a new corrected report.')
     if not report:
         report=TiomMisReport(report_id=str(uuid4()),operating_date=day,shift=sh,vehicle_id=vehicle.machine_id,operator_id=operator_id,status='DRAFT',entered_by=user.login_id,entered_at=now_local(),version=1)
         db.add(report); db.flush()
@@ -4419,8 +4435,18 @@ def save_tiom_mis_report(db,user,p,submit=False):
         raise HTTPException(422,'Closing HMR cannot be below opening HMR.')
 
     # Driver HMR uses the same central shift-level meter ledger as Shift Deployment.
+    marker=f'[DRIVER_REPORT:{report.report_id}]'
+    # Correct only the meter owned by this exact driver report.
+    if old_vehicle_id:
+        old_meter=db.scalar(select(SiteAssetMeter).where(
+            SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,SiteAssetMeter.shift==sh,
+            SiteAssetMeter.asset_id==old_vehicle_id,SiteAssetMeter.meter_type=='HMR'
+        ))
+        if old_meter and old_meter.source_type=='TIOM_DRIVER_REPORT' and marker in str(old_meter.remarks or '') and (
+            old_vehicle_id!=vehicle.machine_id or (report.opening_hmr is None and report.closing_hmr is None)
+        ):
+            db.delete(old_meter); db.flush()
     if report.opening_hmr is not None or report.closing_hmr is not None:
-        marker=f'[DRIVER_REPORT:{report.report_id}]'
         meter=db.scalar(select(SiteAssetMeter).where(
             SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,SiteAssetMeter.shift==sh,
             SiteAssetMeter.asset_id==vehicle.machine_id,SiteAssetMeter.meter_type=='HMR'
@@ -4494,6 +4520,8 @@ def save_tiom_mis_report(db,user,p,submit=False):
             unloading+=timedelta(days=1)
         dep_matches=[d for d in deployments if d.source_location_id==source_id and d.machine_id==machine_id]
         if not dep_matches:
+            if is_correction:
+                raise HTTPException(409,f'Row {i}: corrected source / loader assignment is not in Machine Setup for {day} Shift {sh}. Update Machine Setup first, then save the correction.')
             # Existing assignment at another source must be closed before
             # this machine can be used here; do not silently create a second
             # overlapping allocation from a trip row.
@@ -4563,11 +4591,25 @@ def save_tiom_mis_report(db,user,p,submit=False):
         if not meter:
             meter=SiteAssetMeter(reading_id=str(uuid4()),site_id='TIOM',operating_date=day,shift=sh,asset_id=asset.machine_id,meter_type='HMR',entered_by=user.login_id,entered_at=now_local()); db.add(meter)
         meter.opening_reading=opening; meter.closing_reading=closing; meter.usage=usage; meter.source_type='TIOM_DEPLOYMENT'; meter.remarks=short(str(item.get('remarks') or 'Legacy MIS HMR migrated to Shift Deployment')); meter.entered_by=user.login_id; meter.entered_at=now_local(); legacy_hmr+=1
-    report.status='SUBMITTED' if submit else 'DRAFT'
-    if submit: report.submitted_by=user.login_id; report.submitted_at=now_local()
-    audit(db,user,'TIOM_MIS_SUBMIT' if submit else 'TIOM_MIS_DRAFT','tiom_mis_report',report.report_id,{'date':str(day),'shift':sh,'vehicle':vehicle.machine_id,'rows':kept,'wbLinkedRows':linked_count,'leadResolvedRows':lead_ok_count,'leadMissingRows':lead_missing_count,'legacyHmrMigrated':legacy_hmr})
+    if is_correction:
+        report.status='SUBMITTED'
+        report.approved_by=user.login_id
+        report.approved_at=now_local()
+        db.flush()
+        after_snapshot=_tiom_mis_edit_snapshot(db,report)
+        audit(db,user,'TIOM_MIS_EDIT_SUBMITTED','tiom_mis_report',report.report_id,{
+            'reason':edit_reason,'fromVersion':old_version,'toVersion':report.version,
+            'before':before_snapshot,'after':after_snapshot,
+            'rows':kept,'wbLinkedRows':linked_count,'leadResolvedRows':lead_ok_count,'leadMissingRows':lead_missing_count
+        })
+        message=f'Submitted report corrected and saved as version {report.version}.'
+    else:
+        report.status='SUBMITTED' if submit else 'DRAFT'
+        if submit: report.submitted_by=user.login_id; report.submitted_at=now_local()
+        audit(db,user,'TIOM_MIS_SUBMIT' if submit else 'TIOM_MIS_DRAFT','tiom_mis_report',report.report_id,{'date':str(day),'shift':sh,'vehicle':vehicle.machine_id,'rows':kept,'wbLinkedRows':linked_count,'leadResolvedRows':lead_ok_count,'leadMissingRows':lead_missing_count,'legacyHmrMigrated':legacy_hmr})
+        message='MIS shift report submitted.' if submit else 'MIS draft saved.'
     db.flush()
-    return {'ok':True,'message':('MIS shift report submitted.' if submit else 'MIS draft saved.'),'reportId':report.report_id,'status':report.status,'wbLinkedRows':linked_count,'leadResolvedRows':lead_ok_count,'leadMissingRows':lead_missing_count,'summary':_tiom_mis_shift_summary(db,day,sh)}
+    return {'ok':True,'message':message,'reportId':report.report_id,'status':report.status,'version':report.version or 1,'corrected':is_correction,'wbLinkedRows':linked_count,'leadResolvedRows':lead_ok_count,'leadMissingRows':lead_missing_count,'summary':_tiom_mis_shift_summary(db,day,sh)}
 
 def save_tiom_trip_factor(db,user,p):
     require(user,admin=True); p=p or {}; code=str(p.get('materialCode') or '').strip().upper()
@@ -5750,6 +5792,7 @@ def dispatch(db, user, method, args):
     if method == 'getProductionDesk': return production_desk(db,user)
     if method == 'getTiomMisDesk': return tiom_mis_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomMisReport': return get_tiom_mis_report(db,user,args[0] if args and isinstance(args[0],dict) else {})
+    if method == 'verifyTiomMisEditKey': return verify_tiom_mis_edit_key(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomMisReconciliation': return get_tiom_mis_reconciliation(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomWbSuggestions': return get_tiom_wb_suggestions(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomWbHistory': return get_tiom_wb_history(db,user,args[0] if args and isinstance(args[0],dict) else {})
@@ -5773,6 +5816,7 @@ def dispatch(db, user, method, args):
     if method == 'markTripLoaded': return transition_trip(db,user,args[0] if args else {},'LOADED')
     if method == 'markTripUnloaded': return transition_trip(db,user,args[0] if args else {},'UNLOADED')
     if method == 'saveTiomMisDraft': return save_tiom_mis_report(db,user,args[0] if args else {},False)
+    if method == 'saveTiomMisEditKey': return save_tiom_mis_edit_key(db,user,args[0] if args else {})
     if method == 'submitTiomMisReport': return save_tiom_mis_report(db,user,args[0] if args else {},True)
     if method == 'saveTiomSourceDeployments': return save_tiom_source_deployments(db,user,args[0] if args else {})
     if method == 'saveTiomDrillingShift': return save_tiom_drilling_shift(db,user,args[0] if args else {})
