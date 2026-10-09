@@ -5519,7 +5519,7 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
             rep.vehicle_id,vehicle,rep.operator_id or '',driver,
             rep.opening_kmr,rep.closing_kmr,float(km_run) if km_run is not None else None,
             rep.opening_hmr,rep.closing_hmr,float(hmr_run) if hmr_run is not None else None,
-            row.row_no,row.loading_raw or '',local_time(row.loading_at),row.unloading_raw or '',local_time(row.unloading_at),
+            row.row_no,local_time(row.loading_at),local_time(row.unloading_at),
             material_id,material,source_id,source,dest_id,destination,machine_id,machine,
             float(qty) if qty is not None else None,row.remarks or '',
             rep.entered_by,local_dt(rep.entered_at),rep.submitted_by or '',local_dt(rep.submitted_at)
@@ -5552,8 +5552,9 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
     submitted=sum(1 for x in reports if x.status=='SUBMITTED')
     drafts=sum(1 for x in reports if x.status=='DRAFT')
     voids=sum(1 for x in reports if x.status=='VOID')
-    qty_total=sum((Decimal(str(x[28])) for x in detail_rows if x[28] not in (None,'')),Decimal('0'))
-    qty_rows=sum(1 for x in detail_rows if x[28] not in (None,''))
+    qty_index=26
+    qty_total=sum((Decimal(str(x[qty_index])) for x in detail_rows if x[qty_index] not in (None,'')),Decimal('0'))
+    qty_rows=sum(1 for x in detail_rows if x[qty_index] not in (None,''))
     ws=book.create_sheet('Summary')
     ws.append(['TIOM SAVED ENTRY DETAILED REPORT']);ws.merge_cells('A1:D1')
     ws['A1'].font=Font(bold=True,size=16,color=white);ws['A1'].fill=header_fill
@@ -5590,10 +5591,10 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
     add_sheet('Entry Details',[
         'Date','Shift','Report Status','Report ID','Report Ref','Vehicle ID','Tripper','Driver ID','Driver',
         'Opening KMR','Closing KMR','KM Run','Opening HMR','Closing HMR','HMR Run','Trip #',
-        'Loading Time Raw','Loading Time','Unloading Time Raw','Unloading Time',
+        'Loading Time','Unloading Time',
         'Material ID','Material','Source ID','Source','Destination ID','Destination',
         'Machine ID','Loader / Excavator','Qty MT','Remarks','Entered By','Entered At','Submitted By','Submitted At'
-    ],detail_rows,[12,8,14,38,16,15,26,14,26,12,12,12,12,12,12,8,15,12,17,12,15,30,15,30,15,30,18,28,12,38,15,20,15,20])
+    ],detail_rows,[12,8,14,38,16,15,26,14,26,12,12,12,12,12,12,8,12,12,15,30,15,30,15,30,18,28,12,38,15,20,15,20])
 
     audit_rows=[[
         str(r.operating_date),r.shift,r.report_id,r.vehicle_id,label_eq(r.vehicle_id),r.operator_id or '',label_person(r.operator_id),
