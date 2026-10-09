@@ -240,7 +240,7 @@
   function renderSavedReports(){
     var d=T.mis||{},remember=T.savedFilter||{};
     var from=remember.from||d.reportFrom||d.date||S.boot.today,to=remember.to||d.reportTo||d.date||S.boot.today,shift=remember.shift||d.reportShift||'ALL';
-    html('tiom_prod_body','<div class="tiom-mis-toolbar"><b>SAVED DRIVER SHIFT REPORTS & RECONCILIATION</b><label>From<input id="ts_from" type="date" value="'+safe(from)+'"></label><label>To<input id="ts_to" type="date" value="'+safe(to)+'"></label><label>Shift<select id="ts_shift"><option value="ALL">All shifts</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label><label>Search<input id="ts_search" value="'+safe(remember.search||'')+'" placeholder="Date / truck / driver / ref / status" oninput="filterSavedReports()"></label><button class="btn primary small" onclick="loadSavedReports()">Load Range</button><button class="btn secondary small" onclick="exportSavedReconciliation()">Export Reconciliation Excel</button></div><div id="ts_body"><div class="loading">Loading saved reports…</div></div>');
+    html('tiom_prod_body','<div class="tiom-mis-toolbar"><b>SAVED DRIVER SHIFT REPORTS</b><label>From<input id="ts_from" type="date" value="'+safe(from)+'"></label><label>To<input id="ts_to" type="date" value="'+safe(to)+'"></label><label>Shift<select id="ts_shift"><option value="ALL">All shifts</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label><label>Search<input id="ts_search" value="'+safe(remember.search||'')+'" placeholder="Date / tripper / driver / ref / status" oninput="filterSavedReports()"></label><button class="btn primary small" onclick="loadSavedReports()">Load Range</button><button class="btn secondary small" onclick="downloadSavedEntryReport()">Download Detailed Entry Report</button></div><div id="ts_body"><div class="loading">Loading saved reports…</div></div>');
     if(q('ts_shift'))q('ts_shift').value=shift;
     loadSavedReports();
   }
@@ -248,51 +248,25 @@
     var from=v('ts_from')||S.boot.today,to=v('ts_to')||S.boot.today,reportShift=v('ts_shift')||'ALL',search=v('ts_search')||'';
     T.savedFilter={from:from,to:to,shift:reportShift,search:search};
     appRun(function(d){
-      T.mis=d;T.savedReports=d.reports||[];renderSavedTable(T.savedReports);filterSavedReports();loadSavedReconciliation(from,to,reportShift);
+      T.mis=d;T.savedReports=d.reports||[];renderSavedTable(T.savedReports);filterSavedReports();
     },function(e){html('ts_body','<div class="bad">'+safe(e.message)+'</div>')}).getTiomMisDesk({date:to,shift:S.boot.shift,reportFrom:from,reportTo:to,reportShift:reportShift});
   };
   function renderSavedTable(rows){
     var body=(rows||[]).map(function(x){
       var del=x.status==='DRAFT'?'<button class="btn danger tiny" onclick="removeMisReport(\''+safe(x.reportId)+'\',\'DRAFT\')">Delete Draft</button>':(S.boot.user.isManagement&&x.status==='SUBMITTED'?'<button class="btn danger tiny" onclick="removeMisReport(\''+safe(x.reportId)+'\',\'SUBMITTED\')">Void</button>':'');
       var h=(x.openingHmr!=null&&x.closingHmr!=null)?n(Number(x.closingHmr)-Number(x.openingHmr)):'—';
-      var mix=n(x.wbLinkedTrips||0)+' WB / '+n(x.factorTrips||0)+' est'+(Number(x.pendingTrips||0)?' / '+n(x.pendingTrips)+' pending':'');
-      return '<tr data-search="'+safe((x.date+' '+x.shift+' '+x.vehicleId+' '+(x.paperRef||'')+' '+x.status+' '+(x.operatorId||'')).toLowerCase())+'"><td>'+safe(x.date)+'</td><td>'+safe(x.shift)+'</td><td>'+safe(x.vehicleId)+'</td><td>'+safe(x.operatorId||'—')+'</td><td>'+safe(x.paperRef||'—')+'</td><td><b>'+n(x.tripCount||0)+'</b><small>'+safe(mix)+'</small></td><td><b>'+n(x.totalQtyMt||0)+' MT</b></td><td>'+h+'</td><td>'+safe(x.status)+'</td><td>'+safe(x.enteredAt)+'</td><td><button class="btn secondary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\')">'+(x.status==='DRAFT'?'Edit':'View Trips')+'</button>'+del+'</td></tr>';
+      return '<tr data-search="'+safe((x.date+' '+x.shift+' '+x.vehicleId+' '+(x.paperRef||'')+' '+x.status+' '+(x.operatorId||'')).toLowerCase())+'"><td>'+safe(x.date)+'</td><td>'+safe(x.shift)+'</td><td>'+safe(x.vehicleId)+'</td><td>'+safe(x.operatorId||'—')+'</td><td>'+safe(x.paperRef||'—')+'</td><td><b>'+n(x.tripCount||0)+'</b></td><td><b>'+n(x.totalQtyMt||0)+' MT</b></td><td>'+h+'</td><td>'+safe(x.status)+'</td><td>'+safe(x.enteredAt)+'</td><td><button class="btn secondary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\')">'+(x.status==='DRAFT'?'Edit':'View Trips')+'</button>'+del+'</td></tr>';
     }).join('')||'<tr><td colspan="11" class="note">No saved reports in this date range.</td></tr>';
-    html('ts_body','<div class="panel tiom-sap-card"><div class="tiom-card-title"><div><b>SAVED TRIPPER REPORTS</b><span>Trip count and operational tonnes are shown per saved report.</span></div><span class="tiom-state">'+(rows||[]).length+' reports</span></div><div class="table-wrap"><table class="tiom-entry-table"><thead><tr><th>Date</th><th>Shift</th><th>Tripper</th><th>Driver</th><th>Report Ref</th><th>Trips / Source</th><th>Qty</th><th>HMR Hrs</th><th>Status</th><th>Entered</th><th>Action</th></tr></thead><tbody id="ts_rows">'+body+'</tbody></table></div><div class="tiom-help">SUBMITTED reports count in reconciliation. DRAFT / VOID remain in the audit trail. Use Export Reconciliation Excel for the complete selected-period workbook.</div></div><div id="ts_recon"><div class="panel"><div class="loading">Loading reconciliation summary…</div></div></div>');
+    html('ts_body','<div class="panel tiom-sap-card"><div class="tiom-card-title"><div><b>SAVED TRIPPER REPORTS</b><span>Entry data only. No WB reconciliation is being performed.</span></div><span class="tiom-state">'+(rows||[]).length+' reports</span></div><div class="table-wrap"><table class="tiom-entry-table"><thead><tr><th>Date</th><th>Shift</th><th>Tripper</th><th>Driver</th><th>Report Ref</th><th>Trips</th><th>Qty</th><th>HMR Hrs</th><th>Status</th><th>Entered</th><th>Action</th></tr></thead><tbody id="ts_rows">'+body+'</tbody></table></div><div class="tiom-help">Download Detailed Entry Report exports the selected period exactly from saved entry records. No WB comparison or reconciliation status is created.</div></div>');
   }
   window.filterSavedReports=function(){
     var term=String(v('ts_search')||'').trim().toLowerCase();
     if(T.savedFilter)T.savedFilter.search=v('ts_search')||'';
     var tableBody=q('ts_rows');if(tableBody)tableBody.querySelectorAll('tr').forEach(function(r){r.hidden=!!(term&&!String(r.dataset.search||'').includes(term))});
   };
-  function reconCard(label,value,note,tone){
-    return '<div class="erp-hsd-cat '+safe(tone||'')+'"><span>'+safe(label)+'</span><b>'+safe(value)+'</b><small>'+safe(note||'')+'</small></div>';
-  }
-  function renderSavedReconciliation(d){
-    T.savedReconciliation=d;var s=d.summary||{};
-    var cards=[
-      reconCard('Submitted Trips',n(s.submittedTrips||0),'Operational trip rows'),
-      reconCard('Operational Tonnes',n(s.misTonnes||0)+' MT','WB + approved trip factor'),
-      reconCard('WB Linked',n(s.wbLinkedTrips||0)+' trips',n(s.wbLinkedTonnes||0)+' MT'),
-      reconCard('Estimated',n(s.factorTrips||0)+' trips',n(s.factorTonnes||0)+' MT'),
-      reconCard('Tonnage Pending',n(s.pendingTrips||0),'No WB / factor',Number(s.pendingTrips||0)?'warn':''),
-      reconCard('Authoritative WB',n(s.authoritativeWbTrips||0)+' trips',n(s.authoritativeWbTonnes||0)+' MT'),
-      reconCard('Matched WB',n(s.matchedSubmittedWb||0),s.wbMatchRatePct==null?'No WB':'Match '+n(s.wbMatchRatePct)+'%'),
-      reconCard('Unmatched WB',n(s.unmatchedWb||0),'Needs reconciliation',Number(s.unmatchedWb||0)?'warn':'')
-    ].join('');
-    var tripper=table(['Tripper','Reports','Trips','WB','Estimated','Pending','Total MT','KM','Avg Payload','Material Mix'],(d.trippers||[]).map(function(x){return [safe(x.vehicle),n(x.reports),n(x.trips),n(x.wbTrips),n(x.factorTrips),n(x.pendingTrips),n(x.tonnes),n(x.kmRun),x.avgPayloadMt==null?'—':n(x.avgPayloadMt),safe(x.materialMix||'')]}));
-    var materials=table(['Material','Trips','WB','Estimated','Pending','Total MT','WB MT','Est MT','Trippers'],(d.materials||[]).map(function(x){return [safe(x.material),n(x.trips),n(x.wbTrips),n(x.factorTrips),n(x.pendingTrips),n(x.tonnes),n(x.wbTonnes),n(x.estimatedTonnes),n(x.trippers)]}));
-    var routes=table(['Source','Destination','Material','Trips','WB','Estimated','Tonnes','Avg Lead','Ton-km'],(d.routes||[]).slice(0,100).map(function(x){return [safe(x.source),safe(x.destination),safe(x.material),n(x.trips),n(x.wbTrips),n(x.factorTrips),n(x.tonnes),x.avgLeadKm==null?'—':n(x.avgLeadKm),n(x.tonKm)]}));
-    var details=table(['Date','Shift','Tripper','Driver','Trip','Material','Source','Destination','Loader / Excavator','Qty Source','Qty MT','WB No','WB MT','Reconciliation','Lead KM'],(d.tripDetails||[]).map(function(x){return [safe(x.date),safe(x.shift),safe(x.vehicle),safe(x.driver||x.driverId||'—'),n(x.rowNo),safe(x.material),safe(x.source),safe(x.destination),safe(x.machine),safe(x.qtySource),x.qtyMt==null?'—':n(x.qtyMt),safe(x.wbMovementNo||'—'),x.wbNetMt==null?'—':n(x.wbNetMt),safe(x.reconciliationStatus),x.leadKm==null?'—':n(x.leadKm)]}));
-    var wb=table(['Date','Shift','WB No','Vehicle','Material','Source','Destination','Net MT','Link State','Report Ref'],(d.wbReconciliation||[]).map(function(x){return [safe(x.date),safe(x.shift),safe(x.movementNo),safe(x.vehicle),safe(x.material),safe(x.source),safe(x.destination),n(x.netMt),safe(x.state),safe(x.reportRef||'—')]}));
-    html('ts_recon','<div class="panel tiom-sap-card erp-report-shell"><div class="tiom-card-title"><div><b>RECONCILIATION SUMMARY — '+safe(d.fromDate)+' → '+safe(d.toDate)+'</b><span>'+(d.shift==='ALL'?'All shifts':'Shift '+safe(d.shift))+' · SUBMITTED MIS compared with latest confirmed VALID WB.</span></div><button class="btn primary tiny" onclick="exportSavedReconciliation()">Export Full Excel</button></div><div class="erp-hsd-grid">'+cards+'</div><details class="erp-full-report" open><summary><b>Tripper Summary</b> · trips, tonnage, material mix, WB vs estimate</summary>'+tripper+'</details><details class="erp-full-report"><summary><b>Material Summary</b></summary>'+materials+'</details><details class="erp-full-report"><summary><b>Source → Destination → Material Summary</b></summary>'+routes+'</details><details class="erp-full-report"><summary><b>Trip-level Reconciliation</b> · '+n(d.tripDetailsTotal||0)+' trip rows'+(d.tripDetailsTruncated?' · showing first '+n((d.tripDetails||[]).length):'')+'</summary>'+details+'</details><details class="erp-full-report"><summary><b>WB Reconciliation</b> · '+n(d.wbReconciliationTotal||0)+' authoritative WB rows'+(d.wbReconciliationTruncated?' · showing first '+n((d.wbReconciliation||[]).length):'')+'</summary>'+wb+'</details><div class="tiom-help">Excel export contains full Trip Details, WB Reconciliation, Tripper, Material, Route, Loader/Excavator summaries, and Saved Report Audit for this selected period.</div></div>');
-  }
-  window.loadSavedReconciliation=function(from,to,shift){
-    appRun(function(d){renderSavedReconciliation(d)},function(e){html('ts_recon','<div class="panel"><div class="bad">Reconciliation: '+safe(e.message)+'</div></div>')}).getTiomMisReconciliation({fromDate:from,toDate:to,shift:shift,limit:500});
-  };
-  window.exportSavedReconciliation=function(){
+  window.downloadSavedEntryReport=function(){
     var from=v('ts_from')||(T.savedFilter&&T.savedFilter.from)||S.boot.today,to=v('ts_to')||(T.savedFilter&&T.savedFilter.to)||S.boot.today,shift=v('ts_shift')||(T.savedFilter&&T.savedFilter.shift)||'ALL';
-    var qs=new URLSearchParams({fromDate:from,toDate:to,shift:shift});window.location.assign('/api/web/tiom/mis-reconciliation-export.xlsx?'+qs.toString());
+    var qs=new URLSearchParams({fromDate:from,toDate:to,shift:shift});window.location.assign('/api/web/tiom/mis-entry-export.xlsx?'+qs.toString());
   };
   window.editSavedReport=function(id){
     T.savedFilter={from:v('ts_from')||(T.savedFilter&&T.savedFilter.from)||S.boot.today,to:v('ts_to')||(T.savedFilter&&T.savedFilter.to)||S.boot.today,shift:v('ts_shift')||(T.savedFilter&&T.savedFilter.shift)||'ALL',search:v('ts_search')||(T.savedFilter&&T.savedFilter.search)||''};

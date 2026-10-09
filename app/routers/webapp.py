@@ -5435,6 +5435,182 @@ def tiom_mis_reconciliation_export(request:Request,fromDate:str='',toDate:str=''
       headers={'Content-Disposition':f'attachment; filename="{name}"','Cache-Control':'no-store'})
 
 
+
+@router.get('/tiom/mis-entry-export.xlsx')
+def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:str='ALL',db:Session=Depends(get_db)):
+    """Download saved Production/MIS entry data only.
+
+    No WB reconciliation is performed here. The workbook reflects saved entry
+    records for the selected period and uses existing stored/calculated entry
+    quantity where available.
+    """
+    user=get_user(db,request);require(user,'PRODUCTION')
+    today=operating_context()[0]
+    from_day=_parse_ui_date_v2(fromDate,'report from date') if fromDate else today
+    to_day=_parse_ui_date_v2(toDate,'report to date') if toDate else from_day
+    if to_day < from_day or (to_day-from_day).days>366:
+        raise HTTPException(422,'Report range must be chronological and at most 367 days.')
+    shift=(shift or 'ALL').upper()
+    valid_shifts={x.shift for x in db.scalars(select(ShiftMaster).where(ShiftMaster.active.is_(True)))}
+    allowed=valid_shifts if user.admin or 'ALL' in str(user.shifts or '').split(',') else valid_shifts.intersection(str(user.shifts or '').split(','))
+    if shift!='ALL':
+        if shift not in valid_shifts: raise HTTPException(422,'Choose a valid report shift.')
+        require(user,shift=shift);allowed={shift}
+
+    reports=list(db.scalars(select(TiomMisReport).where(
+        TiomMisReport.operating_date>=from_day,TiomMisReport.operating_date<=to_day,
+        TiomMisReport.shift.in_(allowed)
+    ).order_by(TiomMisReport.operating_date,TiomMisReport.shift,TiomMisReport.vehicle_id,TiomMisReport.entered_at)))
+    report_by_id={x.report_id:x for x in reports}
+    report_ids=list(report_by_id)
+    rows=list(db.scalars(select(TiomMisTripRow).where(
+        TiomMisTripRow.report_id.in_(report_ids)
+    ).order_by(TiomMisTripRow.report_id,TiomMisTripRow.row_no))) if report_ids else []
+    row_ids=[x.row_id for x in rows]
+    details={x.row_id:x for x in db.scalars(select(TiomMisTripDetail).where(
+        TiomMisTripDetail.row_id.in_(row_ids)
+    ))} if row_ids else {}
+    equipment={x.machine_id:x for x in db.scalars(select(Equipment))}
+    people={x.employee_id:x for x in db.scalars(select(Person))}
+    products={x.product_id:x for x in db.scalars(select(Product))}
+    locations={x.location_id:x for x in db.scalars(select(Location))}
+
+    def label_eq(mid):
+        return _tiom_asset_label(equipment[mid]) if mid in equipment else (mid or '')
+    def label_person(pid):
+        return people[pid].name if pid in people else (pid or '')
+    def label_product(pid,raw=''):
+        obj=products.get(pid) if pid else None
+        return obj.name if obj else (raw or pid or '')
+    def label_location(lid,raw=''):
+        obj=locations.get(lid) if lid else None
+        return _tiom_location_display(obj.location_name,obj.location_id) if obj else (raw or lid or '')
+    def local_dt(dt):
+        return aware(dt).astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if dt else ''
+    def local_time(dt):
+        return aware(dt).astimezone(TZ).strftime('%H:%M') if dt else ''
+    def safe(value):
+        if value is None:return ''
+        if isinstance(value,(int,float)):return value
+        val=str(value)
+        return "'"+val if val.lstrip().startswith(('=','+','-','@')) else val
+
+    vehicle_agg={};material_agg={};route_agg={}
+    detail_rows=[]
+    for row in rows:
+        rep=report_by_id.get(row.report_id)
+        if not rep: continue
+        det=details.get(row.row_id)
+        qty=Decimal(det.calculated_qty_mt) if det and det.calculated_qty_mt is not None else None
+        material_id=det.material_id if det else ''
+        source_id=det.source_location_id if det else ''
+        dest_id=det.destination_location_id if det else ''
+        machine_id=det.machine_id if det else ''
+        material=label_product(material_id,row.material_raw or '')
+        source=label_location(source_id,row.source_raw or '')
+        destination=label_location(dest_id,row.destination_raw or '')
+        machine=label_eq(machine_id)
+        driver=label_person(rep.operator_id)
+        vehicle=label_eq(rep.vehicle_id)
+        km_run=(rep.closing_kmr-rep.opening_kmr) if rep.opening_kmr is not None and rep.closing_kmr is not None and rep.closing_kmr>=rep.opening_kmr else None
+        hmr_run=(rep.closing_hmr-rep.opening_hmr) if rep.opening_hmr is not None and rep.closing_hmr is not None and rep.closing_hmr>=rep.opening_hmr else None
+        detail_rows.append([
+            str(rep.operating_date),rep.shift,rep.status,rep.report_id,rep.paper_ref or '',
+            rep.vehicle_id,vehicle,rep.operator_id or '',driver,
+            rep.opening_kmr,rep.closing_kmr,float(km_run) if km_run is not None else None,
+            rep.opening_hmr,rep.closing_hmr,float(hmr_run) if hmr_run is not None else None,
+            row.row_no,row.loading_raw or '',local_time(row.loading_at),row.unloading_raw or '',local_time(row.unloading_at),
+            material_id,material,source_id,source,dest_id,destination,machine_id,machine,
+            float(qty) if qty is not None else None,row.remarks or '',
+            rep.entered_by,local_dt(rep.entered_at),rep.submitted_by or '',local_dt(rep.submitted_at)
+        ])
+
+        va=vehicle_agg.setdefault(rep.vehicle_id,{'vehicle':vehicle,'reports':set(),'drivers':set(),'trips':0,'qty':Decimal('0'),'qty_rows':0,'materials':set()})
+        va['reports'].add(rep.report_id);va['trips']+=1
+        if driver:va['drivers'].add(driver)
+        if material:va['materials'].add(material)
+        if qty is not None:va['qty']+=qty;va['qty_rows']+=1
+        ma=material_agg.setdefault((material_id,material),{'materialId':material_id,'material':material,'trips':0,'qty':Decimal('0'),'qty_rows':0,'vehicles':set()})
+        ma['trips']+=1;ma['vehicles'].add(rep.vehicle_id)
+        if qty is not None:ma['qty']+=qty;ma['qty_rows']+=1
+        ra=route_agg.setdefault((source_id,dest_id,material_id),{'source':source,'destination':destination,'material':material,'trips':0,'qty':Decimal('0'),'qty_rows':0,'vehicles':set()})
+        ra['trips']+=1;ra['vehicles'].add(rep.vehicle_id)
+        if qty is not None:ra['qty']+=qty;ra['qty_rows']+=1
+
+    book=Workbook();book.remove(book.active)
+    header_fill=PatternFill('solid',fgColor='1F4E78');white='FFFFFF'
+    def add_sheet(title,headers,data,widths=None):
+        ws=book.create_sheet(title);ws.append([safe(x) for x in headers])
+        for c in ws[1]:
+            c.font=Font(bold=True,color=white);c.fill=header_fill;c.alignment=Alignment(horizontal='center',vertical='center',wrap_text=True)
+        for data_row in data: ws.append([safe(x) for x in data_row])
+        ws.freeze_panes='A2';ws.auto_filter.ref=ws.dimensions
+        for idx in range(1,len(headers)+1):
+            ws.column_dimensions[get_column_letter(idx)].width=(widths[idx-1] if widths and idx-1<len(widths) else 16)
+        return ws
+
+    submitted=sum(1 for x in reports if x.status=='SUBMITTED')
+    drafts=sum(1 for x in reports if x.status=='DRAFT')
+    voids=sum(1 for x in reports if x.status=='VOID')
+    qty_total=sum((Decimal(str(x[28])) for x in detail_rows if x[28] not in (None,'')),Decimal('0'))
+    qty_rows=sum(1 for x in detail_rows if x[28] not in (None,''))
+    ws=book.create_sheet('Summary')
+    ws.append(['TIOM SAVED ENTRY DETAILED REPORT']);ws.merge_cells('A1:D1')
+    ws['A1'].font=Font(bold=True,size=16,color=white);ws['A1'].fill=header_fill
+    ws.append(['Selected Period',str(from_day),str(to_day),'All shifts' if shift=='ALL' else 'Shift '+shift])
+    ws.append([])
+    ws.append(['Metric','Value','Meaning','Note'])
+    for c in ws[4]:c.font=Font(bold=True,color=white);c.fill=header_fill
+    summary_rows=[
+        ('Saved Reports',len(reports),'All statuses in selected period','No WB reconciliation'),
+        ('Submitted Reports',submitted,'Submitted entry reports',''),
+        ('Draft Reports',drafts,'Saved drafts',''),
+        ('VOID Reports',voids,'Voided reports retained for audit',''),
+        ('Entry Trip Rows',len(rows),'All trip rows in saved reports',''),
+        ('Rows With Qty',qty_rows,'Rows where the system already has quantity stored',''),
+        ('Recorded / Calculated Qty MT',round(float(qty_total),2),'Existing entry quantity only','Blank where no quantity is stored')
+    ]
+    for x in summary_rows:ws.append([safe(v) for v in x])
+    for col,w in {'A':30,'B':18,'C':42,'D':42}.items():ws.column_dimensions[col].width=w
+
+    tripper_rows=[]
+    for vid,x in vehicle_agg.items():
+        tripper_rows.append([vid,x['vehicle'],len(x['reports']),', '.join(sorted(x['drivers'])),x['trips'],x['qty_rows'],round(float(x['qty']),2),', '.join(sorted(x['materials']))])
+    tripper_rows.sort(key=lambda x:(-x[4],x[0]))
+    add_sheet('Tripper Summary',['Vehicle ID','Tripper','Reports','Drivers','Trips','Qty Rows','Qty MT','Materials'],tripper_rows,[15,26,10,34,10,10,14,55])
+
+    material_rows=[[x['materialId'],x['material'],x['trips'],x['qty_rows'],round(float(x['qty']),2),len(x['vehicles'])] for x in material_agg.values()]
+    material_rows.sort(key=lambda x:(-x[2],x[1]))
+    add_sheet('Material Summary',['Material ID','Material','Trips','Qty Rows','Qty MT','Trippers'],material_rows,[16,34,10,10,14,10])
+
+    route_rows=[[x['source'],x['destination'],x['material'],x['trips'],x['qty_rows'],round(float(x['qty']),2),len(x['vehicles'])] for x in route_agg.values()]
+    route_rows.sort(key=lambda x:(x[0],x[1],x[2]))
+    add_sheet('Route Summary',['Source','Destination','Material','Trips','Qty Rows','Qty MT','Trippers'],route_rows,[30,30,32,10,10,14,10])
+
+    add_sheet('Entry Details',[
+        'Date','Shift','Report Status','Report ID','Report Ref','Vehicle ID','Tripper','Driver ID','Driver',
+        'Opening KMR','Closing KMR','KM Run','Opening HMR','Closing HMR','HMR Run','Trip #',
+        'Loading Time Raw','Loading Time','Unloading Time Raw','Unloading Time',
+        'Material ID','Material','Source ID','Source','Destination ID','Destination',
+        'Machine ID','Loader / Excavator','Qty MT','Remarks','Entered By','Entered At','Submitted By','Submitted At'
+    ],detail_rows,[12,8,14,38,16,15,26,14,26,12,12,12,12,12,12,8,15,12,17,12,15,30,15,30,15,30,18,28,12,38,15,20,15,20])
+
+    audit_rows=[[
+        str(r.operating_date),r.shift,r.report_id,r.vehicle_id,label_eq(r.vehicle_id),r.operator_id or '',label_person(r.operator_id),
+        r.paper_ref or '',r.status,r.opening_kmr,r.closing_kmr,r.opening_hmr,r.closing_hmr,r.notes or '',
+        r.entered_by,local_dt(r.entered_at),r.submitted_by or '',local_dt(r.submitted_at)
+    ] for r in reports]
+    add_sheet('Saved Report Audit',[
+        'Date','Shift','Report ID','Vehicle ID','Tripper','Driver ID','Driver','Report Ref','Status',
+        'Opening KMR','Closing KMR','Opening HMR','Closing HMR','Notes','Entered By','Entered At','Submitted By','Submitted At'
+    ],audit_rows,[12,8,38,15,26,14,26,16,12,12,12,12,12,38,15,20,15,20])
+
+    buf=BytesIO();book.save(buf);buf.seek(0)
+    name=f"TIOM_Entry_Detail_{from_day}_to_{to_day}_{shift}.xlsx"
+    return StreamingResponse(buf,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={'Content-Disposition':f'attachment; filename="{name}"','Cache-Control':'no-store'})
+
+
 @router.post('/rpc')
 def rpc(p: RPC, request: Request, db: Session = Depends(get_db)):
     csrf(request)
