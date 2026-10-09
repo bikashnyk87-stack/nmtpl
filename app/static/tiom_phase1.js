@@ -301,8 +301,8 @@
   function renderSavedReports(){
     var d=T.mis||{},remember=T.savedFilter||{};
     var from=remember.from||d.reportFrom||d.date||S.boot.today,to=remember.to||d.reportTo||d.date||S.boot.today,shift=remember.shift||d.reportShift||'ALL';
-    var keyCtl=S.boot.user.isManagement?'<button class="btn secondary small" onclick="configureMisEditKey()">'+(d.editKeyConfigured?'Change Edit Key':'Set Edit Key')+'</button>':'';
-    html('tiom_prod_body','<div class="tiom-mis-toolbar"><b>SAVED DRIVER SHIFT REPORTS</b><label>From<input id="ts_from" type="date" value="'+safe(from)+'"></label><label>To<input id="ts_to" type="date" value="'+safe(to)+'"></label><label>Shift<select id="ts_shift"><option value="ALL">All shifts</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label><label>Search<input id="ts_search" value="'+safe(remember.search||'')+'" placeholder="Date / tripper / driver / ref / status" oninput="filterSavedReports()"></label><button class="btn primary small" onclick="loadSavedReports()">Load Range</button><button class="btn secondary small" onclick="downloadSavedEntryReport()">Download Detailed Entry Report</button>'+keyCtl+'<span class="tiom-state">Submitted edit: '+(d.editKeyConfigured?'Key protected':'Key not configured')+'</span></div><div id="ts_body"><div class="loading">Loading saved reports…</div></div>');
+    var keyCtl=S.boot.user.isManagement?'<button id="ts_key_btn" class="btn secondary small" onclick="configureMisEditKey()">'+(d.editKeyConfigured?'Change Edit Key':'Set Edit Key')+'</button>':'';
+    html('tiom_prod_body','<div class="tiom-mis-toolbar"><b>SAVED DRIVER SHIFT REPORTS</b><label>From<input id="ts_from" type="date" value="'+safe(from)+'"></label><label>To<input id="ts_to" type="date" value="'+safe(to)+'"></label><label>Shift<select id="ts_shift"><option value="ALL">All shifts</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label><label>Search<input id="ts_search" value="'+safe(remember.search||'')+'" placeholder="Date / tripper / driver / ref / status" oninput="filterSavedReports()"></label><button class="btn primary small" onclick="loadSavedReports()">Load Range</button><button class="btn secondary small" onclick="downloadSavedEntryReport()">Download Detailed Entry Report</button>'+keyCtl+'<span id="ts_key_state" class="tiom-state">Submitted edit: '+(d.editKeyConfigured?'Key protected':'Key not configured')+'</span></div><div id="ts_body"><div class="loading">Loading saved reports…</div></div>');
     if(q('ts_shift'))q('ts_shift').value=shift;
     loadSavedReports();
   }
@@ -310,7 +310,10 @@
     var from=v('ts_from')||S.boot.today,to=v('ts_to')||S.boot.today,reportShift=v('ts_shift')||'ALL',search=v('ts_search')||'';
     T.savedFilter={from:from,to:to,shift:reportShift,search:search};
     appRun(function(d){
-      T.mis=d;T.savedReports=d.reports||[];renderSavedTable(T.savedReports);filterSavedReports();
+      T.mis=d;T.savedReports=d.reports||[];
+      if(q('ts_key_btn'))q('ts_key_btn').textContent=d.editKeyConfigured?'Change Edit Key':'Set Edit Key';
+      if(q('ts_key_state'))q('ts_key_state').textContent='Submitted edit: '+(d.editKeyConfigured?'Key protected':'Key not configured');
+      renderSavedTable(T.savedReports);filterSavedReports();
     },function(e){html('ts_body','<div class="bad">'+safe(e.message)+'</div>')}).getTiomMisDesk({date:to,shift:S.boot.shift,reportFrom:from,reportTo:to,reportShift:reportShift});
   };
   function renderSavedTable(rows){
