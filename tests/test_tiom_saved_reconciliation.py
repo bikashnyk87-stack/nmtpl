@@ -26,10 +26,10 @@ class TiomSavedReconciliationTests(unittest.TestCase):
             'SAVED DRIVER SHIFT REPORTS',
             'Download Detailed Entry Report',
             '/api/web/tiom/mis-entry-export.xlsx',
-            'No WB reconciliation is being performed.',
+            'Submitted reports are read-only unless unlocked with the Edit Key.',
             'Select another Tripper / Report',
             'backToSavedReports',
-            'View Trips',
+            'Edit (Key)',
         ):
             self.assertIn(term,ui)
         saved=ui[ui.index('function renderSavedReports()'):ui.index("window.toggleFactorEditor=function()")]
@@ -69,7 +69,7 @@ class TiomSavedReconciliationTests(unittest.TestCase):
     def test_phase1_cache_bust_is_current(self):
         html=(ROOT/'app'/'static'/'index.html').read_text('utf-8')
         self.assertIn('webapp.js?v=tiom-overview-r26',html)
-        self.assertIn('tiom_phase1.js?v=tiom-field-r30',html)
+        self.assertIn('tiom_phase1.js?v=tiom-field-r31',html)
 
 
 if __name__=='__main__':
