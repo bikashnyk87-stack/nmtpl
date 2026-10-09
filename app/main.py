@@ -146,9 +146,12 @@ async def lifespan(app):
                     "wbTrips","wbTonnes","avgPayload","fieldTrips","matched","likely",
                     "wbUnmatched","tripNoWb","matchRate","misReports","misTrips",
                     "misOperationalQty","misObTrips","misObQty","misRomTrips","misRomQty",
+                    "wasteTonnes","obRemovedMt","shiftExcavationMt","shiftProcessedMt",
                     "romInputMt","finalProductionMt","finalRecoveryPct","oldStockExcludedMt",
                     "crusherFeed","screenFeed","hsdLitres","hsdPerTonne"
                 )},
+                "availableMaterials":dash.get("availableMaterials"),
+                "materials":dash.get("materials"),
                 "production":dash.get("production"),
                 "productionMaterials":dash.get("productionMaterials"),
                 "plantPerformance":dash.get("plantPerformance"),
