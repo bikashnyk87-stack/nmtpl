@@ -301,7 +301,8 @@
   function renderSavedReports(){
     var d=T.mis||{},remember=T.savedFilter||{};
     var from=remember.from||d.reportFrom||d.date||S.boot.today,to=remember.to||d.reportTo||d.date||S.boot.today,shift=remember.shift||d.reportShift||'ALL';
-    html('tiom_prod_body','<div class="tiom-mis-toolbar"><b>SAVED DRIVER SHIFT REPORTS</b><label>From<input id="ts_from" type="date" value="'+safe(from)+'"></label><label>To<input id="ts_to" type="date" value="'+safe(to)+'"></label><label>Shift<select id="ts_shift"><option value="ALL">All shifts</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label><label>Search<input id="ts_search" value="'+safe(remember.search||'')+'" placeholder="Date / tripper / driver / ref / status" oninput="filterSavedReports()"></label><button class="btn primary small" onclick="loadSavedReports()">Load Range</button><button class="btn secondary small" onclick="downloadSavedEntryReport()">Download Detailed Entry Report</button></div><div id="ts_body"><div class="loading">Loading saved reports…</div></div>');
+    var keyCtl=S.boot.user.isManagement?'<button class="btn secondary small" onclick="configureMisEditKey()">'+(d.editKeyConfigured?'Change Edit Key':'Set Edit Key')+'</button>':'';
+    html('tiom_prod_body','<div class="tiom-mis-toolbar"><b>SAVED DRIVER SHIFT REPORTS</b><label>From<input id="ts_from" type="date" value="'+safe(from)+'"></label><label>To<input id="ts_to" type="date" value="'+safe(to)+'"></label><label>Shift<select id="ts_shift"><option value="ALL">All shifts</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label><label>Search<input id="ts_search" value="'+safe(remember.search||'')+'" placeholder="Date / tripper / driver / ref / status" oninput="filterSavedReports()"></label><button class="btn primary small" onclick="loadSavedReports()">Load Range</button><button class="btn secondary small" onclick="downloadSavedEntryReport()">Download Detailed Entry Report</button>'+keyCtl+'<span class="tiom-state">Submitted edit: '+(d.editKeyConfigured?'Key protected':'Key not configured')+'</span></div><div id="ts_body"><div class="loading">Loading saved reports…</div></div>');
     if(q('ts_shift'))q('ts_shift').value=shift;
     loadSavedReports();
   }
@@ -314,11 +315,19 @@
   };
   function renderSavedTable(rows){
     var body=(rows||[]).map(function(x){
-      var del=x.status==='DRAFT'?'<button class="btn danger tiny" onclick="removeMisReport(\''+safe(x.reportId)+'\',\'DRAFT\')">Delete Draft</button>':(S.boot.user.isManagement&&x.status==='SUBMITTED'?'<button class="btn danger tiny" onclick="removeMisReport(\''+safe(x.reportId)+'\',\'SUBMITTED\')">Void</button>':'');
+      var actions='';
+      if(x.status==='DRAFT'){
+        actions='<button class="btn secondary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\',false)">Edit</button><button class="btn danger tiny" onclick="removeMisReport(\''+safe(x.reportId)+'\',\'DRAFT\')">Delete Draft</button>';
+      }else if(x.status==='SUBMITTED'){
+        actions='<button class="btn secondary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\',false)">View</button><button class="btn primary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\',true)">Edit (Key)</button>'+(S.boot.user.isManagement?'<button class="btn danger tiny" onclick="removeMisReport(\''+safe(x.reportId)+'\',\'SUBMITTED\')">Void</button>':'');
+      }else{
+        actions='<button class="btn secondary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\',false)">View</button>';
+      }
       var h=(x.openingHmr!=null&&x.closingHmr!=null)?n(Number(x.closingHmr)-Number(x.openingHmr)):'—';
-      return '<tr data-search="'+safe((x.date+' '+x.shift+' '+x.vehicleId+' '+(x.paperRef||'')+' '+x.status+' '+(x.operatorId||'')).toLowerCase())+'"><td>'+safe(x.date)+'</td><td>'+safe(x.shift)+'</td><td>'+safe(x.vehicleId)+'</td><td>'+safe(x.operatorId||'—')+'</td><td>'+safe(x.paperRef||'—')+'</td><td><b>'+n(x.tripCount||0)+'</b></td><td><b>'+n(x.totalQtyMt||0)+' MT</b></td><td>'+h+'</td><td>'+safe(x.status)+'</td><td>'+safe(x.enteredAt)+'</td><td><button class="btn secondary tiny" onclick="editSavedReport(\''+safe(x.reportId)+'\')">'+(x.status==='DRAFT'?'Edit':'View Trips')+'</button>'+del+'</td></tr>';
-    }).join('')||'<tr><td colspan="11" class="note">No saved reports in this date range.</td></tr>';
-    html('ts_body','<div class="panel tiom-sap-card"><div class="tiom-card-title"><div><b>SAVED TRIPPER REPORTS</b><span>Entry data only. No WB reconciliation is being performed.</span></div><span class="tiom-state">'+(rows||[]).length+' reports</span></div><div class="table-wrap"><table class="tiom-entry-table"><thead><tr><th>Date</th><th>Shift</th><th>Tripper</th><th>Driver</th><th>Report Ref</th><th>Trips</th><th>Qty</th><th>HMR Hrs</th><th>Status</th><th>Entered</th><th>Action</th></tr></thead><tbody id="ts_rows">'+body+'</tbody></table></div><div class="tiom-help">Download Detailed Entry Report exports the selected period exactly from saved entry records. No WB comparison or reconciliation status is created.</div></div>');
+      var corrected=x.correctedBy?safe(x.correctedBy)+(x.correctedAt?' · '+safe(x.correctedAt):''):'—';
+      return '<tr data-search="'+safe((x.date+' '+x.shift+' '+x.vehicleId+' '+(x.paperRef||'')+' '+x.status+' '+(x.operatorId||'')+' '+(x.correctedBy||'')).toLowerCase())+'"><td>'+safe(x.date)+'</td><td>'+safe(x.shift)+'</td><td>'+safe(x.vehicleId)+'</td><td>'+safe(x.operatorId||'—')+'</td><td>'+safe(x.paperRef||'—')+'</td><td><b>'+n(x.tripCount||0)+'</b></td><td><b>'+n(x.totalQtyMt||0)+' MT</b></td><td>'+h+'</td><td>'+safe(x.status)+'</td><td><b>v'+safe(x.version||1)+'</b></td><td>'+safe(x.enteredAt)+'</td><td>'+corrected+'</td><td><div class="report-buttons">'+actions+'</div></td></tr>';
+    }).join('')||'<tr><td colspan="13" class="note">No saved reports in this date range.</td></tr>';
+    html('ts_body','<div class="panel tiom-sap-card"><div class="tiom-card-title"><div><b>SAVED TRIPPER REPORTS</b><span>Submitted reports are read-only unless unlocked with the Edit Key. Every correction creates a new version and audit trail.</span></div><span class="tiom-state">'+(rows||[]).length+' reports</span></div><div class="table-wrap"><table class="tiom-entry-table"><thead><tr><th>Date</th><th>Shift</th><th>Tripper</th><th>Driver</th><th>Report Ref</th><th>Trips</th><th>Qty</th><th>HMR Hrs</th><th>Status</th><th>Ver</th><th>Entered</th><th>Last Corrected</th><th>Action</th></tr></thead><tbody id="ts_rows">'+body+'</tbody></table></div><div class="tiom-help"><b>Control:</b> View never unlocks editing. Edit (Key) requires the protected key + a correction reason. The original values remain in the server audit history.</div></div>');
   }
   window.filterSavedReports=function(){
     var term=String(v('ts_search')||'').trim().toLowerCase();
@@ -329,9 +338,21 @@
     var from=v('ts_from')||(T.savedFilter&&T.savedFilter.from)||S.boot.today,to=v('ts_to')||(T.savedFilter&&T.savedFilter.to)||S.boot.today,shift=v('ts_shift')||(T.savedFilter&&T.savedFilter.shift)||'ALL';
     var qs=new URLSearchParams({fromDate:from,toDate:to,shift:shift});window.location.assign('/api/web/tiom/mis-entry-export.xlsx?'+qs.toString());
   };
-  window.editSavedReport=function(id){
+  window.editSavedReport=function(id,unlock){
     T.savedFilter={from:v('ts_from')||(T.savedFilter&&T.savedFilter.from)||S.boot.today,to:v('ts_to')||(T.savedFilter&&T.savedFilter.to)||S.boot.today,shift:v('ts_shift')||(T.savedFilter&&T.savedFilter.shift)||'ALL',search:v('ts_search')||(T.savedFilter&&T.savedFilter.search)||''};
-    T.openReportAfterLoad=id;T.prodTab='MIS';tiomProdTab('MIS');
+    T.openReportAfterLoad=id;T.unlockAfterLoad=!!unlock;T.prodTab='MIS';tiomProdTab('MIS');
+  };
+  window.configureMisEditKey=function(){
+    if(!S.boot.user.isManagement){toast('Management access required.',true);return}
+    var dlg=q('option_dialog');if(!dlg)return;
+    dlg.innerHTML='<form method="dialog" class="panel" onsubmit="event.preventDefault();saveConfiguredMisEditKey()"><h3>Set Submitted Report Edit Key</h3><p class="note">Use the key you want authorized staff to enter before changing an already submitted report. The server stores only a one-way hash.</p><label>New Edit Key<input id="tm_new_edit_key" type="password" minlength="8" maxlength="64" autocomplete="new-password" required></label><label>Confirm Edit Key<input id="tm_new_edit_key2" type="password" minlength="8" maxlength="64" autocomplete="new-password" required></label><div id="tm_key_error" class="bad-text"></div><div class="btnrow"><button type="button" class="btn secondary" onclick="option_dialog.close()">Cancel</button><button type="submit" class="btn primary">Save Edit Key</button></div></form>';
+    dlg.showModal();setTimeout(()=>q('tm_new_edit_key')?.focus(),0)
+  };
+  window.saveConfiguredMisEditKey=function(){
+    var a=v('tm_new_edit_key'),b=v('tm_new_edit_key2');
+    if(a.length<8){if(q('tm_key_error'))q('tm_key_error').textContent='Use at least 8 characters.';return}
+    if(a!==b){if(q('tm_key_error'))q('tm_key_error').textContent='The two keys do not match.';return}
+    appRun(function(r){q('option_dialog')?.close();if(T.mis)T.mis.editKeyConfigured=true;toast(r.message);renderSavedReports()},function(e){if(q('tm_key_error'))q('tm_key_error').textContent=e.message}).saveTiomMisEditKey({key:a})
   };
   window.removeMisReport=function(id,status){var action=status==='DRAFT'?'delete this draft':'mark this submitted report VOID';if(!confirm('Are you sure you want to '+action+'?'))return;var reason=status==='DRAFT'?'':prompt('Reason for VOID:','Incorrect submitted report')||'Incorrect submitted report';appRun(function(r){toast(r.message);loadSavedReports()},function(e){toast(e.message,true)}).removeTiomMisReport({reportId:id,reason:reason})};
 
