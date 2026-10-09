@@ -4103,12 +4103,22 @@ def _tiom_mis_edit_key_hash(value):
     salt=secrets.token_bytes(16)
     digest=hashlib.pbkdf2_hmac('sha256',raw,salt,200_000,dklen=20)
     # 7 + 32 + 1 + 40 = exactly 80 chars; fits MasterOption.value.
-    return f"pbkdf2${salt.hex()}${digest.hex()}"
+    return "pbkdf2:"+salt.hex()+":"+digest.hex()
 
 
 def _tiom_mis_edit_key_matches(value,stored):
     try:
-        kind,salt_hex,expected=str(stored or '').split('
+        kind,salt_hex,expected=str(stored or '').split(':',2)
+        if kind!='pbkdf2':
+            return False
+        actual=hashlib.pbkdf2_hmac(
+            'sha256',str(value or '').encode('utf-8'),
+            bytes.fromhex(salt_hex),200_000,dklen=20
+        ).hex()
+        return hmac.compare_digest(actual,expected)
+    except (ValueError,TypeError):
+        return False
+
 
 def _tiom_mis_edit_key_configured(db):
     return (db.scalar(select(func.count()).select_from(MasterOption).where(
