@@ -4401,6 +4401,7 @@ def save_tiom_mis_report(db,user,p,submit=False):
     is_correction=bool(report and report.status=='SUBMITTED')
     edit_reason=''
     before_snapshot=None
+    correction_wb_keys=set()
     old_version=(report.version or 1) if report else None
     old_vehicle_id=report.vehicle_id if report else None
     if is_correction:
@@ -4411,6 +4412,7 @@ def save_tiom_mis_report(db,user,p,submit=False):
         if len(edit_reason)<5:
             raise HTTPException(422,'Enter a clear Edit Reason (minimum 5 characters).')
         before_snapshot=_tiom_mis_edit_snapshot(db,report)
+        correction_wb_keys={str(x.get('wbMovementKey') or '') for x in before_snapshot.get('rows',[]) if x.get('wbMovementKey')}
     else:
         open_shift(db,day,sh)
     vehicle=active_resource(db,Equipment,str(p.get('vehicleId') or '').strip())
@@ -4488,6 +4490,13 @@ def save_tiom_mis_report(db,user,p,submit=False):
     )))
     batch,wb_rows=tiom_authoritative_wb(db,day,sh)
     wbmap={w.movement_key:w for w in wb_rows}
+    # A historical correction may reference the exact WB rows already owned by
+    # this report even if a later confirmed batch superseded them. Allow only
+    # those pre-existing keys; never expose unrelated superseded WB movements.
+    missing_owned=correction_wb_keys-set(wbmap)
+    if missing_owned:
+        for old_wb in db.scalars(select(WbMovement).where(WbMovement.movement_key.in_(missing_owned))):
+            wbmap[old_wb.movement_key]=old_wb
     already_linked={r.wb_movement_key:r.row_id for r in db.scalars(select(TiomMisReconciliation).where(TiomMisReconciliation.wb_movement_key.is_not(None)))}
     source_contexts=_tiom_source_context_map(db,day,sh)
     kept=0; linked_count=0; lead_ok_count=0; lead_missing_count=0
@@ -4497,7 +4506,7 @@ def save_tiom_mis_report(db,user,p,submit=False):
         material_id=str(item.get('materialId') or '').strip(); source_id=str(item.get('sourceLocationId') or '').strip(); dest_id=str(item.get('destinationLocationId') or '').strip(); machine_id=str(item.get('machineId') or '').strip(); lt=str(item.get('loadingTime') or '').strip(); ut=str(item.get('unloadingTime') or '').strip()
         if not any([wb_key,material_id,source_id,dest_id,machine_id,lt,ut]): continue
         wb=wbmap.get(wb_key) if wb_key else None
-        if wb_key and not wb: raise HTTPException(409,f'Row {i}: selected WB movement is not in the active confirmed WB batch for {day} Shift {sh}.')
+        if wb_key and not wb: raise HTTPException(409,f'Row {i}: selected WB movement is not in the active confirmed WB batch for {day} Shift {sh}, and it was not already linked to this report.')
         if wb and not tiom_wb_vehicle_matches(wb,vehicle): raise HTTPException(422,f'Row {i}: WB movement {wb.movement_no} belongs to a different vehicle.')
         if wb_key and wb_key in already_linked: raise HTTPException(409,f'Row {i}: WB movement {wb.movement_no} is already linked to another MIS trip.')
         if wb:
