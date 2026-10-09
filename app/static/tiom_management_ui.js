@@ -151,7 +151,7 @@
       metric('Crusher gross',fmt(p.crusherGrossOutputMt,1,' t'),'Physical output','blue','⚙'),
       metric('Fresh crusher output',unverified?'Pending':fmt(p.crusherFreshOutputMt,1,' t'),unverified?'Feed allocation required':'Fresh share of gross','amber','▣'),
       metric('Final fresh output',unverified?'Pending':fmt(p.finalProductionMt,1,' t'),unverified?'Allocation incomplete':'Fresh final total','amber','▲'),
-      metric('OB removed',fmt(k.misObQty,1,' t'),'Factor-based MIS if applicable','blue','◩'),
+      metric('OB removed',fmt(k.obRemovedMt??k.wasteTonnes??k.misObQty,1,' t'),'Confirmed WB weight · MIS fallback for legacy shifts','blue','◩'),
       metric('Rehandling',fmt(p.oldStockExcludedMt,1,' t'),'Excluded from fresh production','blue','⟳')
     ].join('');
     const fresh=fmt(p.romInputMt,1,' t'),feed=fmt(p.plantFeedMt,1,' t'),screen=fmt(p.screenDirectMt,1,' t'),crusher=fmt(p.crusherGrossOutputMt,1,' t');
