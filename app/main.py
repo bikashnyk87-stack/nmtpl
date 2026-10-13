@@ -658,7 +658,7 @@ def site_app(site_id: str):
         return RedirectResponse("/tiom", status_code=307)
     if site_id not in {"SOCP", "KOCP"}:
         return RedirectResponse("/", status_code=307)
-    return FileResponse(STATIC / 'site.html')
+    return FileResponse(STATIC / 'site.html', headers={'Cache-Control': 'no-store, no-cache, must-revalidate', 'Pragma': 'no-cache'})
 
 
 @app.get("/tiom/mechanical")
