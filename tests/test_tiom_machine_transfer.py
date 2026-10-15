@@ -55,7 +55,9 @@ def test_transfer_is_audited_and_uses_existing_row_id():
     ):
         assert term in api, term
     for term in (
-        "Transfer →",
+        "↪ Transfer Equipment",
+        "openMachineTransfer",
+        "chooseMachineTransfer",
         "startMachineTransfer",
         "confirmMachineTransfer",
         "transferTiomSourceDeployment({",
@@ -63,3 +65,17 @@ def test_transfer_is_audited_and_uses_existing_row_id():
         "machinesForSource(sourceId,selected,loadingTime='')",
     ):
         assert term in ui, term
+
+
+def test_transfer_button_is_visible_and_static_cache_is_busted():
+    html = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
+    css = (ROOT / "app" / "static" / "tiom_phase1.css").read_text(encoding="utf-8")
+    ui = UI.read_text(encoding="utf-8")
+    assert 'onclick="openMachineTransfer()"' in ui
+    assert "id=\"tm_transfer_panel\"" in ui
+    assert "<th>Transfer</th>" not in ui
+    assert "tm-transfer-fields" in ui
+    assert "tiom_phase1.js?v=tiom-visible-transfer-20261015-r1" in html
+    assert "tiom_phase1.css?v=tiom-visible-transfer-20261015-r1" in html
+    assert ".tm-transfer-panel" in css
+    assert "td:nth-child(12)" in css

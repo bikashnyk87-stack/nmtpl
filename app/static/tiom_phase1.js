@@ -105,8 +105,8 @@
 
       <details open id="tm_dep_panel" class="panel tiom-sap-card tiom-deployment-card">
         <summary><b>EXCAVATOR / LOADER / PLANT / CRUSHER HMR</b> <span class="note">Optional — trips automatically register Source ↔ Loader/Excavator.</span></summary>
-        <div class="tiom-card-title"><div><span>Enter machine/plant operating hours and operator here. Record fault and breakdown repair in the shared Mechanical tab.</span></div><div><button class="btn secondary tiny" onclick="addDeploymentRow()">+ Row</button><button class="btn primary tiny" onclick="saveDeployments()">Save Machine Setup</button><button class="btn secondary tiny" onclick="render('MECHANICAL')">Record Breakdown →</button></div></div>
-        <div class="table-wrap tiom-deploy-scroll"><table class="tiom-entry-table tiom-deploy-table"><thead><tr><th>#</th><th>Source / RL</th><th>Equipment / Machine</th><th>Operator Name</th><th>Activity</th><th>From</th><th>To</th><th>HMR Open</th><th>HMR Close</th><th>Run</th><th>Reset</th><th>Note</th><th>Transfer</th></tr></thead><tbody id="tm_dep_rows"></tbody></table></div><div id="tm_transfer_panel" class="panel" hidden style="margin:8px 0;padding:12px"></div>
+        <div class="tiom-card-title"><div><span>Enter machine/plant operating hours and operator here. Record fault and breakdown repair in the shared Mechanical tab.</span></div><div><button class="btn secondary tiny" onclick="addDeploymentRow()">+ Row</button><button type="button" class="btn secondary tiny" onclick="openMachineTransfer()">↪ Transfer Equipment</button><button class="btn primary tiny" onclick="saveDeployments()">Save Machine Setup</button><button class="btn secondary tiny" onclick="render('MECHANICAL')">Record Breakdown →</button></div></div>
+        <div id="tm_transfer_panel" class="tm-transfer-panel panel" hidden></div><div class="table-wrap tiom-deploy-scroll"><table class="tiom-entry-table tiom-deploy-table"><thead><tr><th>#</th><th>Source / RL</th><th>Equipment / Machine</th><th>Operator Name</th><th>Activity</th><th>From</th><th>To</th><th>HMR Open</th><th>HMR Close</th><th>Run</th><th>Reset</th><th>Note</th></tr></thead><tbody id="tm_dep_rows"></tbody></table></div>
       </details>
 
       <details class="panel tiom-sap-card">
@@ -126,7 +126,7 @@
   function deploymentRows(){const rows=[];for(let i=0;i<T.depRows;i++)rows.push({deploymentId:v('td_id_'+i),sourceLocationId:v('td_src_'+i),machineId:v('td_mac_'+i),operatorId:v('td_op_'+i),activity:v('td_act_'+i),fromTime:v('td_from_'+i),toTime:v('td_to_'+i),openingHmr:v('td_hopen_'+i),closingHmr:v('td_hclose_'+i),meterReset:q('td_reset_'+i)?.checked||false,meterNote:v('td_note_'+i),notes:v('td_note_'+i)});return rows}
   function deploymentHmrCalc(i){const a=parseFloat(v('td_hopen_'+i)),b=parseFloat(v('td_hclose_'+i)),reset=q('td_reset_'+i)?.checked;const el=q('td_hrun_'+i);if(el)el.textContent=Number.isFinite(a)&&Number.isFinite(b)&&b>=a&&!reset?n(b-a):(reset?'RESET':'—')}
   window.deploymentMachineChanged=function(i){const x=((T.mis?.deploymentMachines||T.mis?.machines)||[]).find(a=>a.id===v('td_mac_'+i));if(x&&x.previousHmr!=null&&!v('td_hopen_'+i)){q('td_hopen_'+i).value=x.previousHmr;deploymentHmrCalc(i)}deploymentChanged()};
-  function renderDeploymentRows(existing){const d=T.mis,rows=existing||d?.deployments||[];let h='';const acts=d?.activities||[];for(let i=0;i<T.depRows;i++){const r=rows[i]||{},act=r.activity||acts[0]?.id||'';const aopts='<option value="">Activity…</option>'+acts.map(x=>`<option value="${safe(x.id)}" ${x.id===act?'selected':''}>${safe(x.label||x.id)}</option>`).join('');h+=`<tr><td>${i+1}<input type="hidden" id="td_id_${i}" value="${safe(r.deploymentId||'')}"></td><td>${combo('td_src_'+i,d.deploymentLocations||d.sourceLocations||[],r.sourceLocationId,'deploymentChanged()','Source')}</td><td>${combo('td_mac_'+i,d.deploymentMachines||d.machines||[],r.machineId,`deploymentMachineChanged(${i})`,'Equipment / Machine')}</td><td>${combo('td_op_'+i,d.operators||[],r.operatorId||'','deploymentChanged()','Operator name / ID')}</td><td><select id="td_act_${i}" onchange="deploymentChanged()">${aopts}</select></td><td><input id="td_from_${i}" type="time" value="${safe(r.fromTime||'')}"></td><td><input id="td_to_${i}" type="time" value="${safe(r.toTime||'')}"></td><td><input id="td_hopen_${i}" class="hmr-input" type="number" inputmode="decimal" step="0.01" value="${r.openingHmr??''}" oninput="deploymentHmrCalc(${i})"></td><td><input id="td_hclose_${i}" class="hmr-input" type="number" inputmode="decimal" step="0.01" value="${r.closingHmr??''}" oninput="deploymentHmrCalc(${i})"></td><td id="td_hrun_${i}" class="hmr-run">${r.hrsRun!=null?n(r.hrsRun):(r.meterReset?'RESET':'—')}</td><td class="hmr-reset"><input id="td_reset_${i}" type="checkbox" ${r.meterReset?'checked':''} onchange="deploymentHmrCalc(${i})" title="Meter reset / rollover"></td><td><input id="td_note_${i}" value="${safe(r.meterNote||r.notes||'')}" placeholder="Remark / reset reason"></td><td>${r.deploymentId?(r.toTime?'<span class="status ok">Finished</span>':`<button type="button" class="btn secondary tiny" onclick="startMachineTransfer(${i})">Transfer →</button>`):'<span class="muted">Save first</span>'}</td></tr>`}html('tm_dep_rows',h);for(let i=0;i<T.depRows;i++)deploymentHmrCalc(i)}
+  function renderDeploymentRows(existing){const d=T.mis,rows=existing||d?.deployments||[];let h='';const acts=d?.activities||[];for(let i=0;i<T.depRows;i++){const r=rows[i]||{},act=r.activity||acts[0]?.id||'';const aopts='<option value="">Activity…</option>'+acts.map(x=>`<option value="${safe(x.id)}" ${x.id===act?'selected':''}>${safe(x.label||x.id)}</option>`).join('');h+=`<tr><td>${i+1}<input type="hidden" id="td_id_${i}" value="${safe(r.deploymentId||'')}"></td><td>${combo('td_src_'+i,d.deploymentLocations||d.sourceLocations||[],r.sourceLocationId,'deploymentChanged()','Source')}</td><td>${combo('td_mac_'+i,d.deploymentMachines||d.machines||[],r.machineId,`deploymentMachineChanged(${i})`,'Equipment / Machine')}</td><td>${combo('td_op_'+i,d.operators||[],r.operatorId||'','deploymentChanged()','Operator name / ID')}</td><td><select id="td_act_${i}" onchange="deploymentChanged()">${aopts}</select></td><td><input id="td_from_${i}" type="time" value="${safe(r.fromTime||'')}"></td><td><input id="td_to_${i}" type="time" value="${safe(r.toTime||'')}"></td><td><input id="td_hopen_${i}" class="hmr-input" type="number" inputmode="decimal" step="0.01" value="${r.openingHmr??''}" oninput="deploymentHmrCalc(${i})"></td><td><input id="td_hclose_${i}" class="hmr-input" type="number" inputmode="decimal" step="0.01" value="${r.closingHmr??''}" oninput="deploymentHmrCalc(${i})"></td><td id="td_hrun_${i}" class="hmr-run">${r.hrsRun!=null?n(r.hrsRun):(r.meterReset?'RESET':'—')}</td><td class="hmr-reset"><input id="td_reset_${i}" type="checkbox" ${r.meterReset?'checked':''} onchange="deploymentHmrCalc(${i})" title="Meter reset / rollover"></td><td><input id="td_note_${i}" value="${safe(r.meterNote||r.notes||'')}" placeholder="Remark / reset reason"></td></tr>`}html('tm_dep_rows',h);for(let i=0;i<T.depRows;i++)deploymentHmrCalc(i)}
   window.addDeploymentRow=function(){const old=deploymentRows();T.depRows=Math.min(50,T.depRows+1);renderDeploymentRows(old);deploymentChanged()};
   window.deploymentChanged=function(){
     const rows=deploymentRows();
@@ -162,6 +162,28 @@
   available.sort((a,b)=>(assignedHere.has(b.id)?1:0)-(assignedHere.has(a.id)?1:0)||String(a.label||a.id).localeCompare(String(b.label||b.id)));
   return available;
 }
+  window.openMachineTransfer=function(){
+    const panel=q('tm_transfer_panel');
+    const choices=deploymentRows().map((r,i)=>({r,i})).filter(x=>x.r.deploymentId&&x.r.machineId&&x.r.sourceLocationId&&!x.r.toTime);
+    if(!choices.length){toast('No active saved equipment assignments. Save Machine Setup first.',true);return}
+    panel.hidden=false;
+    panel.dataset.deploymentId='';
+    panel.innerHTML=`<div class="tiom-card-title"><b>Transfer equipment to another location</b><button type="button" class="btn secondary tiny" onclick="cancelMachineTransfer()">Cancel</button></div>
+      <label class="tm-transfer-picker">Choose equipment at its current location
+        <select id="tm_transfer_choice" onchange="chooseMachineTransfer()">
+          <option value="">-- Select equipment to transfer --</option>
+          ${choices.map(x=>`<option value="${x.i}">${safe(x.r.machineId+' — '+x.r.sourceLocationId)}</option>`).join('')}
+        </select>
+      </label><span class="note">Select a machine to enter its finish time and next location.</span>`;
+    panel.scrollIntoView({block:'nearest',behavior:'smooth'});
+  };
+  window.chooseMachineTransfer=function(){
+    const choice=v('tm_transfer_choice');
+    if(choice==='')return;
+    const idx=Number(choice);
+    if(!Number.isInteger(idx)||idx<0||idx>=T.depRows){toast('Choose a valid machine.',true);return}
+    window.startMachineTransfer(idx);
+  };
   window.startMachineTransfer=function startMachineTransfer(i){
   const r=deploymentRows()[i],panel=q('tm_transfer_panel');
   if(!r?.deploymentId){toast('Save Machine Setup before transferring this equipment.',true);return}
@@ -171,7 +193,7 @@
   panel.hidden=false;
   panel.dataset.deploymentId=r.deploymentId;
   panel.innerHTML=`<div class="tiom-card-title"><b>Transfer ${safe(r.machineId)} from ${safe(r.sourceLocationId)}</b><button type="button" class="btn secondary tiny" onclick="cancelMachineTransfer()">Cancel</button></div>
-    <div class="tiom-driver-grid">
+    <div class="tm-transfer-fields">
       <label>Finish at current location<input type="time" id="tm_transfer_end" required></label>
       <label>Start at new location<input type="time" id="tm_transfer_start" required></label>
       <label>New source / location<select id="tm_transfer_destination">${opts(destinations)}</select></label>
