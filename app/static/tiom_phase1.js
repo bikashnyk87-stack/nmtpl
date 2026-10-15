@@ -106,7 +106,7 @@
       <details open id="tm_dep_panel" class="panel tiom-sap-card tiom-deployment-card">
         <summary><b>EXCAVATOR / LOADER / PLANT / CRUSHER HMR</b> <span class="note">Optional — trips automatically register Source ↔ Loader/Excavator.</span></summary>
         <div class="tiom-card-title"><div><span>Enter machine/plant operating hours and operator here. Record fault and breakdown repair in the shared Mechanical tab.</span></div><div><button class="btn secondary tiny" onclick="addDeploymentRow()">+ Row</button><button class="btn primary tiny" onclick="saveDeployments()">Save Machine Setup</button><button class="btn secondary tiny" onclick="render('MECHANICAL')">Record Breakdown →</button></div></div>
-        <div class="table-wrap tiom-deploy-scroll"><table class="tiom-entry-table tiom-deploy-table"><thead><tr><th>#</th><th>Source / RL</th><th>Equipment / Machine</th><th>Operator Name</th><th>Activity</th><th>From</th><th>To</th><th>HMR Open</th><th>HMR Close</th><th>Run</th><th>Reset</th><th>Note</th></tr></thead><tbody id="tm_dep_rows"></tbody></table></div>
+        <div class="table-wrap tiom-deploy-scroll"><table class="tiom-entry-table tiom-deploy-table"><thead><tr><th>#</th><th>Source / RL</th><th>Equipment / Machine</th><th>Operator Name</th><th>Activity</th><th>From</th><th>To</th><th>HMR Open</th><th>HMR Close</th><th>Run</th><th>Reset</th><th>Note</th><th>Transfer</th></tr></thead><tbody id="tm_dep_rows"></tbody></table></div><div id="tm_transfer_panel" class="panel" hidden style="margin:8px 0;padding:12px"></div>
       </details>
 
       <details class="panel tiom-sap-card">
@@ -123,45 +123,86 @@
   function renderFaceRows(existing){const d=T.mis,rows=existing||d?.sourceContexts||[];let h='';for(let i=0;i<T.faceRows;i++){const r=rows[i]||{};h+=`<tr><td>${i+1}</td><td>${combo('tf_src_'+i,d.sourceLocations||[],r.sourceLocationId,'','Source / Face')}</td><td><input id="tf_rl_${i}" type="number" inputmode="numeric" step="1" value="${r.benchRl??''}" placeholder="RL"></td><td><input id="tf_note_${i}" value="${safe(r.notes||'')}" placeholder="Optional"></td></tr>`}html('tm_face_rows',h)}
   window.addFaceRow=function(){const old=faceRows();T.faceRows=Math.min(30,T.faceRows+1);renderFaceRows(old)};
 
-  function deploymentRows(){const rows=[];for(let i=0;i<T.depRows;i++)rows.push({sourceLocationId:v('td_src_'+i),machineId:v('td_mac_'+i),operatorId:v('td_op_'+i),activity:v('td_act_'+i),fromTime:v('td_from_'+i),toTime:v('td_to_'+i),openingHmr:v('td_hopen_'+i),closingHmr:v('td_hclose_'+i),meterReset:q('td_reset_'+i)?.checked||false,meterNote:v('td_note_'+i),notes:v('td_note_'+i)});return rows}
+  function deploymentRows(){const rows=[];for(let i=0;i<T.depRows;i++)rows.push({deploymentId:v('td_id_'+i),sourceLocationId:v('td_src_'+i),machineId:v('td_mac_'+i),operatorId:v('td_op_'+i),activity:v('td_act_'+i),fromTime:v('td_from_'+i),toTime:v('td_to_'+i),openingHmr:v('td_hopen_'+i),closingHmr:v('td_hclose_'+i),meterReset:q('td_reset_'+i)?.checked||false,meterNote:v('td_note_'+i),notes:v('td_note_'+i)});return rows}
   function deploymentHmrCalc(i){const a=parseFloat(v('td_hopen_'+i)),b=parseFloat(v('td_hclose_'+i)),reset=q('td_reset_'+i)?.checked;const el=q('td_hrun_'+i);if(el)el.textContent=Number.isFinite(a)&&Number.isFinite(b)&&b>=a&&!reset?n(b-a):(reset?'RESET':'—')}
   window.deploymentMachineChanged=function(i){const x=((T.mis?.deploymentMachines||T.mis?.machines)||[]).find(a=>a.id===v('td_mac_'+i));if(x&&x.previousHmr!=null&&!v('td_hopen_'+i)){q('td_hopen_'+i).value=x.previousHmr;deploymentHmrCalc(i)}deploymentChanged()};
-  function renderDeploymentRows(existing){const d=T.mis,rows=existing||d?.deployments||[];let h='';const acts=d?.activities||[];for(let i=0;i<T.depRows;i++){const r=rows[i]||{},act=r.activity||acts[0]?.id||'';const aopts='<option value="">Activity…</option>'+acts.map(x=>`<option value="${safe(x.id)}" ${x.id===act?'selected':''}>${safe(x.label||x.id)}</option>`).join('');h+=`<tr><td>${i+1}</td><td>${combo('td_src_'+i,d.deploymentLocations||d.sourceLocations||[],r.sourceLocationId,'deploymentChanged()','Source')}</td><td>${combo('td_mac_'+i,d.deploymentMachines||d.machines||[],r.machineId,`deploymentMachineChanged(${i})`,'Equipment / Machine')}</td><td>${combo('td_op_'+i,d.operators||[],r.operatorId||'','deploymentChanged()','Operator name / ID')}</td><td><select id="td_act_${i}" onchange="deploymentChanged()">${aopts}</select></td><td><input id="td_from_${i}" type="time" value="${safe(r.fromTime||'')}"></td><td><input id="td_to_${i}" type="time" value="${safe(r.toTime||'')}"></td><td><input id="td_hopen_${i}" class="hmr-input" type="number" inputmode="decimal" step="0.01" value="${r.openingHmr??''}" oninput="deploymentHmrCalc(${i})"></td><td><input id="td_hclose_${i}" class="hmr-input" type="number" inputmode="decimal" step="0.01" value="${r.closingHmr??''}" oninput="deploymentHmrCalc(${i})"></td><td id="td_hrun_${i}" class="hmr-run">${r.hrsRun!=null?n(r.hrsRun):(r.meterReset?'RESET':'—')}</td><td class="hmr-reset"><input id="td_reset_${i}" type="checkbox" ${r.meterReset?'checked':''} onchange="deploymentHmrCalc(${i})" title="Meter reset / rollover"></td><td><input id="td_note_${i}" value="${safe(r.meterNote||r.notes||'')}" placeholder="Remark / reset reason"></td></tr>`}html('tm_dep_rows',h);for(let i=0;i<T.depRows;i++)deploymentHmrCalc(i)}
+  function renderDeploymentRows(existing){const d=T.mis,rows=existing||d?.deployments||[];let h='';const acts=d?.activities||[];for(let i=0;i<T.depRows;i++){const r=rows[i]||{},act=r.activity||acts[0]?.id||'';const aopts='<option value="">Activity…</option>'+acts.map(x=>`<option value="${safe(x.id)}" ${x.id===act?'selected':''}>${safe(x.label||x.id)}</option>`).join('');h+=`<tr><td>${i+1}<input type="hidden" id="td_id_${i}" value="${safe(r.deploymentId||'')}"></td><td>${combo('td_src_'+i,d.deploymentLocations||d.sourceLocations||[],r.sourceLocationId,'deploymentChanged()','Source')}</td><td>${combo('td_mac_'+i,d.deploymentMachines||d.machines||[],r.machineId,`deploymentMachineChanged(${i})`,'Equipment / Machine')}</td><td>${combo('td_op_'+i,d.operators||[],r.operatorId||'','deploymentChanged()','Operator name / ID')}</td><td><select id="td_act_${i}" onchange="deploymentChanged()">${aopts}</select></td><td><input id="td_from_${i}" type="time" value="${safe(r.fromTime||'')}"></td><td><input id="td_to_${i}" type="time" value="${safe(r.toTime||'')}"></td><td><input id="td_hopen_${i}" class="hmr-input" type="number" inputmode="decimal" step="0.01" value="${r.openingHmr??''}" oninput="deploymentHmrCalc(${i})"></td><td><input id="td_hclose_${i}" class="hmr-input" type="number" inputmode="decimal" step="0.01" value="${r.closingHmr??''}" oninput="deploymentHmrCalc(${i})"></td><td id="td_hrun_${i}" class="hmr-run">${r.hrsRun!=null?n(r.hrsRun):(r.meterReset?'RESET':'—')}</td><td class="hmr-reset"><input id="td_reset_${i}" type="checkbox" ${r.meterReset?'checked':''} onchange="deploymentHmrCalc(${i})" title="Meter reset / rollover"></td><td><input id="td_note_${i}" value="${safe(r.meterNote||r.notes||'')}" placeholder="Remark / reset reason"></td><td>${r.deploymentId?(r.toTime?'<span class="status ok">Finished</span>':`<button type="button" class="btn secondary tiny" onclick="startMachineTransfer(${i})">Transfer →</button>`):'<span class="muted">Save first</span>'}</td></tr>`}html('tm_dep_rows',h);for(let i=0;i<T.depRows;i++)deploymentHmrCalc(i)}
   window.addDeploymentRow=function(){const old=deploymentRows();T.depRows=Math.min(50,T.depRows+1);renderDeploymentRows(old);deploymentChanged()};
   window.deploymentChanged=function(){
     const rows=deploymentRows();
     for(let i=0;i<T.depRows;i++){
       const id='td_mac_'+i,selected=rows[i].machineId;
-      const used=new Set(rows.filter((r,j)=>j!==i&&r.machineId).map(r=>r.machineId));
+      const used=new Set(rows.filter((r,j)=>j!==i&&r.machineId&&!r.toTime).map(r=>r.machineId));
       const all=(T.mis?.deploymentMachines||T.mis?.machines||[]).filter(x=>!used.has(x.id)||x.id===selected);
       const current=C[id]||[];
       if(current.length!==all.length||current.some(x=>!all.some(y=>y.id===x.id)))comboReplace(id,all,selected);
     }
     for(let i=0;i<T.misRows;i++){
       const id='tm_mac_'+i,source=v('tm_src_'+i),selected=v(id);
-      const all=machinesForSource(source,selected);
+      const all=machinesForSource(source,selected,v('tm_lt_'+i));
       const current=C[id]||[];
       if(current.length!==all.length||current.some(x=>!all.some(y=>y.id===x.id)))comboReplace(id,all,selected);
     }
   };
   window.saveDeployments=function(){const rows=deploymentRows().filter(r=>r.sourceLocationId||r.machineId);appRun(function(r){toast(r.message);loadTiomMis()},function(e){toast(e.message,true)}).saveTiomSourceDeployments({date:v('tm_date'),shift:v('tm_shift'),rows})};
   function deploymentMachineIds(sourceId){const ids=new Set();for(const r of (T.mis?.deployments||[]))if(r.sourceLocationId===sourceId&&r.machineId)ids.add(r.machineId);for(const r of deploymentRows())if(r.sourceLocationId===sourceId&&r.machineId)ids.add(r.machineId);return ids}
-  function machinesForSource(sourceId,selected){
-    const all=[...(T.mis?.machines||[])];
-    if(!sourceId)return selected?all.filter(x=>x.id===selected):[];
-    const current=[...(T.mis?.deployments||[]),...deploymentRows()];
-    const assignedHere=new Set(current.filter(r=>r.sourceLocationId===sourceId).map(r=>r.machineId).filter(Boolean));
-    const assignedElsewhere=new Set(current.filter(r=>r.sourceLocationId&&r.sourceLocationId!==sourceId).map(r=>r.machineId).filter(Boolean));
-    const available=all.filter(x=>!assignedElsewhere.has(x.id)||assignedHere.has(x.id)||x.id===selected);
-    available.sort((a,b)=>(assignedHere.has(b.id)?1:0)-(assignedHere.has(a.id)?1:0)||String(a.label||a.id).localeCompare(String(b.label||b.id)));
-    return available;
-  }
+  function machinesForSource(sourceId,selected,loadingTime=''){
+  const all=[...(T.mis?.machines||[])];
+  if(!sourceId)return selected?all.filter(x=>x.id===selected):[];
+  const edited=deploymentRows().filter(r=>r.machineId&&r.sourceLocationId);
+  const ids=new Set(edited.map(r=>r.deploymentId).filter(Boolean));
+  const current=[...(T.mis?.deployments||[]).filter(r=>!ids.has(r.deploymentId)),...edited];
+  const startHour=({A:6,B:14,C:22})[v('tm_shift')]??6;
+  const minute=t=>{if(!t)return null;const p=t.split(':').map(Number);if(p.length<2||p.some(x=>!Number.isFinite(x)))return null;let m=p[0]*60+p[1];if(m<startHour*60)m+=1440;return m};
+  const at=minute(loadingTime);
+  const during=r=>at===null||((!r.fromTime||minute(r.fromTime)<=at)&&(!r.toTime||at<minute(r.toTime)));
+  const assignedHere=new Set(current.filter(r=>r.sourceLocationId===sourceId&&during(r)).map(r=>r.machineId).filter(Boolean));
+  const assignedElsewhere=new Set(current.filter(r=>r.sourceLocationId&&r.sourceLocationId!==sourceId&&during(r)&&(at!==null||!r.toTime)).map(r=>r.machineId).filter(Boolean));
+  const available=all.filter(x=>!assignedElsewhere.has(x.id)||assignedHere.has(x.id)||x.id===selected);
+  available.sort((a,b)=>(assignedHere.has(b.id)?1:0)-(assignedHere.has(a.id)?1:0)||String(a.label||a.id).localeCompare(String(b.label||b.id)));
+  return available;
+}
+  window.startMachineTransfer=function startMachineTransfer(i){
+  const r=deploymentRows()[i],panel=q('tm_transfer_panel');
+  if(!r?.deploymentId){toast('Save Machine Setup before transferring this equipment.',true);return}
+  if(r.toTime){toast('This location is already finished. Choose the latest open assignment.',true);return}
+  const destinations=(T.mis?.deploymentLocations||[]).filter(x=>x.id!==r.sourceLocationId);
+  if(!destinations.length){toast('No other active locations are configured.',true);return}
+  panel.hidden=false;
+  panel.dataset.deploymentId=r.deploymentId;
+  panel.innerHTML=`<div class="tiom-card-title"><b>Transfer ${safe(r.machineId)} from ${safe(r.sourceLocationId)}</b><button type="button" class="btn secondary tiny" onclick="cancelMachineTransfer()">Cancel</button></div>
+    <div class="tiom-driver-grid">
+      <label>Finish at current location<input type="time" id="tm_transfer_end" required></label>
+      <label>Start at new location<input type="time" id="tm_transfer_start" required></label>
+      <label>New source / location<select id="tm_transfer_destination">${opts(destinations)}</select></label>
+      <label>Remark (optional)<input id="tm_transfer_notes" maxlength="250" placeholder="Work completed, moving location"></label>
+    </div>
+    <button type="button" id="tm_transfer_confirm" class="btn primary small" onclick="confirmMachineTransfer()">Confirm Transfer</button>
+    <span class="note">Old location and trips remain saved. HMR stays one total per machine per shift.</span>`;
+  panel.scrollIntoView({block:'nearest',behavior:'smooth'});
+};
+  window.cancelMachineTransfer=function cancelMachineTransfer(){const el=q('tm_transfer_panel');if(el){el.hidden=true;el.innerHTML='';el.dataset.deploymentId=''}};
+  window.confirmMachineTransfer=function confirmMachineTransfer(){
+  const panel=q('tm_transfer_panel'),deploymentId=panel?.dataset.deploymentId||'';
+  const endTime=v('tm_transfer_end'),startTime=v('tm_transfer_start'),destinationLocationId=v('tm_transfer_destination');
+  if(!deploymentId||!endTime||!startTime||!destinationLocationId){toast('Enter both times and choose the new location.',true);return}
+  const btn=q('tm_transfer_confirm');if(btn)btn.disabled=true;
+  appRun(function(r){toast(r.message);draftSave();loadTiomMis()},function(e){toast(e.message,true);if(btn)btn.disabled=false}).transferTiomSourceDeployment({
+    date:v('tm_date'),shift:v('tm_shift'),deploymentId,destinationLocationId,endTime,startTime,notes:v('tm_transfer_notes')
+  });
+};
+  window.tripLoadTimeChanged=function tripLoadTimeChanged(i){
+  const id='tm_mac_'+i,selected=v(id);
+  comboReplace(id,machinesForSource(v('tm_src_'+i),selected,v('tm_lt_'+i)),selected);
+  draftSave();
+};
+
   function leadPreview(i){const src=v('tm_src_'+i),dst=v('tm_dst_'+i),wb=!!v('tm_wb_'+i),source=(T.mis?.sourceLocations||[]).find(x=>x.id===src),rl=source&&source.benchRl!=null?Number(source.benchRl):NaN,mode=wb?'WITH_WB':'WITHOUT_WB';if(!src||!dst)return{leadKm:null,routeMode:mode,status:'Select destination'};if(!Number.isFinite(rl))return{leadKm:null,routeMode:mode,status:'RL missing in Source Master'};const exact=(T.mis?.leadRules||[]).filter(x=>x.sourceLocationId===src&&x.destinationLocationId===dst&&Number(x.benchRl)===rl&&x.routeMode===mode);if(exact.length===1)return{leadKm:Number(exact[0].leadKm),routeMode:mode,status:'OK',benchRl:rl};if(exact.length>1)return{leadKm:null,routeMode:mode,status:'Lead Master conflict'};const route=(T.mis?.routes||[]).find(x=>x.sourceLocationId===src&&x.destinationLocationId===dst&&x.routeMode===mode);return{leadKm:null,routeMode:mode,status:route?'Lead not configured':'Route not configured',benchRl:rl}}
   window.updateLead=function(i){const out=leadPreview(i),el=q('tm_lead_'+i);if(el){el.dataset.lead=out.leadKm==null?'':String(out.leadKm);el.title=`${out.routeMode||''}${out.benchRl!=null?' · RL '+out.benchRl:''}`;el.textContent=out.leadKm==null?out.status:(n(out.leadKm,3)+' km')}return out};
 
-  window.tripSourceChanged=function(i){const selected=v('tm_mac_'+i),rows=machinesForSource(v('tm_src_'+i),selected);comboReplace('tm_mac_'+i,rows,selected);if(!selected&&rows.length===1)comboSet('tm_mac_'+i,rows[0].id);updateLead(i);draftSave()};
+  window.tripSourceChanged=function(i){const selected=v('tm_mac_'+i),rows=machinesForSource(v('tm_src_'+i),selected,v('tm_lt_'+i));comboReplace('tm_mac_'+i,rows,selected);if(!selected&&rows.length===1)comboSet('tm_mac_'+i,rows[0].id);updateLead(i);draftSave()};
 
-  function renderMisRows(existing){const d=T.mis,rows=existing||[];let h='';for(let i=0;i<T.misRows;i++){const r=rows[i]||{};const machines=machinesForSource(r.sourceLocationId||'',r.machineId||'');const wb=r.wbMovementKey?`<span class="wb-chip" title="${safe(r.wbMovementKey)}">${safe(r.wbMovementNo||'WB')}</span>`:'<span class="manual-chip">Manual</span>';const qtxt=r.qtyMt!=null?`${r.wbMovementKey?'WB ':'Trip '}${n(r.qtyMt)}`:'Auto';h+=`<tr class="${r.wbMovementKey?'wb-linked-row':''}"><td>${i+1}<input type="hidden" id="tm_wb_${i}" value="${safe(r.wbMovementKey||'')}"></td><td>${wb}</td><td>${combo('tm_mat_'+i,d.products||[],r.materialId,`updateMisQty(${i});draftSave()`,'Material')}</td><td>${combo('tm_src_'+i,d.sourceLocations||[],r.sourceLocationId,`tripSourceChanged(${i})`,'Source')}</td><td>${combo('tm_mac_'+i,machines,r.machineId,'draftSave()','Source first')}</td><td><input id="tm_lt_${i}" type="time" value="${safe(r.loadingTime||'')}" onchange="draftSave()"></td><td>${combo('tm_dst_'+i,d.destinationLocations||[],r.destinationLocationId,`updateLead(${i});draftSave()`,'Destination')}</td><td class="qty-preview" id="tm_lead_${i}" data-lead="${r.leadKm??''}">${r.leadKm!=null?n(r.leadKm,3)+' km':'—'}</td><td><input id="tm_ut_${i}" type="time" value="${safe(r.unloadingTime||'')}" onchange="draftSave()"></td><td class="qty-preview" id="tm_qty_${i}" data-qty="${r.qtyMt??''}">${qtxt}</td></tr>`}html('tm_trip_rows',h);for(let i=0;i<T.misRows;i++)updateLead(i)}
+  function renderMisRows(existing){const d=T.mis,rows=existing||[];let h='';for(let i=0;i<T.misRows;i++){const r=rows[i]||{};const machines=machinesForSource(r.sourceLocationId||'',r.machineId||'',r.loadingTime||'');const wb=r.wbMovementKey?`<span class="wb-chip" title="${safe(r.wbMovementKey)}">${safe(r.wbMovementNo||'WB')}</span>`:'<span class="manual-chip">Manual</span>';const qtxt=r.qtyMt!=null?`${r.wbMovementKey?'WB ':'Trip '}${n(r.qtyMt)}`:'Auto';h+=`<tr class="${r.wbMovementKey?'wb-linked-row':''}"><td>${i+1}<input type="hidden" id="tm_wb_${i}" value="${safe(r.wbMovementKey||'')}"></td><td>${wb}</td><td>${combo('tm_mat_'+i,d.products||[],r.materialId,`updateMisQty(${i});draftSave()`,'Material')}</td><td>${combo('tm_src_'+i,d.sourceLocations||[],r.sourceLocationId,`tripSourceChanged(${i})`,'Source')}</td><td>${combo('tm_mac_'+i,machines,r.machineId,'draftSave()','Source first')}</td><td><input id="tm_lt_${i}" type="time" value="${safe(r.loadingTime||'')}" onchange="tripLoadTimeChanged(${i})"></td><td>${combo('tm_dst_'+i,d.destinationLocations||[],r.destinationLocationId,`updateLead(${i});draftSave()`,'Destination')}</td><td class="qty-preview" id="tm_lead_${i}" data-lead="${r.leadKm??''}">${r.leadKm!=null?n(r.leadKm,3)+' km':'—'}</td><td><input id="tm_ut_${i}" type="time" value="${safe(r.unloadingTime||'')}" onchange="draftSave()"></td><td class="qty-preview" id="tm_qty_${i}" data-qty="${r.qtyMt??''}">${qtxt}</td></tr>`}html('tm_trip_rows',h);for(let i=0;i<T.misRows;i++)updateLead(i)}
 
   window.addMisRows=function(c){const old=collectTripRows();T.misRows=Math.min(80,T.misRows+c);renderMisRows(old)};
   window.misVehicleChanged=function(){
