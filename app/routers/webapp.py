@@ -3621,6 +3621,87 @@ def _tiom_source_deployments(db, day, sh):
     return out
 
 
+
+def _tiom_deployment_overlap(a_from,a_to,b_from,b_to):
+    """True when two same-shift assignment intervals intersect.
+
+    A missing start means shift start; a missing end means shift end.
+    Adjoining intervals (end == next start) are allowed.
+    """
+    return not ((a_to is not None and b_from is not None and a_to<=b_from)
+                or (b_to is not None and a_from is not None and b_to<=a_from))
+
+
+def transfer_tiom_source_deployment(db,user,p):
+    """Atomically close an allocation and start a different location."""
+    require(user,'PRODUCTION'); p=p or {}
+    day,sh,definition=_tiom_context(db,user,p)
+    deployment_id=str(p.get('deploymentId') or '').strip()
+    destination_id=str(p.get('destinationLocationId') or '').strip()
+    if not deployment_id or not destination_id:
+        raise HTTPException(422,'Choose an existing machine row and destination location.')
+    origin=db.get(TiomSourceDeployment,deployment_id)
+    if not origin or not origin.active or origin.operating_date!=day or origin.shift!=sh:
+        raise HTTPException(409,'Assignment has changed. Reload Machine Setup before transferring.')
+    if origin.to_at is not None:
+        raise HTTPException(409,'This assignment is already closed. Transfer the latest active location instead.')
+    destination=active_resource(db,Location,destination_id)
+    if destination.location_id==origin.source_location_id:
+        raise HTTPException(422,'Choose a different destination location.')
+    end_at=_tiom_shift_date_time(db,day,sh,p.get('endTime'))
+    start_at=_tiom_shift_date_time(db,day,sh,p.get('startTime'))
+    if not end_at or not start_at:
+        raise HTTPException(422,'Enter work finish time and start time at the new location.')
+    shift_start=datetime.combine(day,definition.start_time,TZ)
+    shift_end=datetime.combine(day,definition.end_time,TZ)
+    if shift_end<=shift_start:
+        shift_end+=timedelta(days=1)
+    if not (shift_start<end_at<=start_at<shift_end):
+        raise HTTPException(422,'Transfer must finish and restart within the selected operating shift.')
+    if origin.from_at is not None and end_at<=origin.from_at:
+        raise HTTPException(422,'Finish time must be after the current assignment started.')
+    # Check for other pre-existing machine allocations before modifying either row.
+    other_rows=list(db.scalars(select(TiomSourceDeployment).where(
+        TiomSourceDeployment.operating_date==day,
+        TiomSourceDeployment.shift==sh,
+        TiomSourceDeployment.machine_id==origin.machine_id,
+        TiomSourceDeployment.active.is_(True),
+        TiomSourceDeployment.deployment_id!=origin.deployment_id
+    )))
+    for other in other_rows:
+        if _tiom_deployment_overlap(start_at,None,other.from_at,other.to_at):
+            raise HTTPException(409,f'Equipment already assigned to {other.source_location_id} during the requested new period.')
+    # An already submitted trip at the original location cannot be stranded
+    # after its loader is transferred. Ask for an explicit correction instead.
+    later_trip=db.scalar(select(TiomMisTripRow.row_id).join(
+        TiomMisTripDetail,TiomMisTripDetail.row_id==TiomMisTripRow.row_id
+    ).join(TiomMisReport,TiomMisReport.report_id==TiomMisTripRow.report_id).where(
+        TiomMisReport.operating_date==day,TiomMisReport.shift==sh,
+        TiomMisReport.status=='SUBMITTED',
+        TiomMisTripDetail.machine_id==origin.machine_id,
+        TiomMisTripDetail.source_location_id==origin.source_location_id,
+        TiomMisTripRow.loading_at.is_not(None),
+        TiomMisTripRow.loading_at>=end_at
+    ).limit(1))
+    if later_trip:
+        raise HTTPException(409,'There is a submitted trip after this finish time at the old location. Correct its assignment before transferring.')
+    before={'deploymentId':origin.deployment_id,'source':origin.source_location_id,
+            'from':str(origin.from_at),'to':str(origin.to_at)}
+    origin.to_at=end_at
+    new=TiomSourceDeployment(
+        deployment_id=str(uuid4()),operating_date=day,shift=sh,
+        source_location_id=destination.location_id,machine_id=origin.machine_id,
+        operator_id=origin.operator_id,activity=origin.activity,
+        from_at=start_at,to_at=None,active=True,
+        notes=short(str(p.get('notes') or 'Transferred from '+origin.source_location_id)),
+        entered_by=user.login_id,entered_at=now_local())
+    db.add(new);db.flush()
+    audit(db,user,'TIOM_SOURCE_TRANSFER','tiom_source_deployment',new.deployment_id,{
+        'from':before,'to':{'deploymentId':new.deployment_id,'source':new.source_location_id,
+                          'from':str(new.from_at)},'machineId':origin.machine_id})
+    return {'ok':True,'message':f'{origin.machine_id} transferred from {origin.source_location_id} to {destination.location_id}.',
+            'deploymentId':new.deployment_id,'rows':_tiom_source_deployments(db,day,sh)}
+
 def save_tiom_source_deployments(db,user,p):
     require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p)
     incoming=p.get('rows') if isinstance(p.get('rows'),list) else []
@@ -3683,7 +3764,8 @@ def save_tiom_source_deployments(db,user,p):
         key=(source.location_id,machine.machine_id,from_at.isoformat() if from_at else '',to_at.isoformat() if to_at else '')
         if key in seen: raise HTTPException(409,f'Deployment row {idx}: duplicate source/machine period.')
         seen.add(key)
-        parsed.append((source,machine,activity,from_at,to_at,short(str(item.get('notes') or '')),operator_id))
+        deployment_id=str(item.get('deploymentId') or '').strip()
+        parsed.append((source,machine,activity,from_at,to_at,short(str(item.get('notes') or '')),operator_id,deployment_id))
     if not parsed: raise HTTPException(422,'Add at least one source-machine deployment.')
     if incoming_contexts is not None:
         context_ids=set(_tiom_source_context_map(db,day,sh))
@@ -3696,22 +3778,24 @@ def save_tiom_source_deployments(db,user,p):
         TiomSourceDeployment.operating_date==day,TiomSourceDeployment.shift==sh,
         TiomSourceDeployment.active.is_(True))))
     existing_by_key={}
+    existing_by_id={r.deployment_id:r for r in all_existing}
     for record in all_existing:
         key=(record.source_location_id,record.machine_id,record.from_at,record.to_at)
         existing_by_key.setdefault(key,record)
-    # Never allocate the same machine to two overlapping locations. A null
-    # time is a whole-shift reservation and must be explicitly closed before a transfer.
+    # None is an open end of the shift (not an unconditionally overlapping
+    # whole shift): a closed first allocation permits a later second location.
     combined=list(all_existing)
-    def conflicts(a_from,a_to,b_from,b_to):
-        return not (a_from and a_to and b_from and b_to and
-                    (a_to<=b_from or b_to<=a_from))
-    for source,machine,activity,from_at,to_at,notes,operator_id in parsed:
+    for source,machine,activity,from_at,to_at,notes,operator_id,deployment_id in parsed:
         key=(source.location_id,machine.machine_id,from_at,to_at)
-        existing=existing_by_key.get(key)
+        existing=existing_by_id.get(deployment_id) if deployment_id else existing_by_key.get(key)
+        if deployment_id and not existing:
+            raise HTTPException(409,f'{machine.machine_id}: deployment changed or removed. Reload Machine Setup.')
+        if existing and (existing.machine_id!=machine.machine_id or existing.source_location_id!=source.location_id):
+            raise HTTPException(409,'Change location with Transfer; do not overwrite an existing equipment deployment.')
         for other in combined:
-            if other is existing or other.machine_id!=machine.machine_id or other.source_location_id==source.location_id:
+            if other is existing or other.machine_id!=machine.machine_id:
                 continue
-            if conflicts(from_at,to_at,other.from_at,other.to_at):
+            if _tiom_deployment_overlap(from_at,to_at,other.from_at,other.to_at):
                 raise HTTPException(409,f'{machine.machine_id} already allocated to {other.source_location_id} in this shift. Close the earlier time range before transferring.')
         entry=existing or TiomSourceDeployment(
             deployment_id=str(uuid4()),operating_date=day,shift=sh,
@@ -4576,17 +4660,23 @@ def save_tiom_mis_report(db,user,p,submit=False):
         if loading and unloading and unloading<loading:
             unloading+=timedelta(days=1)
         dep_matches=[d for d in deployments if d.source_location_id==source_id and d.machine_id==machine_id]
+        machine_deployments=[d for d in deployments if d.machine_id==machine_id]
+        multiple_locations=len({d.source_location_id for d in machine_deployments})>1
+        if multiple_locations and not loading:
+            raise HTTPException(422,f'Row {i}: enter Load time for {machine_id}; it worked at more than one location this shift.')
+        if dep_matches and loading and not any(
+            (d.from_at is None or aware(d.from_at)<=aware(loading)) and
+            (d.to_at is None or aware(loading)<aware(d.to_at))
+            for d in dep_matches
+        ):
+            raise HTTPException(409,f'Row {i}: {machine_id} was not assigned to {source_id} at the entered loading time. Check Machine Setup transfer times.')
         if not dep_matches:
             if is_correction:
                 raise HTTPException(409,f'Row {i}: corrected source / loader assignment is not in Machine Setup for {day} Shift {sh}. Update Machine Setup first, then save the correction.')
-            # Existing assignment at another source must be closed before
-            # this machine can be used here; do not silently create a second
-            # overlapping allocation from a trip row.
-            for other in deployments:
-                if other.machine_id!=machine_id or other.source_location_id==source_id:continue
-                if (not loading or not other.from_at or not other.to_at or
-                    aware(other.from_at)<=aware(loading)<aware(other.to_at)):
-                    raise HTTPException(409,f'Row {i}: {machine_id} is already assigned to {other.source_location_id}. Close or time-bound the previous allocation in Machine Setup first.')
+            # A machine with any other assignment must be explicitly transferred.
+            # Never auto-create a new whole-shift allocation at a second source.
+            if machine_deployments:
+                raise HTTPException(409,f'Row {i}: {machine_id} is assigned at another source in this shift. Use Transfer in Machine Setup first.')
             activity='EXCAVATION' if 'EXCAV' in str(machine.type or '').upper() else 'LOADING'
             if not db.get(ActivityMaster,activity):
                 db.add(ActivityMaster(activity=activity,vehicle_required=False,active=True))
@@ -5901,6 +5991,7 @@ def dispatch(db, user, method, args):
     if method == 'saveTiomMisEditKey': return save_tiom_mis_edit_key(db,user,args[0] if args else {})
     if method == 'submitTiomMisReport': return save_tiom_mis_report(db,user,args[0] if args else {},True)
     if method == 'saveTiomSourceDeployments': return save_tiom_source_deployments(db,user,args[0] if args else {})
+    if method == 'transferTiomSourceDeployment': return transfer_tiom_source_deployment(db,user,args[0] if args else {})
     if method == 'saveTiomDrillingShift': return save_tiom_drilling_shift(db,user,args[0] if args else {})
     if method == 'removeTiomMisReport': return remove_tiom_mis_report(db,user,args[0] if args else {})
     if method == 'saveTiomManagementRecipients': return save_tiom_management_recipients(db,user,args[0] if args else {})
