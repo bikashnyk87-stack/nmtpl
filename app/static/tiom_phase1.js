@@ -151,7 +151,7 @@
     const sourceCorrections=[];
     if(changed.length){
       const summary=changed.map(x=>x.row.machineId+': '+x.old.sourceLocationId+' → '+x.row.sourceLocationId).join('\n');
-      const reason=window.prompt('Correct wrong Source for '+changed.length+' saved machine assignment(s)?\n'+summary+'\n\nThis corrects the original entry; for an actual machine move use Transfer Equipment.\nEnter correction reason:','Wrong source selected during entry');
+      const reason=window.prompt('Correct wrong Source for '+changed.length+' saved machine assignment(s)?\n'+summary+'\n\nThis corrects the original entry; for an actual machine move use Transfer Equipment.\nEnter correction reason:','');
       if(reason===null)return;
       if(reason.trim().length<5||reason.trim().length>250){toast('Enter a source correction reason (5–250 characters).',true);return}
       changed.forEach(x=>sourceCorrections.push({deploymentId:x.old.deploymentId,previousSourceLocationId:x.old.sourceLocationId,newSourceLocationId:x.row.sourceLocationId,reason:reason.trim()}));
