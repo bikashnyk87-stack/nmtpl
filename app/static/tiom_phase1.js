@@ -105,7 +105,7 @@
 
       <details open id="tm_dep_panel" class="panel tiom-sap-card tiom-deployment-card">
         <summary><b>EXCAVATOR / LOADER / PLANT / CRUSHER HMR</b> <span class="note">Optional — trips automatically register Source ↔ Loader/Excavator.</span></summary>
-        <div class="tiom-card-title"><div><span>Enter machine/plant operating hours and operator here. Record fault and breakdown repair in the shared Mechanical tab.</span></div><div><button class="btn secondary tiny" onclick="addDeploymentRow()">+ Row</button><button type="button" class="btn secondary tiny" onclick="openMachineTransfer()">↪ Transfer Equipment</button><button class="btn primary tiny" onclick="saveDeployments()">Save Machine Setup</button><button class="btn secondary tiny" onclick="render('MECHANICAL')">Record Breakdown →</button></div></div>
+        <div class="tiom-card-title"><div><span>Wrong source? Select the correct Source and Save (reason required). For a real move, use Transfer Equipment.</span></div><div><button class="btn secondary tiny" onclick="addDeploymentRow()">+ Row</button><button type="button" class="btn secondary tiny" onclick="openMachineTransfer()">↪ Transfer Equipment</button><button class="btn primary tiny" onclick="saveDeployments()">Save Machine Setup</button><button class="btn secondary tiny" onclick="render('MECHANICAL')">Record Breakdown →</button></div></div>
         <div id="tm_transfer_panel" class="tm-transfer-panel panel" hidden></div><div class="table-wrap tiom-deploy-scroll"><table class="tiom-entry-table tiom-deploy-table"><thead><tr><th>#</th><th>Source / RL</th><th>Equipment / Machine</th><th>Operator Name</th><th>Activity</th><th>From</th><th>To</th><th>HMR Open</th><th>HMR Close</th><th>Run</th><th>Reset</th><th>Note</th></tr></thead><tbody id="tm_dep_rows"></tbody></table></div>
       </details>
 
@@ -144,7 +144,20 @@
       if(current.length!==all.length||current.some(x=>!all.some(y=>y.id===x.id)))comboReplace(id,all,selected);
     }
   };
-  window.saveDeployments=function(){const rows=deploymentRows().filter(r=>r.sourceLocationId||r.machineId);appRun(function(r){toast(r.message);loadTiomMis()},function(e){toast(e.message,true)}).saveTiomSourceDeployments({date:v('tm_date'),shift:v('tm_shift'),rows})};
+  window.saveDeployments=function(){
+    const rows=deploymentRows().filter(r=>r.sourceLocationId||r.machineId);
+    const previous=new Map((T.mis?.deployments||[]).map(r=>[r.deploymentId,r]));
+    const changed=rows.map(r=>({row:r,old:previous.get(r.deploymentId)})).filter(x=>x.old&&x.row.sourceLocationId&&x.row.sourceLocationId!==x.old.sourceLocationId);
+    const sourceCorrections=[];
+    if(changed.length){
+      const summary=changed.map(x=>x.row.machineId+': '+x.old.sourceLocationId+' → '+x.row.sourceLocationId).join('\n');
+      const reason=window.prompt('Correct wrong Source for '+changed.length+' saved machine assignment(s)?\n'+summary+'\n\nThis corrects the original entry; for an actual machine move use Transfer Equipment.\nEnter correction reason:','');
+      if(reason===null)return;
+      if(reason.trim().length<5||reason.trim().length>250){toast('Enter a source correction reason (5–250 characters).',true);return}
+      changed.forEach(x=>sourceCorrections.push({deploymentId:x.old.deploymentId,previousSourceLocationId:x.old.sourceLocationId,newSourceLocationId:x.row.sourceLocationId,reason:reason.trim()}));
+    }
+    appRun(function(r){toast(r.message);if(r.warning)toast(r.warning,true);loadTiomMis()},function(e){toast(e.message,true)}).saveTiomSourceDeployments({date:v('tm_date'),shift:v('tm_shift'),rows,sourceCorrections});
+  };
   function deploymentMachineIds(sourceId){const ids=new Set();for(const r of (T.mis?.deployments||[]))if(r.sourceLocationId===sourceId&&r.machineId)ids.add(r.machineId);for(const r of deploymentRows())if(r.sourceLocationId===sourceId&&r.machineId)ids.add(r.machineId);return ids}
   function machinesForSource(sourceId,selected,loadingTime=''){
   const all=[...(T.mis?.machines||[])];

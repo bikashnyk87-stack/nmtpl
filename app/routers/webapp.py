@@ -3702,10 +3702,36 @@ def transfer_tiom_source_deployment(db,user,p):
     return {'ok':True,'message':f'{origin.machine_id} transferred from {origin.source_location_id} to {destination.location_id}.',
             'deploymentId':new.deployment_id,'rows':_tiom_source_deployments(db,day,sh)}
 
+def _tiom_source_correction_reason(existing, new_source_id, correction):
+    """Require an explicit, non-stale audit reason for a mistaken source.
+
+    Changing where equipment was actually working over time is a transfer;
+    correcting the source of the *same* assignment retains its deployment ID.
+    """
+    if not isinstance(correction,dict):
+        raise HTTPException(409,'Source changed on a saved machine row. Enter a correction reason in Machine Setup, or use Transfer for a real move.')
+    if str(correction.get('previousSourceLocationId') or '').strip()!=existing.source_location_id:
+        raise HTTPException(409,'Machine source changed since the page loaded. Reload Machine Setup before correcting.')
+    if str(correction.get('newSourceLocationId') or '').strip()!=new_source_id:
+        raise HTTPException(409,'Corrected source has changed. Reload Machine Setup and try again.')
+    reason=str(correction.get('reason') or '').strip()
+    if len(reason)<5 or len(reason)>250:
+        raise HTTPException(422,'Source correction requires a reason of 5–250 characters.')
+    return short(reason)
+
+
 def save_tiom_source_deployments(db,user,p):
     require(user,'PRODUCTION'); p=p or {}; day,sh,_=_tiom_context(db,user,p)
     incoming=p.get('rows') if isinstance(p.get('rows'),list) else []
     incoming_contexts=p.get('contexts') if isinstance(p.get('contexts'),list) else None
+    raw_corrections=p.get('sourceCorrections') if isinstance(p.get('sourceCorrections'),list) else []
+    correction_by_id={}
+    for item in raw_corrections[:50]:
+        if not isinstance(item,dict): raise HTTPException(422,'Invalid source correction payload.')
+        deployment_id=str(item.get('deploymentId') or '').strip()
+        if not deployment_id or deployment_id in correction_by_id:
+            raise HTTPException(422,'A saved machine must have exactly one source correction reason.')
+        correction_by_id[deployment_id]=item
     parsed=[]; meter_by_machine={}; seen=set()
     if incoming_contexts is not None:
         contexts=[]; seen_sources=set()
@@ -3785,13 +3811,17 @@ def save_tiom_source_deployments(db,user,p):
     # None is an open end of the shift (not an unconditionally overlapping
     # whole shift): a closed first allocation permits a later second location.
     combined=list(all_existing)
+    source_corrections=[]
     for source,machine,activity,from_at,to_at,notes,operator_id,deployment_id in parsed:
         key=(source.location_id,machine.machine_id,from_at,to_at)
         existing=existing_by_id.get(deployment_id) if deployment_id else existing_by_key.get(key)
         if deployment_id and not existing:
             raise HTTPException(409,f'{machine.machine_id}: deployment changed or removed. Reload Machine Setup.')
-        if existing and (existing.machine_id!=machine.machine_id or existing.source_location_id!=source.location_id):
-            raise HTTPException(409,'Change location with Transfer; do not overwrite an existing equipment deployment.')
+        if existing and existing.machine_id!=machine.machine_id:
+            raise HTTPException(409,'A saved deployment cannot change equipment. Keep the same machine or create a new assignment.')
+        correction_reason=''
+        if existing and existing.source_location_id!=source.location_id:
+            correction_reason=_tiom_source_correction_reason(existing,source.location_id,correction_by_id.get(existing.deployment_id))
         for other in combined:
             if other is existing or other.machine_id!=machine.machine_id:
                 continue
@@ -3801,6 +3831,24 @@ def save_tiom_source_deployments(db,user,p):
             deployment_id=str(uuid4()),operating_date=day,shift=sh,
             source_location_id=source.location_id,machine_id=machine.machine_id,
             entered_by=user.login_id,entered_at=now_local())
+        if correction_reason:
+            old_source=existing.source_location_id
+            # Submitted trip details have their own audited edit/version flow.
+            # Do NOT rewrite their source or recompute their lead/quantity here.
+            linked_submitted=db.scalar(select(func.count(TiomMisTripRow.row_id)).join(
+                TiomMisTripDetail,TiomMisTripDetail.row_id==TiomMisTripRow.row_id
+            ).join(TiomMisReport,TiomMisReport.report_id==TiomMisTripRow.report_id).where(
+                TiomMisReport.operating_date==day,TiomMisReport.shift==sh,
+                TiomMisReport.status=='SUBMITTED',
+                TiomMisTripDetail.machine_id==machine.machine_id,
+                TiomMisTripDetail.source_location_id==old_source
+            )) or 0
+            source_corrections.append({
+                'deploymentId':existing.deployment_id,'machineId':existing.machine_id,
+                'oldSource':old_source,'newSource':source.location_id,
+                'reason':correction_reason,'linkedSubmittedTrips':linked_submitted
+            })
+            entry.source_location_id=source.location_id
         entry.operator_id=operator_id
         entry.activity=activity;entry.from_at=from_at;entry.to_at=to_at
         entry.notes=notes;entry.active=True;entry.entered_by=user.login_id;entry.entered_at=now_local()
@@ -3821,7 +3869,13 @@ def save_tiom_source_deployments(db,user,p):
     db.flush()
     after=_tiom_source_deployments(db,day,sh)
     audit(db,user,'TIOM_SOURCE_DEPLOY','tiom_source_deployment',f'{day}:{sh}',{'before':before,'after':after,'hmrMachines':sorted(meter_by_machine)})
-    return {'ok':True,'message':f'{len(after)} source-machine deployment row(s) saved. HMR stored at shift-machine level.','rows':after}
+    for correction in source_corrections:
+        audit(db,user,'TIOM_SOURCE_CORRECTION','tiom_source_deployment',correction['deploymentId'],{
+            'date':str(day),'shift':sh,**correction
+        })
+    linked=sum(c['linkedSubmittedTrips'] for c in source_corrections)
+    warning=(f'{linked} submitted trip(s) still reference the original source. Correct the affected saved driver reports with their Edit Key; those trips were not silently changed.' if linked else '')
+    return {'ok':True,'message':f'{len(after)} source-machine deployment row(s) saved. {len(source_corrections)} source correction(s) audited. HMR stored at shift-machine level.','rows':after,'warning':warning,'sourceCorrections':source_corrections}
 
 
 def _tiom_management_recipients(db):
