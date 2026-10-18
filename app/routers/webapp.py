@@ -3308,6 +3308,65 @@ def _tiom_drilling_summary(db,from_day,to_day,shift='ALL'):
     return {'fromDate':str(from_day),'toDate':str(to_day),'shift':shift,'rows':out,'totals':totals}
 
 
+
+def _tiom_drilling_report_table(db, day):
+    """Fixed-format all-shift daily / month-to-date drilling report.
+
+    The HMR and meters/hr fields are deliberately blank if readings are missing;
+    a partial HMR denominator must never inflate reported productivity.
+    """
+    month_start=day.replace(day=1)
+    daily=_tiom_drilling_summary(db,day,day,'ALL')
+    monthly=_tiom_drilling_summary(db,month_start,day,'ALL')
+    day_map={r['id']:r for r in daily['rows']}
+    month_map={r['id']:r for r in monthly['rows']}
+    sets={r.drill_set_id:r for r in db.scalars(select(TiomDrillSet))}
+    records=list(db.scalars(select(TiomDrillingShift).where(
+        TiomDrillingShift.operating_date>=month_start,
+        TiomDrillingShift.operating_date<=day
+    ).order_by(TiomDrillingShift.operating_date,TiomDrillingShift.shift)))
+    monthly_records={}
+    daily_records={}
+    for r in records:
+        monthly_records.setdefault(r.drill_set_id,[]).append(r)
+        if r.operating_date==day:
+            daily_records.setdefault(r.drill_set_id,[]).append(r)
+
+    def valid_hmr(r):
+        return (r.drill_open_hmr is not None and r.drill_close_hmr is not None
+                and r.drill_close_hmr>=r.drill_open_hmr)
+
+    def metrics(aggregate, members):
+        if not members:
+            return {'hmr':None,'holes':None,'meterage':None,'metersPerHour':None}
+        missing_hmr=any(
+            Decimal(r.rom_ob_meterage or 0)+Decimal(r.bhj_bhq_meterage or 0)>0
+            and not valid_hmr(r) for r in members
+        )
+        hours=aggregate.get('drillHours') if any(valid_hmr(r) for r in members) else None
+        return {'hmr':hours,'holes':aggregate.get('holes',0),
+                'meterage':aggregate.get('totalMeterage',0),
+                'metersPerHour':None if missing_hmr else aggregate.get('meterPerHour')}
+
+    rows=[]
+    for sid in sorted(set(sets)|set(monthly_records),
+                      key=lambda k:(sets[k].drill_set_name if k in sets else k).casefold()):
+        st=sets.get(sid)
+        if st and not st.active and sid not in monthly_records:
+            continue
+        daily_members=daily_records.get(sid,[])
+        month_members=monthly_records.get(sid,[])
+        remarks=[{'shift':r.shift,'text':r.remarks.strip()}
+                 for r in daily_members if r.remarks and r.remarks.strip()]
+        rows.append({'drillSetId':sid,'label':st.drill_set_name if st else sid,
+                     'day':metrics(day_map.get(sid,{}),daily_members),
+                     'month':metrics(month_map.get(sid,{}),month_members),
+                     'remarks':remarks})
+    return {'date':str(day),'monthFrom':str(month_start),'rows':rows,
+            'dayTotals':metrics(daily['totals'],[r for r in records if r.operating_date==day]),
+            'monthTotals':metrics(monthly['totals'],records)}
+
+
 def _tiom_area_key(location_text):
     """Normalize recognised mine-area names, e.g. 3HA/RL-840 and 3_HA.
 
@@ -5445,7 +5504,8 @@ def tiom_drilling_desk(db,user,p):
             'breakdownHours':float(r.breakdown_hours) if r and r.breakdown_hours is not None else None,'remarks':r.remarks or '' if r else ''})
     return {'date':str(day),'shift':sh,'reportFrom':str(report_from),'reportTo':str(report_to),'reportShift':report_shift,
         'sourceLocations':[{'id':x['id'],'label':f"{x['label']} · {x['id']}"} for x in source_locations],
-        'rows':rows,'summaryToday':_tiom_drilling_summary(db,day,day,sh),'summaryRange':_tiom_drilling_summary(db,report_from,report_to,report_shift)}
+        'rows':rows,'summaryToday':_tiom_drilling_summary(db,day,day,sh),'summaryRange':_tiom_drilling_summary(db,report_from,report_to,report_shift),
+        'reportTable':_tiom_drilling_report_table(db,day)}
 
 
 def save_tiom_drilling_shift(db,user,p):
@@ -5761,6 +5821,82 @@ def tiom_mis_reconciliation_export(request:Request,fromDate:str='',toDate:str=''
     return StreamingResponse(buf,media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       headers={'Content-Disposition':f'attachment; filename="{name}"','Cache-Control':'no-store'})
 
+
+
+
+@router.get('/tiom/drilling-report.xlsx')
+def tiom_drilling_report_export(request:Request,date:str='',fromDate:str='',toDate:str='',
+                                shift:str='ALL',db:Session=Depends(get_db)):
+    """One print-ready daily/MTD form plus full selected-period drilling entries."""
+    from app.services.tiom_drilling_report import MIME, drilling_workbook
+
+    user=get_user(db,request)
+    require(user,'PRODUCTION')
+    day=_parse_ui_date_v2(date,'drilling date') if date else operating_context()[0]
+    from_day=_parse_ui_date_v2(fromDate,'report from date') if fromDate else day.replace(day=1)
+    to_day=_parse_ui_date_v2(toDate,'report to date') if toDate else day
+    if to_day<from_day or (to_day-from_day).days>366:
+        raise HTTPException(422,'Report range must be chronological and at most 367 days.')
+    shift=(shift or 'ALL').upper()
+    valid_shifts={x.shift for x in db.scalars(select(ShiftMaster).where(ShiftMaster.active.is_(True)))}
+    if shift!='ALL':
+        if shift not in valid_shifts:
+            raise HTTPException(422,'Choose a valid report shift.')
+        require(user,shift=shift)
+
+    q=select(TiomDrillingShift).where(
+        TiomDrillingShift.operating_date>=from_day,
+        TiomDrillingShift.operating_date<=to_day)
+    if shift!='ALL':
+        q=q.where(TiomDrillingShift.shift==shift)
+    saved=list(db.scalars(q.order_by(TiomDrillingShift.operating_date,
+                                     TiomDrillingShift.shift,TiomDrillingShift.drill_set_id)))
+    sets={x.drill_set_id:x for x in db.scalars(select(TiomDrillSet))}
+    equipment={x.machine_id:x for x in db.scalars(select(Equipment))}
+    locations={x.location_id:x for x in db.scalars(select(Location))}
+    details=[]
+    for r in saved:
+        st=sets.get(r.drill_set_id)
+        drill_id=st.drill_machine_id if st else ''
+        comp_id=st.compressor_machine_id if st else ''
+        do=Decimal(r.drill_open_hmr) if r.drill_open_hmr is not None else None
+        dc=Decimal(r.drill_close_hmr) if r.drill_close_hmr is not None else None
+        co=Decimal(r.compressor_open_hmr) if r.compressor_open_hmr is not None else None
+        cc=Decimal(r.compressor_close_hmr) if r.compressor_close_hmr is not None else None
+        hrs=float(dc-do) if do is not None and dc is not None and dc>=do else None
+        comp_hrs=float(cc-co) if co is not None and cc is not None and cc>=co else None
+        rom=float(r.rom_ob_meterage or 0)
+        bhq=float(r.bhj_bhq_meterage or 0)
+        metres=rom+bhq
+        rate=round(metres/hrs,2) if hrs is not None and hrs>0 else None
+        details.append({
+            'date':str(r.operating_date),'shift':r.shift,
+            'drillSetId':r.drill_set_id,
+            'label':st.drill_set_name if st else r.drill_set_id,
+            'drillMachine':_tiom_asset_label(equipment[drill_id]) if drill_id in equipment else drill_id,
+            'compressor':_tiom_asset_label(equipment[comp_id]) if comp_id in equipment else comp_id,
+            'source':str(getattr(locations.get(r.source_location_id),'name',None) or r.source_location_id or ''),
+            'drillOpenHmr':float(do) if do is not None else None,
+            'drillCloseHmr':float(dc) if dc is not None else None,
+            'drillHours':hrs,
+            'compressorOpenHmr':float(co) if co is not None else None,
+            'compressorCloseHmr':float(cc) if cc is not None else None,
+            'compressorHours':comp_hrs,
+            'holes':r.holes or 0,
+            'romObHoles':r.rom_ob_holes,'bhjBhqHoles':r.bhj_bhq_holes,
+            'romObMeterage':rom,'bhjBhqMeterage':bhq,
+            'totalMeterage':metres,'metersPerHour':rate,
+            'breakdownHours':float(r.breakdown_hours) if r.breakdown_hours is not None else None,
+            'remarks':r.remarks or '',
+            'enteredBy':r.entered_by or '',
+            'enteredAt':str(r.entered_at or '')})
+    report=_tiom_drilling_report_table(db,day)
+    buf=drilling_workbook(report,details,
+                          {'fromDate':str(from_day),'toDate':str(to_day),'shift':shift})
+    filename=f"TIOM_Drilling_Report_{day}_All_Detail_{from_day}_to_{to_day}.xlsx"
+    return StreamingResponse(buf,media_type=MIME,
+        headers={'Content-Disposition':f'attachment; filename="{filename}"',
+                 'Cache-Control':'no-store'})
 
 
 @router.get('/tiom/mis-entry-export.xlsx')
