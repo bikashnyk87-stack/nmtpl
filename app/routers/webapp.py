@@ -2705,7 +2705,7 @@ def confirm_wb_batch(db,user,p):
     result=auto_reconcile(db,batch.operating_date,batch.shift)
     # Re-validate saved WB-linked MIS rows when the authoritative import is
     # refreshed; superseded links are flagged, not reassigned to another trip.
-    wb_truth=repair_saved_wb_linked_mis(db)
+    wb_truth=repair_saved_wb_linked_mis(db,batch.operating_date,batch.shift)
     audit(db,user,'TIOM_WB_CONFIRMED_TRUTH_CHECK','wb_import_batch',batch.batch_id,wb_truth)
     audit(db,user,'WB_CONFIRM','wb_import_batch',batch.batch_id,{'valid':batch.valid_rows,'review':batch.review_rows,'reconciliation':result})
     return {'ok':True,'message':f'WB confirmed. {result["matched"]} auto-matched; {result["wb_unmatched"]} WB unmatched; {result["field_without_wb"]} field trips without WB.',
