@@ -170,7 +170,7 @@ def repair_saved_wb_linked_mis(db, operating_date=None, shift=None):
         row.source_raw=wb.source_raw or ""
         row.destination_raw=wb.destination_raw or ""
         after={
-            "materialId":detail.material_id,"qtyMt":str(detail.calculated_qty_mt),
+            "materialId":detail.material_id,"qtyMt":str(detail.calculated_qty_mt) if detail.calculated_qty_mt is not None else None,
             "factorMtPerTrip":None,
             "sourceLocationId":detail.source_location_id,"destinationLocationId":detail.destination_location_id,
             "materialRaw":row.material_raw,"sourceRaw":row.source_raw,"destinationRaw":row.destination_raw,
