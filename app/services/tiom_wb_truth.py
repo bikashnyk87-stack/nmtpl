@@ -104,32 +104,31 @@ def repair_saved_wb_linked_mis(db, operating_date=None, shift=None):
     latest={}
     for batch in batches:
         latest.setdefault((batch.operating_date,batch.shift),batch.batch_id)
-    rec_query=select(TiomMisReconciliation).where(TiomMisReconciliation.wb_movement_key.is_not(None))
-    if operating_date is not None or shift is not None:
-        rec_query=(rec_query.join(TiomMisTripRow,TiomMisTripRow.row_id==TiomMisReconciliation.row_id)
-            .join(TiomMisReport,TiomMisReport.report_id==TiomMisTripRow.report_id))
-        if operating_date is not None:
-            rec_query=rec_query.where(TiomMisReport.operating_date==operating_date)
-        if shift is not None:
-            rec_query=rec_query.where(TiomMisReport.shift==shift)
-    recs=list(db.scalars(rec_query))
+    q=(select(TiomMisReconciliation,TiomMisTripRow,TiomMisReport,
+              TiomMisTripDetail,WbMovement)
+       .outerjoin(TiomMisTripRow,TiomMisTripRow.row_id==TiomMisReconciliation.row_id)
+       .outerjoin(TiomMisReport,TiomMisReport.report_id==TiomMisTripRow.report_id)
+       .outerjoin(TiomMisTripDetail,TiomMisTripDetail.row_id==TiomMisReconciliation.row_id)
+       .outerjoin(WbMovement,WbMovement.movement_key==TiomMisReconciliation.wb_movement_key)
+       .where(TiomMisReconciliation.wb_movement_key.is_not(None)))
+    if operating_date is not None:
+        q=q.where(TiomMisReport.operating_date==operating_date)
+    if shift is not None:
+        q=q.where(TiomMisReport.shift==shift)
+    linked=list(db.execute(q))
     equipment={e.machine_id:e for e in db.scalars(select(Equipment))}
     result=Counter(); changed_by_date=Counter()
     material_cache={}; location_cache={}
-    for rec in recs:
-        row=db.get(TiomMisTripRow,rec.row_id)
+    for rec,row,rep,detail,wb in linked:
         if row is None:
             result["NO_MIS_ROW"]+=1;continue
-        rep=db.get(TiomMisReport,row.report_id)
         if rep is None:
             result["NO_MIS_REPORT"]+=1;continue
-        wb=db.get(WbMovement,rec.wb_movement_key)
         reason=validate_wb_truth(db,wb,rep,equipment)
         if reason:
             result[reason]+=1;continue
         if latest.get((wb.operating_date,wb.shift))!=wb.batch_id:
             result["SUPERSEDED_BATCH"]+=1;continue
-        detail=db.get(TiomMisTripDetail,rec.row_id)
         if detail is None:
             result["NO_MIS_DETAIL"]+=1;continue
 
@@ -188,4 +187,4 @@ def repair_saved_wb_linked_mis(db, operating_date=None, shift=None):
         else:
             result["ALREADY_MATCHED"]+=1
     db.flush()
-    return {"counts":dict(result),"correctedByDate":dict(sorted(changed_by_date.items())),"linkedRecordsChecked":len(recs)}
+    return {"counts":dict(result),"correctedByDate":dict(sorted(changed_by_date.items())),"linkedRecordsChecked":len(linked)}
