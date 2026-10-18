@@ -87,7 +87,9 @@ def test_correct_only_exact_active_wb_links_and_preserve_manual_void_review():
             assert records["row-"+key].source_location_id=="WRONG"
         assert records["row-field"].calculated_qty_mt==Decimal("45")
         db.flush()
-        assert repair_saved_wb_linked_mis(db)["counts"]["UPDATED"]==0
+        second=repair_saved_wb_linked_mis(db)
+        correction_logs=list(db.scalars(select(AuditLog).where(AuditLog.action=="TIOM_WB_SAVED_TRIP_CORRECTED")))
+        assert second["counts"]["UPDATED"]==0, [x.detail for x in correction_logs[-3:]]
         logs=list(db.scalars(select(AuditLog).where(AuditLog.action=="TIOM_WB_SAVED_TRIP_CORRECTED")))
         assert len(logs)==3
         assert any('"wbMovementKey": "wb-good"' in x.detail for x in logs)
