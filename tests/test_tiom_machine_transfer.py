@@ -76,6 +76,6 @@ def test_transfer_button_is_visible_and_static_cache_is_busted():
     assert "<th>Transfer</th>" not in ui
     assert "tm-transfer-fields" in ui
     assert "tiom_phase1.js?v=tiom-drilling-kpi-20261018-r1" in html
-    assert "tiom_phase1.css?v=tiom-visible-transfer-20261015-r1" in html
+    assert "tiom_phase1.css?v=tiom-drilling-kpi-20261018-r1" in html
     assert ".tm-transfer-panel" in css
     assert "td:nth-child(12)" in css
