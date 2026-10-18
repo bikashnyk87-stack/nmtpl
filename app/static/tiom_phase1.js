@@ -374,7 +374,7 @@
     const metric=(key,title,value,suffix='')=>'<div><span>'+safe(title)+'</span><b>'+(value==null?'—':n(value)+suffix)+'</b></div>';
     const cells=x=>'<td>'+(x.hmr==null?'—':n(x.hmr))+'</td><td>'+(x.holes==null?'—':n(x.holes))+'</td><td>'+(x.meterage==null?'—':n(x.meterage))+'</td><td>'+(x.metersPerHour==null?'—':n(x.metersPerHour))+'</td>';
     const tableRows=rr.map((x,i)=>'<tr><td>'+(i+1)+'</td><td>'+safe(x.label)+'</td>'+cells(x.day||{})+cells(x.month||{})+'</tr>').join('');
-    const notes=rr.map(x=>'<tr><th scope="row">'+safe(x.label)+'</th><td colspan="8">'+((x.remarks||[]).length?x.remarks.map(z=>'<div><b>Shift '+safe(z.shift)+'</b> '+safe(z.text)+'</div>').join(''):'—')+'</td></tr>').join('');
+    const notes=rr.map(x=>'<tr><th scope="row">'+safe(x.label)+'</th><td colspan="9">'+((x.remarks||[]).length?x.remarks.map(z=>'<div><b>Shift '+safe(z.shift)+'</b> '+safe(z.text)+'</div>').join(''):'—')+'</td></tr>').join('');
     return '<section class="drill-report-sheet">'+
       '<div class="tiom-card-title"><div><b>DRILLING REPORT — DAY & MONTH</b><span>Day '+safe(d.date||'')+' (all shifts) · Month to date '+safe(d.monthFrom||'')+' → '+safe(d.date||'')+'</span></div>'+
       '<button class="btn primary small" onclick="downloadAllDrillingReports()">Download All Reports (Excel)</button></div>'+
