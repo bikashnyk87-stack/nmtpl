@@ -102,3 +102,23 @@
 .tm-transfer-fields input,.tm-transfer-fields select{height:33px!important;min-height:33px!important;padding:5px 8px!important;font-size:11px!important;background:white}
 @media(max-width:1150px){.tm-transfer-fields{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:680px){.tm-transfer-fields{grid-template-columns:1fr}}
+
+
+/* Drill supervisor's printed-style day + month report. */
+.drill-report-sheet{margin:8px 0 12px;border:1px solid #aabdb2;background:#fff;border-radius:6px;padding:9px}
+.drill-report-sheet .tiom-card-title{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.drill-report-sheet .tiom-card-title>div{display:flex;flex-direction:column;gap:3px}
+.drill-report-kpis{grid-template-columns:repeat(4,minmax(0,1fr));margin:9px 0}
+.drill-month-table{width:100%;border-collapse:collapse;min-width:880px;font-size:11px}
+.drill-month-table td,.drill-month-table th{border:1px solid #6a777a;padding:5px 7px;line-height:1.4;vertical-align:middle}
+.drill-month-table thead th{background:#f4b183;color:#111;text-align:center;font-weight:750;white-space:nowrap}
+.drill-month-table .drill-head-group th{background:#f4b183;font-size:12px}
+.drill-month-table tbody td{text-align:right;font-variant-numeric:tabular-nums}
+.drill-month-table tbody td:nth-child(2),.drill-month-table .drill-remarks-title th{text-align:left}
+.drill-month-table .drill-total{background:#e8f0e5;font-weight:750}
+.drill-month-table .drill-remarks-title th{background:#edf3ed;padding:8px 10px}
+.drill-month-table tbody tr:has(>th[scope="row"]) td{text-align:left;white-space:normal}
+.drill-month-table tbody tr:has(>th[scope="row"]) td div{margin:2px 0;overflow-wrap:anywhere}
+.drill-month-table tbody tr:has(>th[scope="row"]) th{text-align:left;min-width:150px}
+#dr_body td textarea[id^="dr_note_"]{width:240px;min-height:45px;resize:vertical;white-space:normal}
+@media(max-width:850px){.drill-report-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.drill-report-sheet .tiom-card-title{flex-wrap:wrap}}
