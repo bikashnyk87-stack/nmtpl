@@ -89,7 +89,7 @@ def test_correct_only_exact_active_wb_links_and_preserve_manual_void_review():
         db.flush()
         second=repair_saved_wb_linked_mis(db)
         correction_logs=list(db.scalars(select(AuditLog).where(AuditLog.action=="TIOM_WB_SAVED_TRIP_CORRECTED")))
-        assert second["counts"]["UPDATED"]==0, [x.detail for x in correction_logs[-3:]]
+        assert second["counts"].get("UPDATED",0)==0, [x.detail for x in correction_logs[-3:]]
         logs=list(db.scalars(select(AuditLog).where(AuditLog.action=="TIOM_WB_SAVED_TRIP_CORRECTED")))
         assert len(logs)==3
         assert any('"wbMovementKey": "wb-good"' in x.detail for x in logs)
