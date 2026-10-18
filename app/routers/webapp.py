@@ -51,6 +51,7 @@ from app.services.tiom_erp import (
 )
 from app.services.tiom_location_erp import canonicalize_wb_rows, location_options, ensure_location_master_roles
 from app.services.tiom_manual_material import canonical_manual_45_material
+from app.services.tiom_wb_truth import canonical_wb_product, repair_saved_wb_linked_mis
 from app.site_models import (
     TiomSourceDeployment, TiomSourceContext, TiomRouteMaster, TiomDrillSet, TiomDrillingShift,
     TiomMisReport, TiomMisTripRow, TiomMisTripDetail, TiomTripFactor,
@@ -2702,9 +2703,13 @@ def confirm_wb_batch(db,user,p):
         old.status='REPLACED'
     batch.status='CONFIRMED'; batch.confirmed_at=now_local(); db.flush()
     result=auto_reconcile(db,batch.operating_date,batch.shift)
+    # Re-validate saved WB-linked MIS rows when the authoritative import is
+    # refreshed; superseded links are flagged, not reassigned to another trip.
+    wb_truth=repair_saved_wb_linked_mis(db)
+    audit(db,user,'TIOM_WB_CONFIRMED_TRUTH_CHECK','wb_import_batch',batch.batch_id,wb_truth)
     audit(db,user,'WB_CONFIRM','wb_import_batch',batch.batch_id,{'valid':batch.valid_rows,'review':batch.review_rows,'reconciliation':result})
     return {'ok':True,'message':f'WB confirmed. {result["matched"]} auto-matched; {result["wb_unmatched"]} WB unmatched; {result["field_without_wb"]} field trips without WB.',
-            'reconciliation':result,**wb_desk(db,user,batch.operating_date,batch.shift)}
+            'reconciliation':result,'wbMisTruthCheck':wb_truth,**wb_desk(db,user,batch.operating_date,batch.shift)}
 
 
 # NMTPL_WB_RPC_ROSTER_V3_START
@@ -4679,6 +4684,10 @@ def get_tiom_wb_suggestions(db,user,p):
         if rec and rec.row_id not in own_row_ids:
             other_linked+=1;continue
         item=tiom_wb_payload(db,wb)
+        # An exact WB material is never replaced by a generic/fuzzy MIS alias.
+        product=canonical_wb_product(db,wb)
+        item['materialId']=product.product_id if product else ''
+        item['materialLabel']=product.name if product else str(wb.material_name or '')
         source_id=item.get('sourceLocationId') or ''
         machines=sorted({d.machine_id for d in deployments if d.source_location_id==source_id}) if source_id else []
         item['machineId']=machines[0] if len(machines)==1 else ''
@@ -4845,10 +4854,24 @@ def save_tiom_mis_report(db,user,p,submit=False):
         if wb and not tiom_wb_vehicle_matches(wb,vehicle): raise HTTPException(422,f'Row {i}: WB movement {wb.movement_no} belongs to a different vehicle.')
         if wb_key and wb_key in already_linked: raise HTTPException(409,f'Row {i}: WB movement {wb.movement_no} is already linked to another MIS trip.')
         if wb:
+            product_wb=canonical_wb_product(db,wb)
             suggested=tiom_wb_payload(db,wb)
-            material_id=material_id or str(suggested.get('materialId') or '')
-            source_id=source_id or str(suggested.get('sourceLocationId') or '')
-            dest_id=dest_id or str(suggested.get('destinationLocationId') or '')
+            expected_material=product_wb.product_id if product_wb else ''
+            expected_source=str(suggested.get('sourceLocationId') or '')
+            expected_dest=str(suggested.get('destinationLocationId') or '')
+            if not all((expected_material,expected_source,expected_dest)):
+                raise HTTPException(422,f'Row {i}: WB movement {wb.movement_no} has an unmapped material, source or destination. Configure the WB source/destination Location Master mapping first; never guess from the MIS row.')
+            # Source of truth is the exact linked WB movement, not a manually
+            # selected product or a similarly weighted trip.
+            if material_id and material_id!=expected_material:
+                raise HTTPException(409,f'Row {i}: selected material differs from confirmed WB movement {wb.movement_no} ({wb.material_name}). Reload WB Rows to correct it.')
+            if source_id and source_id!=expected_source:
+                raise HTTPException(409,f'Row {i}: Source conflicts with confirmed WB movement {wb.movement_no} ({wb.source_raw}). Reload WB Rows.')
+            if dest_id and dest_id!=expected_dest:
+                raise HTTPException(409,f'Row {i}: Destination conflicts with confirmed WB movement {wb.movement_no} ({wb.destination_raw}). Reload WB Rows.')
+            material_id=expected_material
+            source_id=expected_source
+            dest_id=expected_dest
         if not all([material_id,source_id,dest_id]): raise HTTPException(422,f'Row {i}: material, source and destination are required. Map the WB master values if they were not recognised automatically.')
         prod=active_resource(db,Product,material_id); active_resource(db,Location,source_id); active_resource(db,Location,dest_id)
         dep_machines=[d.machine_id for d in deployments if d.source_location_id==source_id]
