@@ -135,8 +135,12 @@ async def lifespan(app):
         # Explicitly requested 45-MT manual material repair. Only NULL
         # quantities on non-WB, non-VOID rows are touched; safe on restart.
         material_qty_backfill = webapp.backfill_tiom_manual_material_quantities(db)
+        # Exact confirmed WB links are corrected atomically, never by inferred
+        # equal weights. Any ambiguous/superseded link stays untouched.
+        wb_truth_repair = webapp.repair_saved_wb_linked_mis(db)
         db.commit()
         print("TIOM_MANUAL_MATERIAL_QTY_BACKFILL_OK="+json.dumps(material_qty_backfill,sort_keys=True),flush=True)
+        print("TIOM_WB_SAVED_TRUTH_REPAIR_OK="+json.dumps(wb_truth_repair,sort_keys=True),flush=True)
         diag_date=os.getenv("TIOM_TEMP_DIAG_DATE", "").strip()
         if diag_date:
             admin_user=next((x for x in users if x.active and x.admin),None)

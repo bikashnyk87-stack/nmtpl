@@ -51,6 +51,7 @@ from app.services.tiom_erp import (
 )
 from app.services.tiom_location_erp import canonicalize_wb_rows, location_options, ensure_location_master_roles
 from app.services.tiom_manual_material import canonical_manual_45_material
+from app.services.tiom_wb_truth import canonical_wb_product, repair_saved_wb_linked_mis
 from app.site_models import (
     TiomSourceDeployment, TiomSourceContext, TiomRouteMaster, TiomDrillSet, TiomDrillingShift,
     TiomMisReport, TiomMisTripRow, TiomMisTripDetail, TiomTripFactor,
@@ -2702,9 +2703,13 @@ def confirm_wb_batch(db,user,p):
         old.status='REPLACED'
     batch.status='CONFIRMED'; batch.confirmed_at=now_local(); db.flush()
     result=auto_reconcile(db,batch.operating_date,batch.shift)
+    # Re-validate saved WB-linked MIS rows when the authoritative import is
+    # refreshed; superseded links are flagged, not reassigned to another trip.
+    wb_truth=repair_saved_wb_linked_mis(db,batch.operating_date,batch.shift)
+    audit(db,user,'TIOM_WB_CONFIRMED_TRUTH_CHECK','wb_import_batch',batch.batch_id,wb_truth)
     audit(db,user,'WB_CONFIRM','wb_import_batch',batch.batch_id,{'valid':batch.valid_rows,'review':batch.review_rows,'reconciliation':result})
     return {'ok':True,'message':f'WB confirmed. {result["matched"]} auto-matched; {result["wb_unmatched"]} WB unmatched; {result["field_without_wb"]} field trips without WB.',
-            'reconciliation':result,**wb_desk(db,user,batch.operating_date,batch.shift)}
+            'reconciliation':result,'wbMisTruthCheck':wb_truth,**wb_desk(db,user,batch.operating_date,batch.shift)}
 
 
 # NMTPL_WB_RPC_ROSTER_V3_START
@@ -4679,6 +4684,10 @@ def get_tiom_wb_suggestions(db,user,p):
         if rec and rec.row_id not in own_row_ids:
             other_linked+=1;continue
         item=tiom_wb_payload(db,wb)
+        # An exact WB material is never replaced by a generic/fuzzy MIS alias.
+        product=canonical_wb_product(db,wb)
+        item['materialId']=product.product_id if product else ''
+        item['materialLabel']=product.name if product else str(wb.material_name or '')
         source_id=item.get('sourceLocationId') or ''
         machines=sorted({d.machine_id for d in deployments if d.source_location_id==source_id}) if source_id else []
         item['machineId']=machines[0] if len(machines)==1 else ''
@@ -4845,10 +4854,24 @@ def save_tiom_mis_report(db,user,p,submit=False):
         if wb and not tiom_wb_vehicle_matches(wb,vehicle): raise HTTPException(422,f'Row {i}: WB movement {wb.movement_no} belongs to a different vehicle.')
         if wb_key and wb_key in already_linked: raise HTTPException(409,f'Row {i}: WB movement {wb.movement_no} is already linked to another MIS trip.')
         if wb:
+            product_wb=canonical_wb_product(db,wb)
             suggested=tiom_wb_payload(db,wb)
-            material_id=material_id or str(suggested.get('materialId') or '')
-            source_id=source_id or str(suggested.get('sourceLocationId') or '')
-            dest_id=dest_id or str(suggested.get('destinationLocationId') or '')
+            expected_material=product_wb.product_id if product_wb else ''
+            expected_source=str(suggested.get('sourceLocationId') or '')
+            expected_dest=str(suggested.get('destinationLocationId') or '')
+            if not all((expected_material,expected_source,expected_dest)):
+                raise HTTPException(422,f'Row {i}: WB movement {wb.movement_no} has an unmapped material, source or destination. Configure the WB source/destination Location Master mapping first; never guess from the MIS row.')
+            # Source of truth is the exact linked WB movement, not a manually
+            # selected product or a similarly weighted trip.
+            if material_id and material_id!=expected_material:
+                raise HTTPException(409,f'Row {i}: selected material differs from confirmed WB movement {wb.movement_no} ({wb.material_name}). Reload WB Rows to correct it.')
+            if source_id and source_id!=expected_source:
+                raise HTTPException(409,f'Row {i}: Source conflicts with confirmed WB movement {wb.movement_no} ({wb.source_raw}). Reload WB Rows.')
+            if dest_id and dest_id!=expected_dest:
+                raise HTTPException(409,f'Row {i}: Destination conflicts with confirmed WB movement {wb.movement_no} ({wb.destination_raw}). Reload WB Rows.')
+            material_id=expected_material
+            source_id=expected_source
+            dest_id=expected_dest
         if not all([material_id,source_id,dest_id]): raise HTTPException(422,f'Row {i}: material, source and destination are required. Map the WB master values if they were not recognised automatically.')
         prod=active_resource(db,Product,material_id); active_resource(db,Location,source_id); active_resource(db,Location,dest_id)
         dep_machines=[d.machine_id for d in deployments if d.source_location_id==source_id]
@@ -6153,6 +6176,58 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
         'Material ID','Material','Source ID','Source','Destination ID','Destination',
         'Machine ID','Loader / Excavator','Qty MT','Remarks','Entered By','Entered At','Submitted By','Submitted At'
     ],detail_rows,[12,8,14,38,16,15,26,14,26,12,12,12,12,12,12,8,12,12,15,30,15,30,15,30,18,28,12,38,15,20,15,20])
+
+    # Movement-key-only verification of saved WB-linked rows.
+    rec_map={x.row_id:x for x in db.scalars(select(TiomMisReconciliation).where(
+        TiomMisReconciliation.row_id.in_(row_ids)))} if row_ids else {}
+    wb_keys={x.wb_movement_key for x in rec_map.values() if x.wb_movement_key}
+    wb_map={x.movement_key:x for x in db.scalars(select(WbMovement).where(
+        WbMovement.movement_key.in_(wb_keys)))} if wb_keys else {}
+    audit_confirmed=list(db.scalars(select(WbImportBatch).where(
+        WbImportBatch.operating_date>=from_day,WbImportBatch.operating_date<=to_day,
+        WbImportBatch.status=='CONFIRMED',WbImportBatch.confirmed_at.is_not(None)
+    ).order_by(WbImportBatch.confirmed_at.desc())))
+    active_wb_batches={}
+    for b in audit_confirmed:active_wb_batches.setdefault((b.operating_date,b.shift),b.batch_id)
+    wb_truth_rows=[];wb_truth_counts={'MATCH':0,'MISMATCH':0,'NOT_CURRENT_VALID':0,'BROKEN_LINK':0}
+    for row in rows:
+        rec=rec_map.get(row.row_id)
+        if not rec or not rec.wb_movement_key:continue
+        rep=report_by_id.get(row.report_id);d=details.get(row.row_id);wb=wb_map.get(rec.wb_movement_key)
+        if not wb:
+            issue='BROKEN_LINK'
+        elif wb.row_status!='VALID' or active_wb_batches.get((wb.operating_date,wb.shift))!=wb.batch_id:
+            issue='NOT_CURRENT_VALID'
+        else:
+            reasons=[]
+            saved_material=label_product(d.material_id) if d else ''
+            norm=lambda v:re.sub(r'[^A-Z0-9]+',' ',str(v or '').upper()).strip()
+            if norm(saved_material)!=norm(wb.material_name):reasons.append('MATERIAL')
+            if not d or d.calculated_qty_mt!=Decimal(wb.net_kg)/Decimal('1000'):reasons.append('WEIGHT')
+            if norm(row.source_raw)!=norm(wb.source_raw):reasons.append('SOURCE_RAW')
+            if norm(row.destination_raw)!=norm(wb.destination_raw):reasons.append('DEST_RAW')
+            if d and d.factor_mt_per_trip is not None:reasons.append('FACTOR_ON_WB')
+            issue=' / '.join(reasons) if reasons else 'MATCH'
+        wb_truth_counts['MATCH' if issue=='MATCH' else
+            'NOT_CURRENT_VALID' if issue=='NOT_CURRENT_VALID' else
+            'BROKEN_LINK' if issue=='BROKEN_LINK' else 'MISMATCH']+=1
+        wb_truth_rows.append([
+            str(rep.operating_date) if rep else '',rep.shift if rep else '',rep.vehicle_id if rep else '',
+            rep.status if rep else '',rep.report_id if rep else '',row.row_no,row.row_id,
+            rec.wb_movement_key,wb.movement_no if wb else '',wb.material_code if wb else '',
+            wb.material_name if wb else '',label_product(d.material_id) if d else '',
+            float(Decimal(wb.net_kg)/Decimal('1000')) if wb and wb.net_kg is not None else None,
+            float(d.calculated_qty_mt) if d and d.calculated_qty_mt is not None else None,
+            wb.source_raw if wb else '',row.source_raw or '',
+            wb.destination_raw if wb else '',row.destination_raw or '',issue])
+    add_sheet('WB vs MIS Truth',[
+        'Date','Shift','Vehicle','Report Status','Report ID','Trip #','MIS Row ID',
+        'WB Movement Key','WB Movement No','WB Material Code','WB Material','Saved MIS Material',
+        'WB Net MT','Saved MIS MT','WB Source','MIS Raw Source',
+        'WB Destination','MIS Raw Destination','Status'
+    ],wb_truth_rows,[12,8,16,15,38,10,38,43,25,20,48,48,15,15,32,32,32,32,26])
+    for status,count in wb_truth_counts.items():
+        ws.append(['WB link check: '+status,count,'Exact linked WB movements only','See WB vs MIS Truth'])
 
     export_correction_meta=_tiom_mis_correction_meta(db,report_ids)
     activity_meta,activity_logs=_tiom_mis_activity_meta(db,report_ids)
