@@ -112,7 +112,7 @@ def repair_saved_wb_linked_mis(db, operating_date=None, shift=None):
             rec_query=rec_query.where(TiomMisReport.operating_date==operating_date)
         if shift is not None:
             rec_query=rec_query.where(TiomMisReport.shift==shift)
-    recs=list(db.scalars(rec_query)
+    recs=list(db.scalars(rec_query))
     equipment={e.machine_id:e for e in db.scalars(select(Equipment))}
     result=Counter(); changed_by_date=Counter()
     material_cache={}; location_cache={}
