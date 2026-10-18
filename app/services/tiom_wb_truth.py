@@ -88,24 +88,34 @@ def validate_wb_truth(db,wb,report,equipment):
     return ""
 
 
-def repair_saved_wb_linked_mis(db):
+def repair_saved_wb_linked_mis(db, operating_date=None, shift=None):
     """Idempotent repair of confirmed active WB links, with per-row audit.
 
     Only exact WB movement_key links for latest CONFIRMED batch, never joins
     by equal weights or approximated vehicle. Changes contain before/after.
     """
-    batches=list(db.scalars(select(WbImportBatch).where(
-        WbImportBatch.status=="CONFIRMED",
-        WbImportBatch.confirmed_at.is_not(None)
-    ).order_by(WbImportBatch.operating_date,WbImportBatch.shift,
+    batch_query=select(WbImportBatch).where(WbImportBatch.status=="CONFIRMED",WbImportBatch.confirmed_at.is_not(None))
+    if operating_date is not None:
+        batch_query=batch_query.where(WbImportBatch.operating_date==operating_date)
+    if shift is not None:
+        batch_query=batch_query.where(WbImportBatch.shift==shift)
+    batches=list(db.scalars(batch_query.order_by(WbImportBatch.operating_date,WbImportBatch.shift,
                WbImportBatch.confirmed_at.desc(),WbImportBatch.batch_id.desc())))
     latest={}
     for batch in batches:
         latest.setdefault((batch.operating_date,batch.shift),batch.batch_id)
-    recs=list(db.scalars(select(TiomMisReconciliation).where(
-        TiomMisReconciliation.wb_movement_key.is_not(None))))
+    rec_query=select(TiomMisReconciliation).where(TiomMisReconciliation.wb_movement_key.is_not(None))
+    if operating_date is not None or shift is not None:
+        rec_query=(rec_query.join(TiomMisTripRow,TiomMisTripRow.row_id==TiomMisReconciliation.row_id)
+            .join(TiomMisReport,TiomMisReport.report_id==TiomMisTripRow.report_id))
+        if operating_date is not None:
+            rec_query=rec_query.where(TiomMisReport.operating_date==operating_date)
+        if shift is not None:
+            rec_query=rec_query.where(TiomMisReport.shift==shift)
+    recs=list(db.scalars(rec_query)
     equipment={e.machine_id:e for e in db.scalars(select(Equipment))}
     result=Counter(); changed_by_date=Counter()
+    material_cache={}; location_cache={}
     for rec in recs:
         row=db.get(TiomMisTripRow,rec.row_id)
         if row is None:
@@ -123,11 +133,20 @@ def repair_saved_wb_linked_mis(db):
         if detail is None:
             result["NO_MIS_DETAIL"]+=1;continue
 
-        product=canonical_wb_product(db,wb)
+        material_key=(wb.material_code or "",wb.material_name or "")
+        if material_key not in material_cache:
+            material_cache[material_key]=canonical_wb_product(db,wb)
+        product=material_cache[material_key]
         if not product:
             result["PRODUCT_UNRESOLVED"]+=1;continue
-        source=resolve_location_id(db,wb.source_raw,"SOURCE")
-        destination=resolve_location_id(db,wb.destination_raw,"DESTINATION")
+        skey=("SOURCE",wb.source_raw or "")
+        dkey=("DESTINATION",wb.destination_raw or "")
+        if skey not in location_cache:
+            location_cache[skey]=resolve_location_id(db,wb.source_raw,"SOURCE")
+        if dkey not in location_cache:
+            location_cache[dkey]=resolve_location_id(db,wb.destination_raw,"DESTINATION")
+        source=location_cache[skey]
+        destination=location_cache[dkey]
         if not source:
             result["SOURCE_UNRESOLVED"]+=1
         if not destination:
@@ -169,4 +188,4 @@ def repair_saved_wb_linked_mis(db):
         else:
             result["ALREADY_MATCHED"]+=1
     db.flush()
-    return {"counts":dict(result),"correctedByDate":dict(sorted(changed_by_date.items()))}
+    return {"counts":dict(result),"correctedByDate":dict(sorted(changed_by_date.items())),"linkedRecordsChecked":len(recs)}
