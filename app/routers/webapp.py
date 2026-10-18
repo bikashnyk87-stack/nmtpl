@@ -6177,6 +6177,58 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
         'Machine ID','Loader / Excavator','Qty MT','Remarks','Entered By','Entered At','Submitted By','Submitted At'
     ],detail_rows,[12,8,14,38,16,15,26,14,26,12,12,12,12,12,12,8,12,12,15,30,15,30,15,30,18,28,12,38,15,20,15,20])
 
+    # Movement-key-only verification of saved WB-linked rows.
+    rec_map={x.row_id:x for x in db.scalars(select(TiomMisReconciliation).where(
+        TiomMisReconciliation.row_id.in_(row_ids)))} if row_ids else {}
+    wb_keys={x.wb_movement_key for x in rec_map.values() if x.wb_movement_key}
+    wb_map={x.movement_key:x for x in db.scalars(select(WbMovement).where(
+        WbMovement.movement_key.in_(wb_keys)))} if wb_keys else {}
+    audit_confirmed=list(db.scalars(select(WbImportBatch).where(
+        WbImportBatch.operating_date>=from_day,WbImportBatch.operating_date<=to_day,
+        WbImportBatch.status=='CONFIRMED',WbImportBatch.confirmed_at.is_not(None)
+    ).order_by(WbImportBatch.confirmed_at.desc())))
+    active_wb_batches={}
+    for b in audit_confirmed:active_wb_batches.setdefault((b.operating_date,b.shift),b.batch_id)
+    wb_truth_rows=[];wb_truth_counts={'MATCH':0,'MISMATCH':0,'NOT_CURRENT_VALID':0,'BROKEN_LINK':0}
+    for row in rows:
+        rec=rec_map.get(row.row_id)
+        if not rec or not rec.wb_movement_key:continue
+        rep=report_by_id.get(row.report_id);d=details.get(row.row_id);wb=wb_map.get(rec.wb_movement_key)
+        if not wb:
+            issue='BROKEN_LINK'
+        elif wb.row_status!='VALID' or active_wb_batches.get((wb.operating_date,wb.shift))!=wb.batch_id:
+            issue='NOT_CURRENT_VALID'
+        else:
+            reasons=[]
+            saved_material=label_product(d.material_id) if d else ''
+            norm=lambda v:re.sub(r'[^A-Z0-9]+',' ',str(v or '').upper()).strip()
+            if norm(saved_material)!=norm(wb.material_name):reasons.append('MATERIAL')
+            if not d or d.calculated_qty_mt!=Decimal(wb.net_kg)/Decimal('1000'):reasons.append('WEIGHT')
+            if norm(row.source_raw)!=norm(wb.source_raw):reasons.append('SOURCE_RAW')
+            if norm(row.destination_raw)!=norm(wb.destination_raw):reasons.append('DEST_RAW')
+            if d and d.factor_mt_per_trip is not None:reasons.append('FACTOR_ON_WB')
+            issue=' / '.join(reasons) if reasons else 'MATCH'
+        wb_truth_counts['MATCH' if issue=='MATCH' else
+            'NOT_CURRENT_VALID' if issue=='NOT_CURRENT_VALID' else
+            'BROKEN_LINK' if issue=='BROKEN_LINK' else 'MISMATCH']+=1
+        wb_truth_rows.append([
+            str(rep.operating_date) if rep else '',rep.shift if rep else '',rep.vehicle_id if rep else '',
+            rep.status if rep else '',rep.report_id if rep else '',row.row_no,row.row_id,
+            rec.wb_movement_key,wb.movement_no if wb else '',wb.material_code if wb else '',
+            wb.material_name if wb else '',label_product(d.material_id) if d else '',
+            float(Decimal(wb.net_kg)/Decimal('1000')) if wb and wb.net_kg is not None else None,
+            float(d.calculated_qty_mt) if d and d.calculated_qty_mt is not None else None,
+            wb.source_raw if wb else '',row.source_raw or '',
+            wb.destination_raw if wb else '',row.destination_raw or '',issue])
+    add_sheet('WB vs MIS Truth',[
+        'Date','Shift','Vehicle','Report Status','Report ID','Trip #','MIS Row ID',
+        'WB Movement Key','WB Movement No','WB Material Code','WB Material','Saved MIS Material',
+        'WB Net MT','Saved MIS MT','WB Source','MIS Raw Source',
+        'WB Destination','MIS Raw Destination','Status'
+    ],wb_truth_rows,[12,8,16,15,38,10,38,43,25,20,48,48,15,15,32,32,32,32,26])
+    for status,count in wb_truth_counts.items():
+        ws.append(['WB link check: '+status,count,'Exact linked WB movements only','See WB vs MIS Truth'])
+
     export_correction_meta=_tiom_mis_correction_meta(db,report_ids)
     activity_meta,activity_logs=_tiom_mis_activity_meta(db,report_ids)
     audit_rows=[[
