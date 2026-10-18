@@ -4379,6 +4379,34 @@ def _tiom_mis_correction_meta(db,report_ids):
     return out
 
 
+def _tiom_mis_activity_meta(db, report_ids):
+    """Last actual action, distinct from a submitted-report correction.
+
+    Draft saves, submissions and voids are not synonymous with corrections,
+    even if they increment the report version.
+    """
+    ids=[str(x) for x in (report_ids or []) if x]
+    if not ids: return {}, []
+    actions=('TIOM_MIS_DRAFT','TIOM_MIS_SUBMIT','TIOM_MIS_EDIT_SUBMITTED','TIOM_MIS_VOID')
+    events=list(db.scalars(select(AuditLog).where(
+        AuditLog.entity=='tiom_mis_report',
+        AuditLog.entity_id.in_(ids),
+        AuditLog.action.in_(actions)
+    ).order_by(AuditLog.created_at.desc(),AuditLog.id.desc())))
+    latest={}
+    for item in events:
+        if item.entity_id in latest: continue
+        try: detail=json.loads(item.detail or '{}')
+        except (ValueError, TypeError): detail={}
+        latest[item.entity_id]={
+            'lastAction':item.action.replace('TIOM_MIS_',''),
+            'lastActionBy':item.actor,
+            'lastActionAt':aware(item.created_at).astimezone(TZ).strftime('%Y-%m-%d %H:%M:%S') if item.created_at else '',
+            'lastActionReason':detail.get('reason') or ''
+        }
+    return latest,events
+
+
 def _tiom_mis_edit_snapshot(db,report):
     rows_,details=_tiom_report_rows(db,report.report_id)
     row_ids=[r.row_id for r in rows_]
@@ -5954,7 +5982,7 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
         return aware(dt).astimezone(TZ).strftime('%H:%M') if dt else ''
     def safe(value):
         if value is None:return ''
-        if isinstance(value,(int,float)):return value
+        if isinstance(value,(int,float,Decimal)):return float(value) if isinstance(value,Decimal) else value
         val=str(value)
         return "'"+val if val.lstrip().startswith(('=','+','-','@')) else val
 
@@ -5988,6 +6016,8 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
             rep.entered_by,local_dt(rep.entered_at),rep.submitted_by or '',local_dt(rep.submitted_at)
         ])
 
+        # Retain VOID/DRAFT rows only in detail/audit, not in operational totals.
+        if rep.status!='SUBMITTED': continue
         va=vehicle_agg.setdefault(rep.vehicle_id,{'vehicle':vehicle,'reports':set(),'drivers':set(),'trips':0,'qty':Decimal('0'),'qty_rows':0,'materials':set()})
         va['reports'].add(rep.report_id);va['trips']+=1
         if driver:va['drivers'].add(driver)
@@ -6016,8 +6046,9 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
     drafts=sum(1 for x in reports if x.status=='DRAFT')
     voids=sum(1 for x in reports if x.status=='VOID')
     qty_index=26
-    qty_total=sum((Decimal(str(x[qty_index])) for x in detail_rows if x[qty_index] not in (None,'')),Decimal('0'))
-    qty_rows=sum(1 for x in detail_rows if x[qty_index] not in (None,''))
+    operational_rows=[x for x in detail_rows if x[2]=='SUBMITTED']
+    qty_total=sum((Decimal(str(x[qty_index])) for x in operational_rows if x[qty_index] not in (None,'')),Decimal('0'))
+    qty_rows=sum(1 for x in operational_rows if x[qty_index] not in (None,''))
     ws=book.create_sheet('Summary')
     ws.append(['TIOM SAVED ENTRY DETAILED REPORT']);ws.merge_cells('A1:D1')
     ws['A1'].font=Font(bold=True,size=16,color=white);ws['A1'].fill=header_fill
@@ -6030,9 +6061,11 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
         ('Submitted Reports',submitted,'Submitted entry reports',''),
         ('Draft Reports',drafts,'Saved drafts',''),
         ('VOID Reports',voids,'Voided reports retained for audit',''),
-        ('Entry Trip Rows',len(rows),'All trip rows in saved reports',''),
-        ('Rows With Qty',qty_rows,'Rows where the system already has quantity stored',''),
-        ('Recorded / Calculated Qty MT',round(float(qty_total),2),'Existing entry quantity only','Blank where no quantity is stored')
+        ('Entry Trip Rows',len(rows),'Audit: all saved rows, including void/drafts','NOT an operational trip count'),
+        ('Submitted Entry Trips',len(operational_rows),'Operational rows in SUBMITTED reports only','Excludes void and draft'),
+        ('Rows With Qty',qty_rows,'Submitted rows where stored quantity exists','Does not infer missing tonnage'),
+        ('Submitted Rows Missing Qty',len(operational_rows)-qty_rows,'Unweighed/unfactored submitted trips','Check MIS Qty Gaps sheet'),
+        ('Recorded / Calculated Qty MT',round(float(qty_total),2),'SUBMITTED saved entry quantity only','Excludes void and draft; does not auto-reconcile WB')
     ]
     for x in summary_rows:ws.append([safe(v) for v in x])
     for col,w in {'A':30,'B':18,'C':42,'D':42}.items():ws.column_dimensions[col].width=w
@@ -6060,17 +6093,36 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
     ],detail_rows,[12,8,14,38,16,15,26,14,26,12,12,12,12,12,12,8,12,12,15,30,15,30,15,30,18,28,12,38,15,20,15,20])
 
     export_correction_meta=_tiom_mis_correction_meta(db,report_ids)
+    activity_meta,activity_logs=_tiom_mis_activity_meta(db,report_ids)
     audit_rows=[[
         str(r.operating_date),r.shift,r.report_id,r.vehicle_id,label_eq(r.vehicle_id),r.operator_id or '',label_person(r.operator_id),
         r.paper_ref or '',r.status,r.version or 1,r.opening_kmr,r.closing_kmr,r.opening_hmr,r.closing_hmr,r.notes or '',
         r.entered_by,local_dt(r.entered_at),r.submitted_by or '',local_dt(r.submitted_at),
         export_correction_meta.get(r.report_id,{}).get('correctedBy',''),
-        export_correction_meta.get(r.report_id,{}).get('correctedAtFull','')
+        export_correction_meta.get(r.report_id,{}).get('correctedAtFull',''),
+        activity_meta.get(r.report_id,{}).get('lastAction',''),
+        activity_meta.get(r.report_id,{}).get('lastActionBy',''),
+        activity_meta.get(r.report_id,{}).get('lastActionAt',''),
+        activity_meta.get(r.report_id,{}).get('lastActionReason','')
     ] for r in reports]
     add_sheet('Saved Report Audit',[
         'Date','Shift','Report ID','Vehicle ID','Tripper','Driver ID','Driver','Report Ref','Status','Version',
-        'Opening KMR','Closing KMR','Opening HMR','Closing HMR','Notes','Entered By','Entered At','Submitted By','Submitted At','Last Corrected By','Last Corrected At'
-    ],audit_rows,[12,8,38,15,26,14,26,16,12,10,12,12,12,12,38,15,20,15,20,18,20])
+        'Opening KMR','Closing KMR','Opening HMR','Closing HMR','Notes','Entered By','Entered At','Submitted By','Submitted At',
+        'Last Corrected By','Last Corrected At','Last Action','Last Action By','Last Action At','Action Reason'
+    ],audit_rows,[12,8,38,15,26,14,26,16,12,10,12,12,12,12,38,15,20,15,20,18,20,20,20,22,46])
+    action_rows=[]
+    for row in activity_logs:
+        try: detail=json.loads(row.detail or '{}')
+        except (ValueError,TypeError):detail={}
+        action_rows.append([
+            row.entity_id,row.action.replace('TIOM_MIS_',''),row.actor,local_dt(row.created_at),
+            detail.get('reason') or '',detail.get('vehicle') or '',
+            detail.get('fromVersion'),detail.get('toVersion'),
+            detail.get('rows'),detail.get('wbLinkedRows')
+        ])
+    add_sheet('Full Activity History',[
+        'Report ID','Event','Actor','Event Time','Reason','Vehicle','Version From','Version To','Rows','WB Linked'
+    ],action_rows,[40,22,20,21,48,16,14,14,12,14])
 
     edit_logs=list(db.scalars(select(AuditLog).where(
         AuditLog.action=='TIOM_MIS_EDIT_SUBMITTED',
@@ -6090,6 +6142,68 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
         'Corrected At','Corrected By','Report ID','From Version','To Version','Edit Reason',
         'Trip Rows','WB-linked Rows','Lead Resolved','Lead Missing'
     ],correction_rows,[20,18,38,12,12,48,12,14,14,14])
+
+    # Read-only coverage report from latest confirmed WB batches.
+    # Never assign provisional quantities or create trips during export.
+    reports_by_id={r.report_id:r for r in reports}
+    row_by_id={r.row_id:r for r in rows}
+    recs=list(db.scalars(select(TiomMisReconciliation).where(
+        TiomMisReconciliation.row_id.in_(row_ids)
+    ))) if row_ids else []
+    report_link_by_wb={}
+    for rec in recs:
+        if not rec.wb_movement_key: continue
+        trip_row=row_by_id.get(rec.row_id)
+        report=reports_by_id.get(trip_row.report_id) if trip_row else None
+        if report: report_link_by_wb[rec.wb_movement_key]=report
+    confirmed_batches=list(db.scalars(select(WbImportBatch).where(
+        WbImportBatch.operating_date>=from_day,WbImportBatch.operating_date<=to_day,
+        WbImportBatch.shift.in_(allowed),WbImportBatch.status=='CONFIRMED',
+        WbImportBatch.confirmed_at.is_not(None)
+    ).order_by(WbImportBatch.operating_date,WbImportBatch.shift,WbImportBatch.confirmed_at.desc())))
+    latest_batches={}
+    for batch in confirmed_batches:
+        latest_batches.setdefault((batch.operating_date,batch.shift),batch)
+    batch_ids=[b.batch_id for b in latest_batches.values()]
+    active_wb=list(db.scalars(select(WbMovement).where(
+        WbMovement.batch_id.in_(batch_ids)
+    ).order_by(WbMovement.operating_date,WbMovement.shift,WbMovement.weigh_at,WbMovement.movement_no))) if batch_ids else []
+    unmatched_wb=[];review_wb=[];submitted_wb_count=0
+    for wb in active_wb:
+        owner=report_link_by_wb.get(wb.movement_key)
+        if wb.row_status!='VALID':
+            review_wb.append([str(wb.operating_date),wb.shift,wb.movement_no,
+                wb.vehicle_id or wb.vehicle_raw or '',wb.material_name or wb.material_code or '',
+                float(Decimal(wb.net_kg or 0)/Decimal('1000')),wb.row_status,
+                wb.issue or '',local_dt(wb.weigh_at)])
+            continue
+        if owner and owner.status=='SUBMITTED':
+            submitted_wb_count+=1
+            continue
+        state='UNMATCHED' if not owner else 'LINKED_TO_'+owner.status
+        unmatched_wb.append([str(wb.operating_date),wb.shift,wb.movement_no,
+            wb.vehicle_id or wb.vehicle_raw or '',wb.material_name or wb.material_code or '',
+            wb.source_raw or '',wb.destination_raw or '',
+            float(Decimal(wb.net_kg or 0)/Decimal('1000')),state,
+            owner.report_id if owner else '',local_dt(wb.weigh_at)])
+    add_sheet('WB Coverage Gaps',[
+        'Date','Shift','WB Movement No','Vehicle','Material','Source','Destination',
+        'Net MT','MIS Coverage','Report ID','Weigh Time'
+    ],unmatched_wb,[13,9,23,16,43,31,29,15,20,40,23])
+    add_sheet('WB Review Exceptions',[
+        'Date','Shift','WB Movement No','Vehicle','Material','Net MT','WB Status','Issue','Weigh Time'
+    ],review_wb,[13,9,23,16,43,15,15,74,23])
+    pending_detail=[[
+        x[0],x[1],x[3],x[15],x[19],x[21],x[23],x[2],x[5],x[27] or ''
+    ] for x in operational_rows if x[qty_index] in (None,'')]
+    add_sheet('MIS Qty Gaps',[
+        'Date','Shift','Report ID','Trip No','Material','Source','Destination','Status','Vehicle','Remarks'
+    ],pending_detail,[13,9,40,12,43,36,36,15,17,48])
+    ws.append([])
+    ws.append(['Latest Confirmed WB: valid linked',submitted_wb_count,'Based on saved explicit WB links','Excludes review records'])
+    ws.append(['Latest Confirmed WB: coverage gap',len(unmatched_wb),'Valid WB not linked to a submitted report','See WB Coverage Gaps'])
+    ws.append(['Latest Confirmed WB: review rows',len(review_wb),'WB rows requiring source correction','See WB Review Exceptions'])
+    ws.append(['Submitted MIS missing quantity',len(pending_detail),'Saved without weight or approved factor','See MIS Qty Gaps'])
 
     buf=BytesIO();book.save(buf);buf.seek(0)
     name=f"TIOM_Entry_Detail_{from_day}_to_{to_day}_{shift}.xlsx"
