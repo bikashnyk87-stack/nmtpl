@@ -50,6 +50,7 @@ from app.services.tiom_erp import (
     allocate_blended_crusher_output,
 )
 from app.services.tiom_location_erp import canonicalize_wb_rows, location_options, ensure_location_master_roles
+from app.services.tiom_manual_material import canonical_manual_45_material
 from app.site_models import (
     TiomSourceDeployment, TiomSourceContext, TiomRouteMaster, TiomDrillSet, TiomDrillingShift,
     TiomMisReport, TiomMisTripRow, TiomMisTripDetail, TiomTripFactor,
@@ -3050,7 +3051,7 @@ def _tiom_context(db,user,p):
 def _ensure_tiom_trip_factors(db,user=None):
     existing=list(db.scalars(select(TiomTripFactor).where(TiomTripFactor.active)))
     codes={x.material_code.upper():x for x in existing}
-    seed=[('OB',Decimal('40.000'),'OB quantity = trips × 40 MT'),('ROM',Decimal('45.000'),'Current ROM excavator report basis = trips × 45 MT'),('ROM_LUMPS',Decimal('45.000'),'Audited 28-Sep shift workbook: ROM lumps movement basis = trips × 45 MT'),('SPILLAGE',Decimal('45.000'),'Audited 28-Sep shift workbook: spillage movement basis = trips × 45 MT')]
+    seed=[('OB',Decimal('40.000'),'OB quantity = trips × 40 MT'),('ROM',Decimal('45.000'),'Current ROM excavator report basis = trips × 45 MT'),('ROM_LUMPS',Decimal('45.000'),'ROM_LUMPS / Lumps: the same 45 MT per manual trip rule'),('SUBGRADE',Decimal('45.000'),'Sub-grade / Sub Grade: 45 MT per manual trip'),('BOULDER',Decimal('45.000'),'Boulder / Boulders: 45 MT per manual trip'),('SPILLAGE',Decimal('45.000'),'Audited 28-Sep shift workbook: spillage movement basis = trips × 45 MT')]
     for code,value,note in seed:
         if code not in codes:
             row=TiomTripFactor(factor_id=str(uuid4()),material_code=code,factor_mt_per_trip=value,
@@ -3067,6 +3068,14 @@ def _tiom_material_factor(db, product, day):
     factors=list(db.scalars(select(TiomTripFactor).where(
         TiomTripFactor.active,TiomTripFactor.effective_from<=day
     ).order_by(TiomTripFactor.effective_from.desc())))
+    # Canonical aliases take precedence over the generic ROM rule. E.g. both
+    # ROM_LUMPS and Lumps use the *same* approved factor, not two competing ones.
+    canonical=canonical_manual_45_material(product.product_id,product.name)
+    if canonical:
+        for f in factors:
+            if f.material_code.upper().strip()==canonical and (f.effective_to is None or f.effective_to>=day):
+                return f,Decimal(f.factor_mt_per_trip)
+        return None,None
     for f in factors:
         if f.effective_to and f.effective_to < day:
             continue
@@ -3074,6 +3083,59 @@ def _tiom_material_factor(db, product, day):
         if code and (code==str(product.product_id).upper().strip() or re.search(r'(^|[^A-Z0-9])'+re.escape(code)+r'([^A-Z0-9]|$)',key)):
             return f,Decimal(f.factor_mt_per_trip)
     return None,None
+
+
+
+def backfill_tiom_manual_material_quantities(db):
+    """One-time-safe, idempotent repair of *missing* saved manual trip weights.
+
+    Never overwrite WB-linked, already-weighted or voided rows. Quantities
+    copied into trip details remain snapshots of the effective-dated rule.
+    Each repaired row has a distinct audit entry for historical traceability.
+    """
+    _ensure_tiom_trip_factors(db)
+    saved=list(db.execute(select(TiomMisTripDetail,TiomMisTripRow,TiomMisReport)
+        .join(TiomMisTripRow,TiomMisTripRow.row_id==TiomMisTripDetail.row_id)
+        .join(TiomMisReport,TiomMisReport.report_id==TiomMisTripRow.report_id)
+        .where(TiomMisTripDetail.calculated_qty_mt.is_(None),
+               TiomMisTripDetail.factor_mt_per_trip.is_(None),
+               TiomMisReport.status.in_(('SUBMITTED','DRAFT')))))
+    if not saved:
+        return {'updated':0,'byMaterial':{}}
+    ids=[detail.row_id for detail,_,_ in saved]
+    # Any row that has ever been linked to WB must remain WB-authoritative.
+    wb_linked={r.row_id for r in db.scalars(select(TiomMisReconciliation)
+        .where(TiomMisReconciliation.row_id.in_(ids),
+               TiomMisReconciliation.wb_movement_key.is_not(None)))}
+    products={p.product_id:p for p in db.scalars(select(Product))}
+    totals={}
+    for detail,row,report in saved:
+        if detail.row_id in wb_linked:
+            continue
+        prod=products.get(detail.material_id)
+        code=canonical_manual_45_material(
+            getattr(prod,'product_id','') or detail.material_id,
+            getattr(prod,'name',''),
+            row.material_raw)
+        if code not in {'SUBGRADE','ROM_LUMPS','BOULDER'}:
+            continue
+        # Use the active factor on the report's operating date. Do not apply a
+        # later revised rule retrospectively to older saved entries.
+        factor=_tiom_factor_by_code(db,code,report.operating_date)
+        if factor is None:
+            continue
+        detail.factor_mt_per_trip=factor
+        detail.calculated_qty_mt=factor
+        db.add(AuditLog(
+            created_at=now_local(),actor='SYSTEM',action='TIOM_MIS_MANUAL_FACTOR_BACKFILL',
+            entity='tiom_mis_trip_detail',entity_id=detail.row_id,
+            detail=json.dumps({'reportId':report.report_id,'date':str(report.operating_date),
+                'shift':report.shift,'materialCode':code,'factorMtPerTrip':str(factor),
+                'previousQtyMt':None,'newQtyMt':str(factor),
+                'reason':'User-approved 45 MT manual trip rule; missing saved weight only.'})))
+        totals[code]=totals.get(code,0)+1
+    db.flush()
+    return {'updated':sum(totals.values()),'byMaterial':totals}
 
 
 def _tiom_parse_bench_rl(value):
@@ -4993,7 +5055,7 @@ def _tiom_classify_mis_line(product, source, destination):
     if re.search(r'(^|[^A-Z0-9])(OB|WASTE)([^A-Z0-9]|$)',p): return 'WASTE'
     if 'SUBGRADE' in p or re.search(r'(^|[^A-Z0-9])SG([^A-Z0-9]|$)',p):
         return 'SUBGRADE_FEED_PLANT' if any(x in dst for x in ['FEED','PLANT','MSP']) else 'SUBGRADE_DUMP'
-    if 'LUMP' in p and 'ROM' in p:
+    if canonical_manual_45_material(getattr(product,'product_id',''),getattr(product,'name',''))=='ROM_LUMPS':
         # Raw ROM lumps hauled from mine/excavation belong under Excavation.
         # Lumps coming from MSP/screen/plant are Processed Ore output.
         if any(x in src for x in ['MSP','SCREEN','PLANT']): return 'LUMPS_FROM_SCREEN'

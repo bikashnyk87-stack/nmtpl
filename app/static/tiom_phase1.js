@@ -73,9 +73,9 @@
 
   function renderMisDesk(){
     const d=T.mis;if(!d)return;
-    const factors=(d.factors||[]).map(x=>`<span class="rule-chip"><b>${safe(x.materialCode)}</b> ${n(x.factor)} MT/trip</span>`).join('');
+    const factors=(d.factors||[]).map(x=>`<span class="rule-chip"><b>${safe(x.materialCode==='ROM_LUMPS'?'ROM_LUMPS / Lumps':x.materialCode)}</b> ${n(x.factor)} MT/trip</span>`).join('');
     html('tiom_mis_body',`
-      <div class="tiom-mini-rule"><span><b>Simple entry:</b> RL comes from Source Location automatically. WB-linked rows use WB weight; manual OB uses the approved trip factor.</span>${factors}${S.boot.user.isManagement?'<button class="link-btn" onclick="toggleFactorEditor()">Edit rules</button>':''}</div><div id="factor_editor"></div>
+      <div class="tiom-mini-rule"><span><b>Simple entry:</b> RL comes from Source Location automatically. WB-linked rows use WB weight; manual trips use the approved material factors (including Sub-grade, Lumps and Boulder).</span>${factors}${S.boot.user.isManagement?'<button class="link-btn" onclick="toggleFactorEditor()">Edit rules</button>':''}</div><div id="factor_editor"></div>
 
       <div class="panel tiom-sap-card" id="tm_driver_panel">
         <div class="tiom-card-title"><div><b>TRUCK / DRIVER</b><span>Select once for this shift report.</span></div><span id="mis_status_badge" class="status ok">NEW</span></div>
@@ -253,8 +253,31 @@
     }
     wireDriverMeterCalc();draftSave();loadTiomWbSuggestions(!T.misReportId)
   };
-  function factorForMaterial(id){const p=(T.mis?.products||[]).find(x=>x.id===id);const txt=((p?.label||'')+' '+id).toUpperCase();for(const f of (T.mis?.factors||[])){const c=String(f.materialCode||'').toUpperCase();if(c&&(id.toUpperCase()===c||txt.includes(' '+c+' ')||txt.startsWith(c+' ')||txt.endsWith(' '+c)))return f.factor}return null}
-  window.updateMisQty=function(i){const f=factorForMaterial(v('tm_mat_'+i));const el=q('tm_qty_'+i);if(el)el.textContent=f==null?'Trips only':n(f)};
+  function factorForMaterial(id){
+    if(!id)return null;
+    const p=(T.mis?.products||[]).find(x=>x.id===id);
+    const txt=((p?.label||'')+' '+id).toUpperCase().replace(/[^A-Z0-9]+/g,' ').trim();
+    const factors=T.mis?.factors||[];
+    const aliases=[['SUBGRADE',/\bSUB\s*GRADE\b/],['BOULDER',/\bBOULDERS?\b/],['ROM_LUMPS',/\bLUMPS?\b/]];
+    const canonical=aliases.find(x=>x[1].test(txt));
+    if(canonical){
+      const matched=factors.filter(f=>String(f.materialCode||'').toUpperCase()===canonical[0])
+        .sort((a,b)=>String(b.effectiveFrom||'').localeCompare(String(a.effectiveFrom||'')))[0];
+      return matched?matched.factor:null;
+    }
+    const matched=factors.find(f=>{
+      const c=String(f.materialCode||'').toUpperCase().replace(/[^A-Z0-9]+/g,' ').trim();
+      return c&&(id.toUpperCase()===String(f.materialCode||'').toUpperCase()||(' '+txt+' ').includes(' '+c+' '));
+    });
+    return matched?matched.factor:null;
+  }
+  window.updateMisQty=function(i){
+    const el=q('tm_qty_'+i);if(!el)return;
+    // A linked WB row must continue to show its actual weighed tonnage.
+    if(v('tm_wb_'+i)){el.textContent=el.dataset.qty!==''&&el.dataset.qty!=null?'WB '+n(el.dataset.qty):'WB weight';return}
+    const f=factorForMaterial(v('tm_mat_'+i));
+    el.textContent=f==null?'Qty pending':n(f)+' MT';
+  };
   function wireDriverMeterCalc(){const ka=parseFloat(v('tm_open_kmr')),kb=parseFloat(v('tm_close_kmr')),ha=parseFloat(v('tm_open_hmr')),hb=parseFloat(v('tm_close_hmr'));if(q('tm_km_run'))q('tm_km_run').value=Number.isFinite(ka)&&Number.isFinite(kb)&&kb>=ka?(kb-ka).toFixed(2):'';if(q('tm_hmr_run'))q('tm_hmr_run').value=Number.isFinite(ha)&&Number.isFinite(hb)&&hb>=ha?(hb-ha).toFixed(2):''}
   function wireKmrCalc(){['tm_open_kmr','tm_close_kmr','tm_open_hmr','tm_close_hmr'].forEach(id=>q(id)?.addEventListener('input',()=>{q(id).dataset.autofill='0';wireDriverMeterCalc();draftSave()}));wireDriverMeterCalc()}
   function collectTripRows(){const rows=[];for(let i=0;i<T.misRows;i++){const qty=q('tm_qty_'+i)?.dataset?.qty||'',lead=q('tm_lead_'+i)?.dataset?.lead||'';rows.push({wbMovementKey:v('tm_wb_'+i),materialId:v('tm_mat_'+i),sourceLocationId:v('tm_src_'+i),leadKm:lead,machineId:v('tm_mac_'+i),loadingTime:v('tm_lt_'+i),destinationLocationId:v('tm_dst_'+i),unloadingTime:v('tm_ut_'+i),qtyMt:qty})}return rows}
