@@ -64,9 +64,9 @@ def seed_default_sites_and_shifts(db) -> None:
 
     shift_defaults = {
         "TIOM": {
-            "A": (time(6, 0), time(14, 0), 1),
-            "B": (time(14, 0), time(22, 0), 2),
-            "C": (time(22, 0), time(6, 0), 3),
+            "A": (time(5, 0), time(13, 0), 1),
+            "B": (time(13, 0), time(21, 0), 2),
+            "C": (time(21, 0), time(5, 0), 3),
         },
         "SOCP": {
             "A": (time(6, 0), time(14, 0), 1),
