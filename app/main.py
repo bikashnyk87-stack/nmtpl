@@ -8,20 +8,20 @@ from pathlib import Path
 from datetime import date
 from datetime import date as date_module
 from fastapi import FastAPI, Depends, Request, HTTPException
-from sqlalchemy import text
+from sqlalchemy import text, select, func
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from app.db import engine, get_db, SessionLocal, Base
 from app.auth import WebUser, WebSession, get_user, require, MODULES, hash_password
 from app.config import settings
-from app.models import MasterOption, WbHeaderAlias
+from app.models import MasterOption, WbHeaderAlias, WbMovement, WbImportBatch, AuditLog
 from app.routers import health, masters, production, hsd, reconciliation, dashboard, shift_control, webapp, sites, site_ops, maintenance
 from app.services.wb_mapping import ensure_wb_header_mapping
 from app.services.attendance_automation import automation_loop
 from app.site_models import create_multisite_tables, ensure_tiom_entry_columns
 from app.maintenance_models import create_maintenance_tables
 from app.services.site_context import seed_default_sites_and_shifts
-from app.services.tiom_shift_alignment import align_tiom_shifts, resolve_oct11_five_wb_reviews
+from app.services.tiom_shift_alignment import align_tiom_shifts, resolve_oct11_five_wb_reviews, EXCEPTIONS as WB_FIVE_EXCEPTIONS, DAY as WB_FIVE_DAY
 from app.services.cloud_sync import init_sync_source
 from app.services.tiom_reference_seed import seed_tiom_temp_reference_data
 from app.services.tiom_location_erp import ensure_location_master_schema, ensure_location_master_roles, ensure_tiom_route_master_schema, ensure_tiom_routes_from_history
@@ -142,6 +142,22 @@ async def lifespan(app):
         # equal weights. Any ambiguous/superseded link stays untouched.
         wb_truth_repair = webapp.repair_saved_wb_linked_mis(db)
         db.commit()
+        verified_rows=list(db.scalars(select(WbMovement)
+            .join(WbImportBatch,WbImportBatch.batch_id==WbMovement.batch_id)
+            .where(WbMovement.movement_no.in_(list(WB_FIVE_EXCEPTIONS)),
+                   WbMovement.operating_date==WB_FIVE_DAY,
+                   WbMovement.shift=="C",WbImportBatch.status=="CONFIRMED")))
+        verified_wb={w.movement_no:{"status":w.row_status,"timestamp":str(w.weigh_at),
+                                "netMt":float(w.net_kg/1000),"hasAuditMarker":
+                                    str(w.issue or "").startswith("VERIFIED_TIOM_SHIFT_C_21_TO_05:")}
+                     for w in verified_rows}
+        total_review_audits=db.scalar(select(func.count()).select_from(AuditLog)
+            .where(AuditLog.action=="TIOM_WB_REVIEW_SHIFT_C_VERIFIED"))
+        print("TIOM_SHIFT_ALIGNMENT_OK="+json.dumps(tiom_shift_alignment,sort_keys=True),flush=True)
+        print("TIOM_11OCT_C_WB_REVIEW_CORRECTION_OK="+json.dumps({
+            **wb_five_review_resolution,"verified":verified_wb,
+            "auditedCorrections":int(total_review_audits or 0)
+        },sort_keys=True),flush=True)
         print("TIOM_MANUAL_MATERIAL_QTY_BACKFILL_OK="+json.dumps(material_qty_backfill,sort_keys=True),flush=True)
         print("TIOM_WB_SAVED_TRUTH_REPAIR_OK="+json.dumps(wb_truth_repair,sort_keys=True),flush=True)
         diag_date=os.getenv("TIOM_TEMP_DIAG_DATE", "").strip()
