@@ -105,11 +105,11 @@ def resolve_oct11_five_wb_reviews(db):
                        or (number=="20264014112808" and
                            "Movement Date 2026-10-11 != expected calendar date 2026-10-12" in original_issue))
         if w.row_status=="VALID":
-            if (w.weigh_at and w.weigh_at.astimezone(TZ)==expected_at
+            if (str(w.issue or "").startswith("VERIFIED_TIOM_SHIFT_C_21_TO_05:")
                     and Decimal(w.net_kg)/1000==tonnes):
                 stats["alreadyValid"]+=1
             else:
-                skip[number]="VALID_BUT_TIMESTAMP_OR_WEIGHT_DIFFERS"
+                skip[number]="ALREADY_VALID_NOT_THIS_CORRECTION"
             continue
         if w.row_status!="REVIEW" or not allowed_issue:
             skip[number]="UNEXPECTED_REVIEW_REASON_OR_STATUS";continue
