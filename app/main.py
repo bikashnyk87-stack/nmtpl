@@ -21,6 +21,7 @@ from app.services.attendance_automation import automation_loop
 from app.site_models import create_multisite_tables, ensure_tiom_entry_columns
 from app.maintenance_models import create_maintenance_tables
 from app.services.site_context import seed_default_sites_and_shifts
+from app.services.tiom_shift_alignment import align_tiom_shifts, resolve_oct11_five_wb_reviews
 from app.services.cloud_sync import init_sync_source
 from app.services.tiom_reference_seed import seed_tiom_temp_reference_data
 from app.services.tiom_location_erp import ensure_location_master_schema, ensure_location_master_roles, ensure_tiom_route_master_schema, ensure_tiom_routes_from_history
@@ -100,6 +101,8 @@ async def lifespan(app):
         ensure_location_master_roles(db)
         ensure_tiom_routes_from_history(db)
         seed_default_sites_and_shifts(db)
+        tiom_shift_alignment = align_tiom_shifts(db)
+        wb_five_review_resolution = resolve_oct11_five_wb_reviews(db)
         if os.getenv("TIOM_TEMP_HSD_ZERO_ONCE", "").strip().lower() in {"1","true","yes","on"}:
             reset_result=_zero_tiom_hsd_test_data(db)
             print("TIOM_TEMP_HSD_ZERO_OK="+json.dumps(reset_result,sort_keys=True),flush=True)

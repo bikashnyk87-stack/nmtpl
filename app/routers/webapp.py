@@ -39,7 +39,7 @@ from app.services.reconcile import auto_reconcile
 from app.site_auth import has_permission
 from app.services.wb_mapping import (
     ensure_wb_header_mapping, find_wb_sheet, row_value, build_location_resolver, norm_vehicle,
-    expected_movement_date
+    expected_movement_date, validate_wb_operational_metadata
 )
 from app.services.attendance_automation import auto_close_shift
 from app.services.tiom_erp import (
@@ -2633,18 +2633,17 @@ async def wb_upload(request: Request, operatingDate: str = Form(...), shift: str
     new_wb_rows=[]
     for rno,row in enumerate(ws.iter_rows(min_row=header_row+1,values_only=True),header_row+1):
         if not any(v not in (None,'') for v in row): continue
-        issues=[]; move=str(row_value(row,idx,'move') or rno).strip(); vehicle_raw=str(row_value(row,idx,'vehicle') or '').strip()
+        issues=[]; advisories=[]; move=str(row_value(row,idx,'move') or rno).strip(); vehicle_raw=str(row_value(row,idx,'vehicle') or '').strip()
         if not vehicle_raw: issues.append('Vehicle Number missing')
         row_day=_date_value(row_value(row,idx,'date')) if idx.get('date') is not None else day
         raw_shift=str(row_value(row,idx,'shift') or '').strip().upper()
-        if raw_shift and raw_shift[0:1] in {'A','B','C'} and raw_shift[0]!=sh: issues.append(f'Shift {raw_shift} != selected {sh}')
         clock=_clock_value(row_value(row,idx,'time')); weigh_at=_wb_weigh_at(day,definition,clock)
         if not weigh_at:
             issues.append('Invalid or out-of-shift GW Created Time')
         else:
-            expected_day=expected_movement_date(day,clock,definition)
-            if row_day and expected_day and row_day!=expected_day:
-                issues.append(f'Movement Date {row_day} != expected calendar date {expected_day} for operating date {day} / Shift {sh}')
+            clock_issues,clock_notes=validate_wb_operational_metadata(day,sh,raw_shift,row_day,clock,definition)
+            issues.extend(clock_issues)
+            advisories.extend(clock_notes)
         tare=_cell_decimal(row_value(row,idx,'tare'))
         gross=_cell_decimal(row_value(row,idx,'gross'))
         net=_cell_decimal(row_value(row,idx,'net'))
@@ -2673,7 +2672,7 @@ async def wb_upload(request: Request, operatingDate: str = Form(...), shift: str
             source_raw=source_code_raw or source_name_raw or None,destination_raw=dest_code_raw or dest_name_raw or None,
             tare_kg=tare,gross_kg=gross,net_kg=net or Decimal('0'),
             weigh_at=weigh_at or datetime.combine(day,definition.start_time,TZ),row_status=status,
-            issue='; '.join(issues) or None
+            issue='; '.join(issues+advisories) or None
         )
         db.add(movement); new_wb_rows.append(movement)
         if status=='VALID': valid+=1
