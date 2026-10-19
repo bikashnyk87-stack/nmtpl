@@ -116,7 +116,7 @@ def test_duplicate_wb_movement_prevents_review_promotion():
         db.add(WbMovement(movement_key="active-B:"+no,batch_id="active-B",
             operating_date=DAY,shift="B",movement_no=no,vehicle_raw="DT-06",
             material_name="ROM Thakurani",net_kg=Decimal("51520"),tare_kg=Decimal("1"),
-            gross_kg=Decimal("51521"),row_status="VALID"))
+            gross_kg=Decimal("51521"),weigh_at=datetime(2026,10,11,20,45),row_status="VALID"))
         db.flush()
         result=resolve_oct11_five_wb_reviews(db)
         assert result["corrected"]==4
