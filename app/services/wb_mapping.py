@@ -212,6 +212,34 @@ def expected_movement_date(operating_date, clock, definition):
     return operating_date
 
 
+
+def validate_wb_operational_metadata(operating_date, selected_shift, raw_shift, movement_date, clock, definition):
+    """Return hard errors and nonblocking source-document advisory notes.
+
+    The physical WB timestamp determines the operational shift. SAP Shift Code
+    may lag shift handover. For overnight C, SAP Movement Date can represent
+    either the operational date or the post-midnight calendar date.
+    """
+    errors=[]
+    notes=[]
+    if not clock_in_shift(definition,clock):
+        return errors,notes  # caller emits out-of-shift error
+    raw=str(raw_shift or "").strip().upper()
+    if raw and raw[:1] in {"A","B","C"} and raw[:1]!=selected_shift:
+        notes.append(f'SAP Shift {raw} differs from TIOM Shift {selected_shift}; WB clock time prevails')
+    expected=expected_movement_date(operating_date,clock,definition)
+    if movement_date is not None and expected is not None and movement_date!=expected:
+        is_operating_date_not_calendar=(
+            selected_shift=="C" and definition.end_time<=definition.start_time
+            and clock<definition.end_time and movement_date==operating_date
+        )
+        if is_operating_date_not_calendar:
+            notes.append(f'SAP Movement Date {movement_date} is operational date; WB physical date {expected}')
+        else:
+            errors.append(f'Movement Date {movement_date} differs from both the TIOM operational and expected calendar date {expected}')
+    return errors,notes
+
+
 def operating_date_from_movement(movement_date, clock, definition):
     """Convert WB calendar Movement Date into the NMTPL operating date."""
     if movement_date is None or not clock_in_shift(definition, clock):
