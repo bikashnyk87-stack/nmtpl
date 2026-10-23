@@ -425,8 +425,8 @@
 
   function savedSectionBar(active){
     return '<div class="tiom-tabs tiom-saved-tabs" role="tablist" aria-label="Saved Reports view">'+
-      '<button type="button" class="'+(active==='ENTRIES'?'active':'')+'" onclick="tiomSavedSection('ENTRIES')">Saved Driver Reports</button>'+
-      '<button type="button" class="'+(active==='DPR'?'active':'')+'" onclick="tiomSavedSection('DPR')">Daily Production Report (DPR)</button>'+
+      '<button type="button" class="'+(active==='ENTRIES'?'active':'')+'" onclick="tiomSavedSection(&quot;ENTRIES&quot;)">Saved Driver Reports</button>'+
+      '<button type="button" class="'+(active==='DPR'?'active':'')+'" onclick="tiomSavedSection(&quot;DPR&quot;)">Daily Production Report (DPR)</button>'+
       '</div>';
   }
   window.tiomSavedSection=function(section){
