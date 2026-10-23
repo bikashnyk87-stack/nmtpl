@@ -115,6 +115,13 @@ def test_http_end_user_flow_exports_xlsx(monkeypatch):
     engine=create_engine("sqlite://",connect_args={"check_same_thread":False},
                          poolclass=StaticPool)
     Base.metadata.create_all(engine)
+    with Session(engine) as db:
+        for sh,start,end in [('A',5,13),('B',13,21),('C',21,5)]:
+            db.add(ShiftMaster(shift=sh,
+                start_time=datetime(2026,10,11,start).time(),
+                end_time=datetime(2026,10,11,end).time(),
+                scheduled_hours=8,active=True))
+        db.commit()
     data=sample()
     app=FastAPI()
     app.include_router(webapp.router)
