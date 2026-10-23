@@ -2,11 +2,25 @@
 async function request(path, body) {
   const options={};
   if(body!==undefined){options.method='POST';options.headers={'Content-Type':'application/json'};options.body=JSON.stringify(body);}
-  // Dashboard is a heavy read-only aggregation. Allow it more time than
-  // transactional entry/save calls while backend optimization keeps it fast.
-  if(path==='rpc' && body && body.method==='getDashboard') options.timeoutMs=60000;
+  // DPR range/MTD and dashboard require multiple database aggregations.
+  // A 20s browser abort falsely looked like a failed save even if DB committed.
+  if(path==='rpc' && body && body.method){
+    const method=String(body.method);
+    if(method==='getTiomDprPreview'||method==='getDashboard')options.timeoutMs=120000;
+    else if(method.startsWith('get')||method.startsWith('verify'))options.timeoutMs=60000;
+    else options.timeoutMs=90000;
+  }
   try{return await NMTPLNet.json('/api/web/'+path,options)}
-  catch(error){if(error.status===401){showLogin(false);text('login_status','Session expired. Please sign in again.')}throw error}
+  catch(error){
+    if(error.status===401){showLogin(false);text('login_status','Session expired. Please sign in again.')}
+    if(error.code==='CLIENT_TIMEOUT'){
+      const m=(path==='rpc'&&body&&body.method)?String(body.method):'';
+      error.message=m.startsWith('get')||m.startsWith('verify')
+        ?'Report/load request timed out. No entry was changed by this read request. Narrow the date range and try Load again.'
+        :'Server confirmation was not received. The entry may already be saved. Check Saved Reports for this date, shift and vehicle before retrying.';
+    }
+    throw error
+  }
 }
 window.addEventListener('nmtpl-session-expired',()=>{showLogin(false);text('login_status','Session expired. Please sign in again.')});
 function appRun(success, failure) {

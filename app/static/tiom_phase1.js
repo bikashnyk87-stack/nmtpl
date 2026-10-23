@@ -1,7 +1,7 @@
 /* TIOM Phase 1.6 — ERP hardening, compact software UI and deployment-owned HMR. */
 (function(){
   const legacyLoadProduction = window.loadProduction;
-  const T={prodTab:'SITE',mis:null,misReportId:'',misReportStatus:'',misRows:15,depRows:20,faceRows:4,wbSuggestions:[],openReportAfterLoad:'',unlockAfterLoad:false,misEditMode:false,misEditKey:'',misEditReason:'',currentMisReport:null,drill:null,shiftProd:null,shiftProdRows:6,hsdTab:'FILL',hsd:null,hsdRows:10};
+  const T={prodTab:'SITE',mis:null,misReportId:'',misReportStatus:'',misRows:15,depRows:20,faceRows:4,wbSuggestions:[],openReportAfterLoad:'',unlockAfterLoad:false,misEditMode:false,misEditKey:'',misEditReason:'',currentMisReport:null,pendingMisReportId:'',savingMis:false,drill:null,shiftProd:null,shiftProdRows:6,hsdTab:'FILL',hsd:null,hsdRows:10};
   function uiStateKey(kind){const u=NMTPLNet.safeUser(S.boot?.user?.loginId||S.boot?.user?.name||'anonymous');return `NMTPL_TIOM_UI:${u}:${kind}`}
   function getUiState(kind,fallback){try{return sessionStorage.getItem(uiStateKey(kind))||fallback}catch(_){return fallback}}
   function setUiState(kind,value){try{sessionStorage.setItem(uiStateKey(kind),String(value||''))}catch(_){}}
@@ -69,7 +69,7 @@
     html('tiom_prod_body',`<div class="tiom-mis-toolbar"><b>MIS DRIVER SHIFT ENTRY</b><label>Date<input id="tm_date" type="date" value="${safe(d?.date||S.boot.today)}"></label><label>Shift<select id="tm_shift">${shiftOpts(d?.shift||S.boot.shift)}</select></label><button id="tm_load" class="btn primary small" onclick="loadTiomMis()">Load</button><span id="tm_draft_state" class="tiom-state"></span></div><div id="tiom_mis_body"><div class="loading">Loading MIS entry…</div></div>`);
     loadTiomMis();
   }
-  window.loadTiomMis=function(){appRun(function(d){T.mis=d;T.misReportId='';T.misReportStatus='';T.currentMisReport=null;T.depRows=Math.max(20,(d.deployments||[]).length);T.misRows=15;renderMisDesk();setTimeout(()=>{draftRestore();if(T.openReportAfterLoad){const id=T.openReportAfterLoad,unlock=T.unlockAfterLoad;T.openReportAfterLoad='';T.unlockAfterLoad=false;loadMisReport(id,unlock)}},0)},function(e){html('tiom_mis_body',`<div class="bad">${safe(e.message)}</div>`)}).getTiomMisDesk({date:v('tm_date')||S.boot.today,shift:v('tm_shift')||S.boot.shift})};
+  window.loadTiomMis=function(){appRun(function(d){T.mis=d;T.misReportId='';T.pendingMisReportId='';T.misReportStatus='';T.currentMisReport=null;T.depRows=Math.max(20,(d.deployments||[]).length);T.misRows=15;renderMisDesk();setTimeout(()=>{draftRestore();if(T.openReportAfterLoad){const id=T.openReportAfterLoad,unlock=T.unlockAfterLoad;T.openReportAfterLoad='';T.unlockAfterLoad=false;loadMisReport(id,unlock)}},0)},function(e){html('tiom_mis_body',`<div class="bad">${safe(e.message)}</div>`)}).getTiomMisDesk({date:v('tm_date')||S.boot.today,shift:v('tm_shift')||S.boot.shift})};
 
   function renderMisDesk(){
     const d=T.mis;if(!d)return;
@@ -315,17 +315,67 @@
     if(q('tm_submit')){q('tm_submit').disabled=false;q('tm_submit').textContent='Save Corrected Version'}
     if(q('tm_draft_state'))q('tm_draft_state').textContent='Correction mode — changes are audit logged.';
   }
+  function tiomNewMisReportId(){
+    if(window.crypto&&typeof window.crypto.randomUUID==='function')return window.crypto.randomUUID();
+    const bytes=window.crypto.getRandomValues(new Uint8Array(16));
+    bytes[6]=(bytes[6]&15)|64;bytes[8]=(bytes[8]&63)|128;
+    const hex=Array.from(bytes,x=>x.toString(16).padStart(2,'0')).join('');
+    return [hex.slice(0,8),hex.slice(8,12),hex.slice(12,16),hex.slice(16,20),hex.slice(20)].join('-');
+  }
+  function misSaveButtonsBusy(busy){
+    T.savingMis=!!busy;
+    if(q('tm_save_draft'))q('tm_save_draft').disabled=!!busy||T.misEditMode;
+    if(q('tm_submit'))q('tm_submit').disabled=!!busy;
+    if(q('tm_draft_state'))q('tm_draft_state').textContent=busy?'Saving; checking server confirmation…':'';
+  }
   window.saveMis=function(submit){
-    const payload=collectMis(true);
-    if(T.misEditMode){
-      payload.editKey=T.misEditKey;payload.editReason=T.misEditReason;
-      appRun(function(r){const id=r.reportId;toast(r.message);resetMisEditState();T.openReportAfterLoad=id;loadTiomMis()},function(e){toast(e.message,true)}).submitTiomMisReport(payload);
-      return;
+    if(T.savingMis)return;
+    const payload=collectMis(true),wasCorrection=!!T.misEditMode;
+    if(!payload.reportId){
+      if(!T.pendingMisReportId)T.pendingMisReportId=tiomNewMisReportId();
+      payload.reportId=T.pendingMisReportId;
     }
-    appRun(function(r){T.misReportId=r.reportId;toast(r.message);try{localStorage.removeItem(misDraftKey())}catch(_){}loadTiomMis()},function(e){toast(e.message,true)})[submit?'submitTiomMisReport':'saveTiomMisDraft'](payload)
+    if(wasCorrection){
+      payload.editKey=T.misEditKey;payload.editReason=T.misEditReason;
+    }
+    misSaveButtonsBusy(true);
+    const method=submit?'submitTiomMisReport':'saveTiomMisDraft';
+    appRun(function(result){
+      misSaveButtonsBusy(false);
+      T.pendingMisReportId='';
+      T.misReportId=result.reportId;
+      toast(result.message);
+      if(wasCorrection){
+        resetMisEditState();
+        T.openReportAfterLoad=result.reportId;
+        loadTiomMis();
+      }else{
+        try{localStorage.removeItem(misDraftKey())}catch(_){}
+        loadTiomMis();
+      }
+    },function(error){
+      misSaveButtonsBusy(false);
+      if(error.code==='CLIENT_TIMEOUT'||error.status===0){
+        // Recheck the *same* ID before suggesting a retry; the first request
+        // may have finished committing after the browser stopped waiting.
+        if(q('tm_draft_state'))q('tm_draft_state').textContent='Server response delayed; verifying saved report…';
+        appRun(function(saved){
+          T.misReportId=saved.reportId;
+          T.pendingMisReportId='';
+          toast('Save confirmed in Saved Reports ('+safe(saved.status)+', v'+(saved.version||1)+').');
+          if(wasCorrection)resetMisEditState();
+          T.openReportAfterLoad=saved.reportId;loadTiomMis();
+        },function(){
+          if(q('tm_draft_state'))q('tm_draft_state').textContent='Save not confirmed. Check Saved Reports before attempting another submission.';
+          toast('The save may have completed. Check Saved Reports by date, shift and vehicle. Your current entry has been preserved.',true);
+        }).getTiomMisReport({reportId:payload.reportId});
+      }else{
+        toast(error.message,true);
+      }
+    })[method](payload);
   };
-  window.clearMisForm=function(){if(!confirm('Clear this driver shift form? Unsaved entries in this form will be removed.'))return;try{localStorage.removeItem(misDraftKey())}catch(_){}resetMisEditState();T.misReportId='';T.misReportStatus='';T.currentMisReport=null;T.depRows=Math.max(20,(T.mis?.deployments||[]).length);T.misRows=15;T.lastVehicleId='';setMisContextLocked(false);renderMisDesk()};
-  window.newMisReport=function(){resetMisEditState();T.misReportId='';T.misReportStatus='';T.currentMisReport=null;T.depRows=Math.max(20,(T.mis?.deployments||[]).length);T.misRows=15;T.lastVehicleId='';setMisContextLocked(false);renderMisDesk()};
+  window.clearMisForm=function(){if(!confirm('Clear this driver shift form? Unsaved entries in this form will be removed.'))return;try{localStorage.removeItem(misDraftKey())}catch(_){}resetMisEditState();T.misReportId='';T.pendingMisReportId='';T.misReportStatus='';T.currentMisReport=null;T.depRows=Math.max(20,(T.mis?.deployments||[]).length);T.misRows=15;T.lastVehicleId='';setMisContextLocked(false);renderMisDesk()};
+  window.newMisReport=function(){resetMisEditState();T.misReportId='';T.pendingMisReportId='';T.misReportStatus='';T.currentMisReport=null;T.depRows=Math.max(20,(T.mis?.deployments||[]).length);T.misRows=15;T.lastVehicleId='';setMisContextLocked(false);renderMisDesk()};
   window.loadMisReport=function(id,unlockAfter){
     resetMisEditState();
     appRun(function(r){T.misReportId=id;T.misReportStatus=r.status||'';T.currentMisReport=r;fillMisForm(r,false);const b=q('mis_status_badge');if(b)b.textContent=r.status+(r.version?' · v'+r.version:'');if(unlockAfter&&r.status==='SUBMITTED')setTimeout(requestMisEdit,0)},function(e){toast(e.message,true)}).getTiomMisReport({reportId:id})

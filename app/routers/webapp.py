@@ -5,7 +5,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
 from pathlib import Path
-from uuid import uuid4
+from uuid import uuid4, UUID
 import hashlib
 import hmac
 import secrets
@@ -4750,6 +4750,8 @@ def save_tiom_mis_report(db,user,p,submit=False):
     if is_correction:
         if not submit:
             raise HTTPException(409,'A submitted report correction must be saved directly as a corrected submitted version.')
+        if not p.get('editKey'):
+            raise HTTPException(409,'This report is already submitted. Check Saved Reports before retrying. A duplicate was not created.')
         _require_tiom_mis_edit_key(db,p.get('editKey'))
         edit_reason=short(str(p.get('editReason') or '')).strip()
         if len(edit_reason)<5:
@@ -4763,7 +4765,19 @@ def save_tiom_mis_report(db,user,p,submit=False):
     operator_id=str(p.get('operatorId') or '').strip() or None
     if operator_id: active_resource(db,Person,operator_id)
     if not report:
-        report=TiomMisReport(report_id=str(uuid4()),operating_date=day,shift=sh,vehicle_id=vehicle.machine_id,operator_id=operator_id,status='DRAFT',entered_by=user.login_id,entered_at=now_local(),version=1)
+        # A new entry receives a stable browser-generated UUID so a slow or
+        # interrupted response cannot create a second report on a retry.
+        # Legacy clients omitting the ID still work with a server UUID.
+        supplied_id=''
+        if report_id:
+            try:
+                parsed_id=UUID(report_id)
+                if parsed_id.version!=4 or str(parsed_id)!=report_id.lower():
+                    raise ValueError('A new report ID must be a canonical UUID v4.')
+                supplied_id=str(parsed_id)
+            except (ValueError,AttributeError):
+                raise HTTPException(422,'Invalid report ID. Reload the entry form before submitting.')
+        report=TiomMisReport(report_id=supplied_id or str(uuid4()),operating_date=day,shift=sh,vehicle_id=vehicle.machine_id,operator_id=operator_id,status='DRAFT',entered_by=user.login_id,entered_at=now_local(),version=1)
         db.add(report); db.flush()
     else:
         if report.operating_date!=day or report.shift!=sh: raise HTTPException(409,'Report date/shift cannot be changed. Create a new report.')
