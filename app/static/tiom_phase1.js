@@ -423,11 +423,87 @@
   function collectDrilling(){return (T.drill?.rows||[]).map((r,i)=>({drillSetId:r.drillSetId,sourceLocationId:v('dr_src_'+i),drillOpenHmr:v('dr_do_'+i),drillCloseHmr:v('dr_dc_'+i),compressorOpenHmr:v('dr_co_'+i),compressorCloseHmr:v('dr_cc_'+i),holes:v('dr_holes_'+i),romObHoles:v('dr_rholes_'+i),bhjBhqHoles:v('dr_bholes_'+i),romObMeterage:v('dr_rom_'+i),bhjBhqMeterage:v('dr_bhj_'+i),breakdownHours:v('dr_bd_'+i),remarks:v('dr_note_'+i)}))}
   window.saveDrilling=function(){appRun(function(r){toast(r.message);loadDrilling()},function(e){toast(e.message,true)}).saveTiomDrillingShift({date:v('dr_date'),shift:v('dr_shift'),rows:collectDrilling()})};
 
+  function savedSectionBar(active){
+    return '<div class="tiom-tabs tiom-saved-tabs" role="tablist" aria-label="Saved Reports view">'+
+      '<button type="button" class="'+(active==='ENTRIES'?'active':'')+'" onclick="tiomSavedSection('ENTRIES')">Saved Driver Reports</button>'+
+      '<button type="button" class="'+(active==='DPR'?'active':'')+'" onclick="tiomSavedSection('DPR')">Daily Production Report (DPR)</button>'+
+      '</div>';
+  }
+  window.tiomSavedSection=function(section){
+    T.savedSection=section==='DPR'?'DPR':'ENTRIES';
+    setUiState('SAVED_SECTION',T.savedSection);
+    renderSavedReports();
+  };
+  function renderSavedDpr(){
+    const previous=T.dprFilter||{},today=S.boot.today||'';
+    const from=previous.from||today.slice(0,7)+'-01',to=previous.to||today,shift=previous.shift||'ALL';
+    html('tiom_prod_body',savedSectionBar('DPR')+
+      '<div class="panel tiom-sap-card">'+
+      '<div class="tiom-card-title"><div><b>THAKURANI • DAILY PRODUCTION REPORT</b>'+
+      '<span>Daily DPR sheets + Summary + Stack Summary + Stacking + Drilling Detail + Source Data + Data Quality</span></div></div>'+
+      '<div class="tiom-mis-toolbar">'+
+      '<label>From<input type="date" id="dpr_from" value="'+safe(from)+'"></label>'+
+      '<label>To<input type="date" id="dpr_to" value="'+safe(to)+'"></label>'+
+      '<label>Shift<select id="dpr_shift"><option value="ALL">All shifts (A + B + C)</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label>'+
+      '<button type="button" class="btn secondary small" onclick="setDprMtd()">MTD (1st → selected date)</button>'+
+      '<button type="button" class="btn primary small" onclick="loadSavedDprPreview()">View DPR</button>'+
+      '<button type="button" class="btn primary small" onclick="downloadSavedDpr()">Download DPR Excel</button>'+
+      '</div><div class="tiom-help"><b>Report basis:</b> latest confirmed VALID WB + submitted MIS manual trips + submitted shift exceptions. WB REVIEW excluded. Blank means not recorded. The attached DPR structure is reproduced as shift panels; dispatch and closing stock remain pending verified data sources.</div>'+
+      '</div><div id="dpr_preview"><div class="loading">Loading DPR summary…</div></div>');
+    if(q('dpr_shift'))q('dpr_shift').value=shift;
+    loadSavedDprPreview();
+  }
+  function dprSelection(){
+    const from=v('dpr_from')||'',to=v('dpr_to')||'',shift=v('dpr_shift')||'ALL';
+    if(!from||!to||to<from){toast('Select a valid From / To date range.',true);return null}
+    const delta=Math.round((Date.parse(to+'T12:00:00')-Date.parse(from+'T12:00:00'))/86400000);
+    if(delta>61){toast('Select 62 days or fewer per DPR download.',true);return null}
+    T.dprFilter={from,to,shift};
+    return {fromDate:from,toDate:to,shift};
+  }
+  window.setDprMtd=function(){
+    const to=v('dpr_to')||S.boot.today;
+    if(q('dpr_from'))q('dpr_from').value=to.slice(0,7)+'-01';
+    if(q('dpr_to'))q('dpr_to').value=to;
+    loadSavedDprPreview();
+  };
+  window.loadSavedDprPreview=function(){
+    const selected=dprSelection();if(!selected)return;
+    html('dpr_preview','<div class="panel tiom-sap-card"><div class="loading">Calculating the selected DPR from saved records…</div></div>');
+    appRun(function(d){
+      const rows=(d.rows||[]).map(function(x){
+        return '<tr><td>'+safe(x.date)+'</td><td>'+safe(x.shift)+'</td>'+
+          '<td>'+n(x.romMt)+'</td><td>'+n(x.obMt)+'</td><td>'+n(x.excavationMt)+'</td>'+
+          '<td>'+n(x.finalMt)+'</td><td>'+n(x.drillMetres)+'</td>'+
+          '<td>'+n(x.wbValid)+'</td><td>'+n(x.wbReview)+'</td>'+
+          '<td>'+safe(x.status||'—')+'</td><td>'+n(x.qualityCount)+'</td></tr>';
+      }).join('');
+      html('dpr_preview','<div class="panel tiom-sap-card">'+
+        '<div class="tiom-card-title"><div><b>DPR PREVIEW · '+safe(d.fromDate)+' → '+safe(d.toDate)+'</b>'+
+        '<span>'+safe(d.shift==='ALL'?'All permitted shifts':('Shift '+d.shift))+' · '+(d.rows||[]).length+' shift records</span></div>'+
+        '<span class="tiom-state">'+n(d.qualityCount)+' source warnings</span></div>'+
+        '<div class="table-wrap"><table class="tiom-entry-table"><thead><tr><th>Date</th><th>Shift</th>'+
+        '<th>ROM MT</th><th>OB MT</th><th>Excavation MT</th><th>Final MT</th>'+
+        '<th>Drill Metres</th><th>WB Valid</th><th>WB Review</th><th>Shift Form</th><th>Warnings</th>'+
+        '</tr></thead><tbody>'+(rows||'<tr><td colspan="11">No reports for this range.</td></tr>')+'</tbody></table></div>'+
+        '<div class="tiom-help">Download the Excel for individual date sheets, month-to-date totals, source data and the missing-input checklist. Dispatch and closing stock are left blank until linked to their official source.</div></div>');
+    },function(e){
+      html('dpr_preview','<div class="panel bad">'+safe(e.message||'Unable to load DPR')+'</div>');
+    }).getTiomDprPreview(selected);
+  };
+  window.downloadSavedDpr=function(){
+    const selected=dprSelection();if(!selected)return;
+    const qs=new URLSearchParams(selected);
+    window.location.assign('/api/web/tiom/dpr.xlsx?'+qs.toString());
+  };
   function renderSavedReports(){
+    const section=T.savedSection||getUiState('SAVED_SECTION','ENTRIES');
+    T.savedSection=section==='DPR'?'DPR':'ENTRIES';
+    if(T.savedSection==='DPR'){renderSavedDpr();return;}
     var d=T.mis||{},remember=T.savedFilter||{};
     var from=remember.from||d.reportFrom||d.date||S.boot.today,to=remember.to||d.reportTo||d.date||S.boot.today,shift=remember.shift||d.reportShift||'ALL';
     var keyCtl=S.boot.user.isManagement?'<button id="ts_key_btn" class="btn secondary small" onclick="configureMisEditKey()">'+(d.editKeyConfigured?'Change Edit Key':'Set Edit Key')+'</button>':'';
-    html('tiom_prod_body','<div class="tiom-mis-toolbar"><b>SAVED DRIVER SHIFT REPORTS</b><label>From<input id="ts_from" type="date" value="'+safe(from)+'"></label><label>To<input id="ts_to" type="date" value="'+safe(to)+'"></label><label>Shift<select id="ts_shift"><option value="ALL">All shifts</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label><label>Search<input id="ts_search" value="'+safe(remember.search||'')+'" placeholder="Date / tripper / driver / ref / status" oninput="filterSavedReports()"></label><button class="btn primary small" onclick="loadSavedReports()">Load Range</button><button class="btn secondary small" onclick="downloadSavedEntryReport()">Download Detailed Entry Report</button>'+keyCtl+'<span id="ts_key_state" class="tiom-state">Submitted edit: '+(d.editKeyConfigured?'Key protected':'Key not configured')+'</span></div><div id="ts_body"><div class="loading">Loading saved reports…</div></div>');
+    html('tiom_prod_body',savedSectionBar('ENTRIES')+'<div class="tiom-mis-toolbar"><b>SAVED DRIVER SHIFT REPORTS</b><label>From<input id="ts_from" type="date" value="'+safe(from)+'"></label><label>To<input id="ts_to" type="date" value="'+safe(to)+'"></label><label>Shift<select id="ts_shift"><option value="ALL">All shifts</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label><label>Search<input id="ts_search" value="'+safe(remember.search||'')+'" placeholder="Date / tripper / driver / ref / status" oninput="filterSavedReports()"></label><button class="btn primary small" onclick="loadSavedReports()">Load Range</button><button class="btn secondary small" onclick="downloadSavedEntryReport()">Download Detailed Entry Report</button>'+keyCtl+'<span id="ts_key_state" class="tiom-state">Submitted edit: '+(d.editKeyConfigured?'Key protected':'Key not configured')+'</span></div><div id="ts_body"><div class="loading">Loading saved reports…</div></div>');
     if(q('ts_shift'))q('ts_shift').value=shift;
     loadSavedReports();
   }
