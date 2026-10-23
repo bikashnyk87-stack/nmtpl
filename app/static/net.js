@@ -22,7 +22,7 @@
       return data;
     }catch(error){
       if(error&&error.name==='AbortError'){
-        const e=new Error('Network timeout. Your entry was not confirmed. Check the connection and press Save again.');e.status=0;throw e;
+        const e=new Error('Network timeout before server confirmation. Check whether the entry already exists before retrying.');e.status=0;e.code='CLIENT_TIMEOUT';throw e;
       }
       if(error instanceof TypeError){const e=new Error('Network unavailable. Your draft is still on this device. Reconnect and press Save again.');e.status=0;throw e}
       throw error;
