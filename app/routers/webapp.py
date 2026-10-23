@@ -5936,6 +5936,229 @@ def tiom_mis_reconciliation_export(request:Request,fromDate:str='',toDate:str=''
 
 
 
+
+# -------- Daily Production Report (DPR): additive export under Saved Reports --------
+def _tiom_dpr_inputs(db, user, p):
+    require(user,'PRODUCTION')
+    p=p or {}
+    today=operating_context()[0]
+    from_day=_parse_ui_date_v2(p.get('fromDate'),'from date') if p.get('fromDate') else today.replace(day=1)
+    to_day=_parse_ui_date_v2(p.get('toDate'),'to date') if p.get('toDate') else today
+    if to_day<from_day or (to_day-from_day).days>61:
+        raise HTTPException(422,'DPR date range must be chronological and at most 62 days.')
+    requested=str(p.get('shift') or 'ALL').strip().upper()
+    if requested not in {'ALL','A','B','C'}:
+        raise HTTPException(422,'Choose All Shifts, A, B, or C.')
+    if requested!='ALL':
+        require(user,shift=requested)
+    all_active=[x.shift for x in db.scalars(select(ShiftMaster).where(
+        ShiftMaster.active.is_(True)).order_by(ShiftMaster.start_time))]
+    allowed=set(str(user.shifts or '').upper().split(','))
+    shifts=[x for x in ('A','B','C') if x in all_active and
+            (user.admin or 'ALL' in allowed or x in allowed) and
+            (requested=='ALL' or x==requested)]
+    if not shifts:raise HTTPException(403,'No permitted active TIOM shifts for DPR.')
+    return from_day,to_day,shifts,requested
+
+
+def _tiom_dpr_data(db, from_day, to_day, shifts, requested):
+    """One source-backed DPR data set shared by API preview and Excel export."""
+    first=min(from_day,to_day).replace(day=1)
+    report_q=select(TiomMisReport).where(
+        TiomMisReport.operating_date>=first,
+        TiomMisReport.operating_date<=to_day,
+        TiomMisReport.status=='SUBMITTED',
+        TiomMisReport.shift.in_(shifts))
+    reports=list(db.scalars(report_q))
+    report_by_id={r.report_id:r for r in reports}
+    report_ids=list(report_by_id)
+    triprows=list(db.scalars(select(TiomMisTripRow).where(
+        TiomMisTripRow.report_id.in_(report_ids)))) if report_ids else []
+    ids=[r.row_id for r in triprows]
+    details={d.row_id:d for d in db.scalars(select(TiomMisTripDetail).where(
+        TiomMisTripDetail.row_id.in_(ids)))} if ids else {}
+    recs={d.row_id:d for d in db.scalars(select(TiomMisReconciliation).where(
+        TiomMisReconciliation.row_id.in_(ids)))} if ids else {}
+    pmap={x.product_id:x for x in db.scalars(select(Product))}
+    lmap={x.location_id:x for x in db.scalars(select(Location))}
+    manual_rows={}
+    for row in triprows:
+        rep=report_by_id.get(row.report_id)
+        if rep and not (recs.get(row.row_id) and recs[row.row_id].wb_movement_key):
+            manual_rows.setdefault((rep.operating_date,rep.shift),[]).append(
+                (row,details.get(row.row_id)))
+    drillsets={x.drill_set_id:x for x in db.scalars(select(TiomDrillSet))}
+    drilling={}
+    drill_rows=list(db.scalars(select(TiomDrillingShift).where(
+        TiomDrillingShift.operating_date>=first,
+        TiomDrillingShift.operating_date<=to_day,
+        TiomDrillingShift.shift.in_(shifts))))
+    for r in drill_rows:
+        st=drillsets.get(r.drill_set_id)
+        h=(Decimal(r.drill_close_hmr)-Decimal(r.drill_open_hmr)) if (
+            r.drill_close_hmr is not None and r.drill_open_hmr is not None
+            and r.drill_close_hmr>=r.drill_open_hmr) else None
+        met=Decimal(r.rom_ob_meterage or 0)+Decimal(r.bhj_bhq_meterage or 0)
+        drilling.setdefault((r.operating_date,r.shift),[]).append({
+            'label':st.drill_set_name if st else r.drill_set_id,
+            'holes':int(r.holes or 0),
+            'meterage':float(met),
+            'drillHours':float(h) if h is not None else None,
+            'metersPerHour':round(float(met/h),3) if h and h>0 else None,
+            'remarks':r.remarks or ''})
+    shift_reports={(r.operating_date,r.shift):r for r in db.scalars(select(
+        TiomShiftProductionReport).where(
+        TiomShiftProductionReport.operating_date>=first,
+        TiomShiftProductionReport.operating_date<=to_day,
+        TiomShiftProductionReport.shift.in_(shifts)))}
+    meters_by={}
+    meters=list(db.scalars(select(SiteAssetMeter).where(
+        SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.meter_type=='HMR',
+        SiteAssetMeter.operating_date>=first,
+        SiteAssetMeter.operating_date<=to_day,
+        SiteAssetMeter.shift.in_(shifts))))
+    equips={x.machine_id:x for x in db.scalars(select(Equipment))}
+    machine_deps={}
+    for dep in db.scalars(select(TiomSourceDeployment).where(
+        TiomSourceDeployment.operating_date>=first,
+        TiomSourceDeployment.operating_date<=to_day,
+        TiomSourceDeployment.shift.in_(shifts))):
+        loc=lmap.get(dep.source_location_id)
+        machine_deps.setdefault((dep.operating_date,dep.shift,dep.machine_id),set()).add(
+            str(dep.source_location_id or '')+' '+str(loc.location_name if loc else ''))
+    for r in meters:
+        e=equips.get(r.asset_id)
+        locations=' '.join(machine_deps.get((r.operating_date,r.shift,r.asset_id),set())).upper()
+        identifier=' '.join([str(r.asset_id),str(e.type if e else ''),str(e.make_model if e else '')]).upper()
+        category=None
+        for number in (3,4,5,6):
+            if re.search(r'\bMSP\s*-?\s*'+str(number)+r'\b',locations):
+                category='MSP-'+str(number);break
+        if not category and ('CRUSH' in locations or 'OCP' in locations):
+            category='Crusher'
+        if not category and e and e.group=='PROCESSING':
+            for number in (3,4,5,6):
+                if re.search(r'\bMSP\s*-?\s*'+str(number)+r'\b',identifier):
+                    category='MSP-'+str(number);break
+            if not category and ('CRUSH' in identifier or 'OCP' in identifier):
+                category='Crusher'
+        h=Decimal(r.usage) if r.usage is not None else (
+            (Decimal(r.closing_reading)-Decimal(r.opening_reading)) if
+            r.closing_reading is not None and r.opening_reading is not None and
+            r.closing_reading>=r.opening_reading else None)
+        if category and h is not None and h>=0:
+            key=(r.operating_date,r.shift)
+            values=meters_by.setdefault(key,{})
+            # The plant can have separate parallel HMR devices. Existing TIOM
+            # dashboard uses the maximum, not sum, to avoid double-counting.
+            values[category]=max(values.get(category,0),float(h))
+    active_codes={line[1] for line in TIOM_SHIFT_REPORT_LINES}
+    result=[]
+    day=first
+    while day<=to_day:
+        for sh in shifts:
+            bundle=_tiom_shift_ftd_bundle(db,day,sh,False)
+            wb_batch,wb_rows=tiom_authoritative_wb(db,day,sh)
+            counts={}
+            prodplant={}
+            for w in wb_rows:
+                seen=set()
+                for code,quantity in tiom_wb_report_contributions(w):
+                    if code not in seen:
+                        counts[code]=counts.get(code,0)+1
+                        seen.add(code)
+                    if code in {'SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'}:
+                        raw=str(w.source_raw or '').upper()
+                        pname='Crusher' if ('CRUSH' in raw or 'OCP' in raw) else None
+                        if not pname:
+                            match=re.search(r'\bMSP\s*-?\s*([3456])\b',raw)
+                            if match:pname='MSP-'+match.group(1)
+                        if pname:
+                            prodplant[pname]=prodplant.get(pname,0)+float(quantity)
+            for row,detail in manual_rows.get((day,sh),[]):
+                if not detail:continue
+                code=_tiom_classify_mis_line(pmap.get(detail.material_id),
+                    lmap.get(detail.source_location_id),
+                    lmap.get(detail.destination_location_id))
+                if code in active_codes and not (code=='WASTE' and any(
+                    x[0]=='WASTE' for w in wb_rows for x in tiom_wb_report_contributions(w))):
+                    counts[code]=counts.get(code,0)+1
+            pstatus=shift_reports.get((day,sh))
+            evidence=bool(wb_rows or manual_rows.get((day,sh)) or (
+                pstatus and pstatus.status=='SUBMITTED'))
+            metrics={}
+            for code,qty in (bundle['values'] or {}).items():
+                sources=bundle['sources'].get(code,{})
+                metrics[code]={
+                    'qty':float(qty) if evidence else None,
+                    'trips':counts.get(code),
+                    'source':'+'.join(k for k in ('WB','MIS','MANUAL','CALC')
+                         if sources.get(k)) or ('NO DATA' if not evidence else '—')}
+            dr=drilling.get((day,sh),[])
+            warnings=list(bundle.get('warnings') or [])
+            if not evidence:warnings.append('No confirmed WB, submitted MIS or submitted Shift Production data for this shift')
+            if wb_batch and wb_batch.review_rows:
+                warnings.append(f'{wb_batch.review_rows} WB rows still in REVIEW; excluded from valid WB weight')
+            if any(v>0 and meters_by.get((day,sh),{}).get(k) is None
+                   for k,v in prodplant.items()):
+                warnings.append('Plant production has WB tonnage but no matched plant HMR; TPH not calculated')
+            if not dr:warnings.append('No drilling entry saved for this shift (blank, not zero)')
+            result.append({'date':str(day),'shift':sh,'metrics':metrics,
+                'wbValid':len(wb_rows),'wbReview':int(wb_batch.review_rows or 0) if wb_batch else 0,
+                'productionStatus':pstatus.status if pstatus else 'NO SHIFT FORM',
+                'drilling':dr,'drillHoles':sum(x['holes'] for x in dr) if dr else None,
+                'drillMetres':sum(x['meterage'] for x in dr) if dr else None,
+                'drillHours':sum(x['drillHours'] for x in dr if x['drillHours'] is not None) if dr else None,
+                'plantHours':meters_by.get((day,sh),{}),'plantProduction':prodplant,
+                'warnings':bundle.get('warnings') or [],'quality':warnings})
+        day+=timedelta(days=1)
+    dates=[]
+    day=from_day
+    while day<=to_day:
+        dates.append(str(day))
+        day+=timedelta(days=1)
+    return {'fromDate':str(from_day),'toDate':str(to_day),
+        'shift':requested,'shifts':shifts,'dates':dates,
+        'entries':[r for r in result if r['date']>=str(from_day)],
+        'mtdEntries':result}
+
+
+def tiom_dpr_preview(db,user,p):
+    from_day,to_day,shifts,requested=_tiom_dpr_inputs(db,user,p)
+    data=_tiom_dpr_data(db,from_day,to_day,shifts,requested)
+    rows=[]
+    for r in data['entries']:
+        m=r['metrics']
+        value=lambda code:m.get(code,{}).get('qty')
+        rows.append({'date':r['date'],'shift':r['shift'],
+            'romMt':value('ROM'),'obMt':value('WASTE'),
+            'finalMt':value('TOTAL_PRODUCTION'),
+            'excavationMt':value('TOTAL_EXCAVATION'),
+            'wbValid':r['wbValid'],'wbReview':r['wbReview'],
+            'drillMetres':r['drillMetres'],'qualityCount':len(r['quality']),
+            'status':r['productionStatus']})
+    return {'fromDate':str(from_day),'toDate':str(to_day),
+            'shift':requested,'shifts':shifts,'rows':rows,
+            'qualityCount':sum(r['qualityCount'] for r in rows),
+            'limitations':['Dispatch and closing stock are pending authenticated source integration.',
+                           'Workbook includes a separate Data Quality sheet; missing readings are blank.']}
+
+
+@router.get('/tiom/dpr.xlsx')
+def tiom_dpr_export(request:Request,fromDate:str='',toDate:str='',
+                    shift:str='ALL',db:Session=Depends(get_db)):
+    from app.services.tiom_dpr import build_dpr_workbook, MIME
+    user=get_user(db,request)
+    day1,day2,shifts,requested=_tiom_dpr_inputs(db,user,{
+        'fromDate':fromDate,'toDate':toDate,'shift':shift})
+    data=_tiom_dpr_data(db,day1,day2,shifts,requested)
+    buffer=build_dpr_workbook(data)
+    filename=f'TIOM_DPR_{day1}_to_{day2}_{requested}.xlsx'
+    return StreamingResponse(buffer,media_type=MIME,headers={
+        'Content-Disposition':f'attachment; filename="{filename}"',
+        'Cache-Control':'no-store'})
+
+
 @router.get('/tiom/drilling-report.xlsx')
 def tiom_drilling_report_export(request:Request,date:str='',fromDate:str='',toDate:str='',
                                 shift:str='ALL',db:Session=Depends(get_db)):
@@ -6351,7 +6574,7 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
 def rpc(p: RPC, request: Request, db: Session = Depends(get_db)):
     csrf(request)
     user = get_user(db, request)
-    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'verifyTiomMisEditKey', 'getTiomMisReconciliation', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter'}
+    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'verifyTiomMisEditKey', 'getTiomMisReconciliation', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter', 'getTiomDprPreview'}
     if p.method not in read_methods:
         lock(db)
     try:
@@ -6410,6 +6633,7 @@ def dispatch(db, user, method, args):
     if method == 'getTiomWbHistory': return get_tiom_wb_history(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomShiftProductionDesk': return get_tiom_shift_production_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomDrillingDesk': return tiom_drilling_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
+    if method == 'getTiomDprPreview': return tiom_dpr_preview(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomHsdDesk': return tiom_hsd_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomHsdPreviousMeter': return tiom_hsd_previous_meter_info(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getHsdDesk': return hsd_desk(db,user)
