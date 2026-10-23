@@ -66,7 +66,7 @@ def _q(entry,code):
     item=_v(entry,code)
     if not item:
         return None
-    return float(item["qty"])
+    return float(item["qty"]) if item.get("qty") is not None else None
 
 
 def _trips(entry,code):
@@ -281,11 +281,7 @@ def build_dpr_workbook(payload):
     by_key={(date.fromisoformat(r["date"]),r["shift"]):r for r in entries}
     dates=[date.fromisoformat(x) for x in payload["dates"]]
     shifts=tuple(payload["shifts"])
-    monthly={}
-    for r in payload.get("mtdEntries",[]):
-        d=date.fromisoformat(r["date"])
-        for code,item in r["metrics"].items():
-            monthly[(d,code)]=sum((_q(r,code) or 0) for x in [0])
+    # MTD is recalculated from the first of each month, not from prior-sheet formulas.
     running=defaultdict(float)
     cumulative={}
     for d in sorted({date.fromisoformat(x["date"]) for x in payload.get("mtdEntries",[])}):
