@@ -69,7 +69,7 @@ class TiomSavedReconciliationTests(unittest.TestCase):
     def test_phase1_cache_bust_is_current(self):
         html=(ROOT/'app'/'static'/'index.html').read_text('utf-8')
         self.assertIn('webapp.js?v=tiom-overview-r26',html)
-        self.assertIn('tiom_phase1.js?v=tiom-dpr-20261023-r1',html)
+        self.assertIn('tiom_phase1.js?v=tiom-save-confirm-20261023-r1',html)
 
 
 if __name__=='__main__':
