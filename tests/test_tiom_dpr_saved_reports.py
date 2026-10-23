@@ -57,10 +57,11 @@ def test_dpr_excel_dates_sections_formulas_and_mtd():
     assert ws["AR5"].data_type=="f"
     assert ws["AR5"].value=="=SUM(E5,R5,AE5)"
     assert ws["BA5"].value=="Fresh ROM"
-    assert ws["BF5"].value==pytest.approx(418.16)
+    assert ws["BD5"].value==pytest.approx(418.16)
+    assert ws["BG5"].value==pytest.approx(458.16)
     assert ws["BI5"].value is None or isinstance(ws["BI5"].value,str)  # no false hardcoded opening stock
-    assert ws["AG32"].value=="ELGI-1"
-    assert ws["AM32"].value==2
+    assert ws["AA32"].value=="ELGI-1"
+    assert ws["AG32"].value==2
     assert wb["Summary"]["G4"].value==100.0
     assert wb["Drilling Detail"]["C4"].value=="ELGI-1"
     assert wb["Stack Summary"]["G4"].value is None  # no invented dispatch MT
