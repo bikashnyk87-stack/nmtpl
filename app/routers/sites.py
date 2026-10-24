@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
 from io import BytesIO
@@ -45,6 +45,7 @@ from app.site_schemas import (
     UserAccountUpdateIn,
 )
 from app.services.site_context import resolve_site_context
+from app.services.site_master_import import equipment_dimensions, equipment_row_errors
 
 router = APIRouter(prefix="/api/sites", tags=["multi-site"])
 
@@ -110,6 +111,16 @@ def _date(value, default=None):
         return value.date()
     if isinstance(value, date):
         return value
+    # XLSX serial dates are numeric when a user pastes a date without a
+    # date number format. Accept 1900-system Excel serials in upload rows.
+    if isinstance(value,(int,float)) and not isinstance(value,bool):
+        try:
+            number=float(value)
+            if not number.is_integer() or not 1 <= number <= 2958465:
+                raise ValueError()
+            return (datetime(1899,12,30)+timedelta(days=int(number))).date()
+        except (ValueError,OverflowError):
+            raise ValueError(f"Invalid Excel date serial: {value}") from None
     raw = str(value or "").strip()
     if not raw:
         return default
@@ -446,6 +457,53 @@ def master_template(site_id: str, master_type: str, request: Request, db: Sessio
     return StreamingResponse(data, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", headers=headers)
 
 
+
+
+def _master_import_row_issues(db, site_id: str, master_type: str, item: dict):
+    """Validate staging and revalidate historic PREVIEW batches before any writes."""
+    spec=MASTER_TEMPLATES[master_type]
+    issues=[f"{field} is required" for field in sorted(spec["required"]) if item.get(field) in (None,"")]
+    if master_type in {"EQUIPMENT","VEHICLE"}:
+        issues.extend(equipment_row_errors(item,master_type))
+        machine_id=str(item.get("Machine ID") or "").strip()
+        existing=db.get(Equipment,machine_id) if machine_id else None
+        if existing:
+            # Equipment is a shared master: importing KOCP must not silently
+            # overwrite a machine actively assigned to TIOM or SOCP.
+            other=db.scalar(select(EquipmentSiteAssignment.id).where(
+                EquipmentSiteAssignment.machine_id==machine_id,
+                EquipmentSiteAssignment.site_id!=site_id,
+                EquipmentSiteAssignment.active.is_(True)).limit(1))
+            if other is not None:
+                payload={
+                    "Type":(str(item.get("Type") or "").strip(),existing.type),
+                    "Group":(str(item.get("Group") or (
+                        "VEHICLE" if master_type=="VEHICLE" else "EQUIPMENT")).strip(),existing.group),
+                    "Door No":(_clean(item.get("Door No")),existing.door_no),
+                    "Vehicle No":(_clean(item.get("Registration No") or item.get("Vehicle No")),existing.vehicle_no),
+                    "Make Model":(_clean(item.get("Make Model")),existing.make_model),
+                    "Ownership":(_clean(item.get("Ownership")),existing.ownership),
+                }
+                conflicts=[field for field,(incoming,previous) in payload.items()
+                           if incoming is not None and incoming!="" and incoming!=previous]
+                try:
+                    bucket,mt,_=equipment_dimensions(item)
+                    if bucket is not None and existing.bucket_cum is not None and abs(bucket-existing.bucket_cum)>0.001:
+                        conflicts.append("Bucket CuM")
+                    if mt is not None and existing.rated_payload_t is not None and abs(mt-existing.rated_payload_t)>0.001:
+                        conflicts.append("Rated Payload T")
+                except ValueError:
+                    pass # detailed parse failure already added to issues
+                if conflicts:
+                    issues.append(
+                        "Machine ID already belongs to another site with different "
+                        + ", ".join(conflicts)+". Check this shared Equipment ID before importing."
+                    )
+    if master_type in {"EMPLOYEE","VEHICLE","EQUIPMENT"}:
+        try:_date(item.get("Effective From"),date.today())
+        except ValueError as exc:issues.append(str(exc))
+    return issues
+
 @router.post("/{site_id}/masters/{master_type}/preview")
 async def master_preview(site_id: str, master_type: str, request: Request, file: UploadFile = File(...), db: Session = Depends(get_db)):
     csrf(request)
@@ -468,14 +526,17 @@ async def master_preview(site_id: str, master_type: str, request: Request, file:
     missing = sorted(spec["required"] - set(headers))
     rows = []
     errors = []
+    seen_machines=set()
     for row_no, cells in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
         if not any(v not in (None, "") for v in cells):
             continue
         item = {headers[i]: cells[i] for i in range(min(len(headers), len(cells))) if headers[i]}
-        row_errors = []
-        for required in spec["required"]:
-            if item.get(required) in (None, ""):
-                row_errors.append(f"{required} is required")
+        row_errors=_master_import_row_issues(db,site_id,key,item)
+        if key in {"EQUIPMENT","VEHICLE"}:
+            machine_id=str(item.get("Machine ID") or "").strip()
+            if machine_id and machine_id in seen_machines:
+                row_errors.append("Duplicate Machine ID within this workbook")
+            seen_machines.add(machine_id)
         if row_errors:
             errors.append({"row": row_no, "errors": row_errors})
         rows.append({"row": row_no, "values": item, "errors": row_errors})
@@ -487,8 +548,8 @@ async def master_preview(site_id: str, master_type: str, request: Request, file:
         file_name=file.filename or "upload.xlsx",
         file_hash=sha256(payload).hexdigest(),
         status="PREVIEW" if not missing else "INVALID_HEADERS",
-        total_rows=max(0, ws.max_row - 1),
-        valid_rows=max(0, ws.max_row - 1 - len(errors)) if not missing else 0,
+        total_rows=len(rows),
+        valid_rows=max(0, len(rows) - len(errors)) if not missing else 0,
         update_rows=0,
         error_rows=len(errors) + (1 if missing else 0),
         uploaded_by=user.login_id,
@@ -502,9 +563,9 @@ async def master_preview(site_id: str, master_type: str, request: Request, file:
             status="ERROR" if staged["errors"] or missing else "VALID",
             error_text="; ".join(staged["errors"]) if staged["errors"] else (("Missing headers: " + ", ".join(missing)) if missing else None),
         ))
-    _audit(db, user, site_id, "MASTER_IMPORT_PREVIEW", "master_import_batch", batch_id, after={"master": key, "rows": ws.max_row - 1, "missingHeaders": missing, "errors": len(errors)})
+    _audit(db, user, site_id, "MASTER_IMPORT_PREVIEW", "master_import_batch", batch_id, after={"master": key, "rows": len(rows), "missingHeaders": missing, "errors": len(errors)})
     db.commit()
-    return {"ok": not missing, "batchId": batch_id, "masterType": key, "headers": headers, "missingHeaders": missing, "totalRows": max(0, ws.max_row - 1), "errorRows": len(errors), "sample": rows[:25], "errors": errors[:100]}
+    return {"ok": not missing, "batchId": batch_id, "masterType": key, "headers": headers, "missingHeaders": missing, "totalRows": len(rows), "errorRows": len(errors), "sample": rows[:25], "errors": errors[:100]}
 
 
 @router.post("/{site_id}/masters/imports/{batch_id}/confirm")
@@ -521,6 +582,21 @@ def confirm_master_import(site_id: str, batch_id: str, request: Request, db: Ses
     staged = list(db.scalars(select(MasterImportRow).where(MasterImportRow.batch_id == batch_id).order_by(MasterImportRow.row_no)))
     if any(r.status == "ERROR" for r in staged):
         raise HTTPException(409, "Fix validation errors and upload a new batch before confirming.")
+    # Existing staged batches may predate numeric validation. Validate all rows
+    # before the first write, to keep the whole import atomic on any mistake.
+    seen_machines=set()
+    for staged_row in staged:
+        item=json.loads(staged_row.row_json)
+        problems=_master_import_row_issues(db,site_id,batch.master_type,item)
+        if batch.master_type in {"EQUIPMENT","VEHICLE"}:
+            mid=str(item.get("Machine ID") or "").strip()
+            if mid and mid in seen_machines:
+                problems.append("Duplicate Machine ID within this workbook")
+            seen_machines.add(mid)
+        if problems:
+            raise HTTPException(422,
+                f"Excel row {staged_row.row_no}: " + "; ".join(problems)
+                + ". No rows from this batch were imported.")
 
     created = updated = 0
     for staged_row in staged:
@@ -549,11 +625,25 @@ def confirm_master_import(site_id: str, batch_id: str, request: Request, db: Ses
             if is_new:
                 row = Equipment(machine_id=machine_id, type=str(item["Type"]).strip(), group=group, active=_bool(item.get("Active"), True))
                 db.add(row)
-            else:
-                row.type = str(item["Type"]).strip(); row.group = group; row.active = _bool(item.get("Active"), row.active)
-            row.door_no = _clean(item.get("Door No")); row.vehicle_no = _clean(item.get("Registration No") or item.get("Vehicle No")); row.make_model = _clean(item.get("Make Model")); row.ownership = _clean(item.get("Ownership"))
-            if item.get("Bucket CuM") not in (None, ""): row.bucket_cum = float(item["Bucket CuM"])
-            if item.get("Rated Payload T") not in (None, ""): row.rated_payload_t = float(item["Rated Payload T"])
+            # Different-site Equipment IDs are shared, never overwritten by a
+            # site import. The preflight also blocks conflicting labels.
+            other_site=db.scalar(select(EquipmentSiteAssignment.id).where(
+                EquipmentSiteAssignment.machine_id==machine_id,
+                EquipmentSiteAssignment.site_id!=site_id,
+                EquipmentSiteAssignment.active.is_(True)).limit(1)) if not is_new else None
+            if not is_new and other_site is None:
+                row.type = str(item["Type"]).strip(); row.group = group
+                row.active = _bool(item.get("Active"), row.active)
+            if other_site is None:
+                for attr,keyname in (("door_no","Door No"),("make_model","Make Model"),
+                                     ("ownership","Ownership")):
+                    if item.get(keyname) not in (None,""):
+                        setattr(row,attr,_clean(item.get(keyname)))
+                if item.get("Registration No") not in (None,"") or item.get("Vehicle No") not in (None,""):
+                    row.vehicle_no=_clean(item.get("Registration No") or item.get("Vehicle No"))
+                bucket,mt,_=equipment_dimensions(item)
+                if bucket is not None:row.bucket_cum=bucket
+                if mt is not None:row.rated_payload_t=mt
             eff = _date(item.get("Effective From"), date.today())
             assignment = db.scalar(select(EquipmentSiteAssignment).where(EquipmentSiteAssignment.machine_id == machine_id, EquipmentSiteAssignment.site_id == site_id, EquipmentSiteAssignment.active.is_(True)))
             if not assignment:
