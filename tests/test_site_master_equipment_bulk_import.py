@@ -152,3 +152,46 @@ def test_cross_site_global_equipment_is_not_overwritten(monkeypatch):
         assert db.scalar(select(func.count()).select_from(EquipmentSiteAssignment).where(
             EquipmentSiteAssignment.site_id=="KOCP"))==0
     engine.dispose()
+
+
+def test_actual_uploaded_non_volume_specs_are_reported_not_mislabelled(monkeypatch):
+    engine,app=setup(monkeypatch)
+    candidate=item(106,"214 HP")
+    with TestClient(app) as client:
+        preview=client.post("/api/sites/KOCP/masters/EQUIPMENT/preview",
+            files={"file":("KOCP_Raw_Equipment.xlsx",workbook([candidate]),
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+        assert preview.status_code==200
+        data=preview.json()
+        assert data["totalRows"]==1
+        assert data["errorRows"]==1
+        assert "Bucket CuM" in str(data["errors"])
+        blocked=client.post(f"/api/sites/KOCP/masters/imports/{data['batchId']}/confirm")
+        assert blocked.status_code==409
+    with Session(engine) as db:
+        assert db.scalar(select(func.count()).select_from(Equipment))==0
+    engine.dispose()
+
+
+def test_uploaded_employee_serial_dates_are_valid_not_500(monkeypatch):
+    engine,app=setup(monkeypatch)
+    from datetime import date
+    assert sites._date(46163)==date(2026,5,21)
+    assert sites._date(46310)==date(2026,10,15)
+    wb=Workbook()
+    ws=wb.active
+    ws.append(sites.MASTER_TEMPLATES["EMPLOYEE"]["headers"])
+    ws.append(["KOCP-EMP-01","Test Worker","DRIVER (COAL)","OPERATIONS",
+               "9876543210",46163,"TRUE"])
+    data=BytesIO();wb.save(data)
+    with TestClient(app) as client:
+        response=client.post("/api/sites/KOCP/masters/EMPLOYEE/preview",
+            files={"file":("KOCP_EMPLOYEE.xlsx",data.getvalue(),
+                           "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")})
+        assert response.status_code==200,response.text
+        assert response.json()["errorRows"]==0
+        confirmed=client.post("/api/sites/KOCP/masters/imports/"
+                              +response.json()["batchId"]+"/confirm")
+        assert confirmed.status_code==200,confirmed.text
+        assert confirmed.json()["created"]==1
+    engine.dispose()
