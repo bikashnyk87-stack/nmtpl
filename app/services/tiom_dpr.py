@@ -242,8 +242,6 @@ def _daily_book_page(wb, day, shifts, by_key, cumulative, quality):
             _num(ws,51,start+4,entry.get("wbValid"))
             ws.cell(52,start,"WB REVIEW")
             _num(ws,52,start+4,entry.get("wbReview"))
-            ws.cell(53,start,"Shift Production")
-            ws.cell(53,start+5,str(entry.get("productionStatus") or "No shift form"))
             notes=entry.get("warnings") or []
             for k,note in enumerate(notes[:5],54):
                 ws.cell(k,start,str(note)[:150])
@@ -303,18 +301,18 @@ def build_dpr_workbook(payload):
         for sh in shifts:
             e=by_key.get((d,sh))
             if not e:continue
-            summary.append([str(d),sh,e.get("productionStatus"),e.get("wbValid"),
+            summary.append([str(d),sh,e.get("wbValid"),
                 e.get("wbReview"),_trips(e,"ROM"),_q(e,"ROM"),_q(e,"WASTE"),
                 _q(e,"SUBGRADE_DUMP"),_q(e,"SCREEN_FINES"),_q(e,"SCREEN_5_18"),
                 _q(e,"CRUSHER_FINES"),_q(e,"CRUSHER_5_18"),_q(e,"TOTAL_PRODUCTION"),
                 _q(e,"TOTAL_EXCAVATION"),e.get("drillHoles"),e.get("drillMetres"),
                 e.get("drillHours"),len(e.get("quality",[]))])
     _table(wb.create_sheet("Summary"),"TIOM | DAILY PRODUCTION SUMMARY",
-        ["Date","Shift","Shift Form","Valid WB","WB Review","ROM Trips","ROM MT","OB MT",
+        ["Date","Shift","Valid WB","WB Review","ROM Trips","ROM MT","OB MT",
          "Sub-grade MT","Screen Fines MT","Screen 5-18 MT","Crusher Fines MT",
          "Crusher 5-18 MT","Final production MT","Excavation MT",
          "Drill Holes","Drill Metres","Drill HMR","Warnings"],summary,
-        [14,9,17,11,11,12,13,13,16,19,17,20,20,22,18,14,18,15,12])
+        [14,9,11,11,12,13,13,16,19,17,20,20,22,18,14,18,15,12])
     for d in dates:
         _daily_book_page(wb,d,shifts,by_key,cumulative,quality)
     stack_summary=[]
@@ -329,7 +327,7 @@ def build_dpr_workbook(payload):
         for code,label in STACK+REHANDLE:
             stacking.append([dateval,sh,code,label,_trips(e,code),_q(e,code),(_v(e,code) or {}).get("source")])
         for code,data in sorted(e["metrics"].items()):
-            raw.append([dateval,sh,code,data.get("qty"),data.get("trips"),data.get("source"),e.get("productionStatus")])
+            raw.append([dateval,sh,code,data.get("qty"),data.get("trips"),data.get("source")])
         for row in e.get("drilling",[]):
             drilling.append([dateval,sh,row.get("label"),row.get("holes"),row.get("meterage"),
                 row.get("drillHours"),row.get("metersPerHour"),row.get("remarks")])
@@ -345,8 +343,8 @@ def build_dpr_workbook(payload):
            ["Date","Shift","Drill Set","Holes","Meterage m","Drill HMR hrs","Metres / Hr","Remarks"],
            drilling,[14,11,30,14,17,18,17,65])
     _table(wb.create_sheet("Source Data"),"TIOM | TRACEABLE CATEGORY TOTALS BY DATE / SHIFT",
-           ["Date","Shift","Movement Code","Quantity MT","Trips (when verified)","Authoritative Source","Shift Report Status"],
-           raw,[14,10,41,20,24,29,23])
+           ["Date","Shift","Movement Code","Quantity MT","Trips (when verified)","Authoritative Source"],
+           raw,[14,10,41,20,24,29])
     warning_rows.append(["—","ALL","PENDING","Dispatch, despatch destinations and closing stock require a trusted ledger; values intentionally blank."])
     warning_rows.append(["—","ALL","METHOD","WB weights are measured; manual factor quantities are estimated. Screen/Crusher output not added to excavation."])
     _table(wb.create_sheet("Data Quality"),"TIOM | DPR GENERATION / MISSING SOURCE CONTROL",

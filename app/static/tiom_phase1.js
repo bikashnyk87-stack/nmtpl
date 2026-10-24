@@ -491,13 +491,13 @@
       '<div class="panel tiom-sap-card">'+
       '<div class="tiom-card-title"><div><b>THAKURANI • DAILY PRODUCTION REPORT</b>'+
       '<span>Daily DPR sheets + Summary + Stack Summary + Stacking + Drilling Detail + Source Data + Data Quality</span></div></div>'+
-      '<div class="tiom-mis-toolbar">'+
+      '<div class="tiom-mis-toolbar dpr-toolbar">'+
       '<label>From<input type="date" id="dpr_from" value="'+safe(from)+'"></label>'+
       '<label>To<input type="date" id="dpr_to" value="'+safe(to)+'"></label>'+
       '<label>Shift<select id="dpr_shift"><option value="ALL">All shifts (A + B + C)</option>'+shiftOpts(shift==='ALL'?'':shift)+'</select></label>'+
-      '<button type="button" class="btn secondary small" onclick="setDprMtd()">MTD (1st → selected date)</button>'+
+      '<div class="dpr-actions"><button type="button" class="btn secondary small" onclick="setDprMtd()">MTD (1st → selected date)</button>'+
       '<button type="button" class="btn primary small" onclick="loadSavedDprPreview()">View DPR</button>'+
-      '<button type="button" class="btn primary small" onclick="downloadSavedDpr()">Download DPR Excel</button>'+
+      '<button type="button" class="btn primary small" onclick="downloadSavedDpr()">Download DPR Excel</button></div>'+
       '</div><div class="tiom-help"><b>Report basis:</b> latest confirmed VALID WB + submitted MIS manual trips + submitted shift exceptions. WB REVIEW excluded. Blank means not recorded. The attached DPR structure is reproduced as shift panels; dispatch and closing stock remain pending verified data sources.</div>'+
       '</div><div id="dpr_preview"><div class="loading">Loading DPR summary…</div></div>');
     if(q('dpr_shift'))q('dpr_shift').value=shift;
@@ -526,7 +526,7 @@
           '<td>'+n(x.romMt)+'</td><td>'+n(x.obMt)+'</td><td>'+n(x.excavationMt)+'</td>'+
           '<td>'+n(x.finalMt)+'</td><td>'+n(x.drillMetres)+'</td>'+
           '<td>'+n(x.wbValid)+'</td><td>'+n(x.wbReview)+'</td>'+
-          '<td>'+safe(x.status||'—')+'</td><td>'+n(x.qualityCount)+'</td></tr>';
+          '<td>'+n(x.qualityCount)+'</td></tr>';
       }).join('');
       html('dpr_preview','<div class="panel tiom-sap-card">'+
         '<div class="tiom-card-title"><div><b>DPR PREVIEW · '+safe(d.fromDate)+' → '+safe(d.toDate)+'</b>'+
@@ -534,8 +534,8 @@
         '<span class="tiom-state">'+n(d.qualityCount)+' source warnings</span></div>'+
         '<div class="table-wrap"><table class="tiom-entry-table"><thead><tr><th>Date</th><th>Shift</th>'+
         '<th>ROM MT</th><th>OB MT</th><th>Excavation MT</th><th>Final MT</th>'+
-        '<th>Drill Metres</th><th>WB Valid</th><th>WB Review</th><th>Shift Form</th><th>Warnings</th>'+
-        '</tr></thead><tbody>'+(rows||'<tr><td colspan="11">No reports for this range.</td></tr>')+'</tbody></table></div>'+
+        '<th>Drill Metres</th><th>WB Valid</th><th>WB Review</th><th>Warnings</th>'+
+        '</tr></thead><tbody>'+(rows||'<tr><td colspan="10">No reports for this range.</td></tr>')+'</tbody></table></div>'+
         '<div class="tiom-help">Download the Excel for individual date sheets, month-to-date totals, source data and the missing-input checklist. Dispatch and closing stock are left blank until linked to their official source.</div></div>');
     },function(e){
       html('dpr_preview','<div class="panel bad">'+safe(e.message||'Unable to load DPR')+'</div>');
