@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from hashlib import sha256
 from io import BytesIO
@@ -111,6 +111,16 @@ def _date(value, default=None):
         return value.date()
     if isinstance(value, date):
         return value
+    # XLSX serial dates are numeric when a user pastes a date without a
+    # date number format. Accept 1900-system Excel serials in upload rows.
+    if isinstance(value,(int,float)) and not isinstance(value,bool):
+        try:
+            number=float(value)
+            if not number.is_integer() or not 1 <= number <= 2958465:
+                raise ValueError()
+            return (datetime(1899,12,30)+timedelta(days=int(number))).date()
+        except (ValueError,OverflowError):
+            raise ValueError(f"Invalid Excel date serial: {value}") from None
     raw = str(value or "").strip()
     if not raw:
         return default
