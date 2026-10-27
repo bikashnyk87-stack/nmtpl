@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from html import unescape
 from io import BytesIO
 from calendar import monthrange
 
@@ -44,8 +45,8 @@ DARK = "152936"
 WHITE = "FFFFFF"
 YELLOW = "FFF1C7"
 LINE = Side(style="thin", color="8096A3")
-NUM = '#,##0.000'
-INT = '#,##0'
+NUM = '#,##0.000;-#,##0.000;"";@'  # Blank DISPLAY for zero, numeric value remains 0
+INT = '#,##0;-#,##0;"";@'
 DATE = 'DD-MM-YYYY'
 
 
@@ -357,12 +358,33 @@ def _transporter_grade(index, default):
     return default
 
 
+def _transporter_names(trips):
+    """One display name per entity, including HTML-escaped, spacing and case variants.
+
+    E-pass rows remain unchanged. Only the client export's display groups are
+    consolidated, so no underlying trips or their quantities are duplicated.
+    """
+    official = {normalized(name): name.strip() for name in TRANSPORTERS_26_OCT}
+    names = {}
+    for trip in trips:
+        original = " ".join(unescape(str(trip.transporter or "")).split())
+        key = normalized(original)
+        if not key:
+            key = "(unnamed transporter)"
+            original = "Unspecified transporter"
+        if key not in names:
+            names[key] = official.get(key, original)
+    order = {normalized(value): i for i, value in enumerate(TRANSPORTERS_26_OCT)}
+    return sorted(names.items(), key=lambda x: (
+        order.get(x[0], len(order)), x[1].casefold()
+    ))
+
+
 def _build_transporter(wb,trips,from_date,to_date,matrix):
     day_groups=_groups(trips)
-    # Existing transporter names from source sheet 26 Oct, plus any new names.
-    traders=sorted({x.transporter for x in trips},
-                   key=lambda name:(name not in TRANSPORTERS_26_OCT,
-                                    TRANSPORTERS_26_OCT.index(name) if name in TRANSPORTERS_26_OCT else name))
+    # Source labels such as '&amp;' versus '&' represent ONE transporter.
+    # Use the canonical key for a single row, even when multiple spellings exist.
+    traders=_transporter_names(trips)
     days=list(_days(from_date,to_date))
     for day in days:
         ws=wb.create_sheet(day.strftime("%d.%m.%y"))
@@ -450,12 +472,12 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
             if idx is not None:
                 per_name[(normalized(trip.transporter),idx)][0]+=1
                 per_name[(normalized(trip.transporter),idx)][1]+=Decimal(str(trip.net_mt))
-        for pos,transport in enumerate(traders):
+        for pos,(transport_key, display_name) in enumerate(traders):
             r=28+pos
-            _style(ws,r,2,transport)
+            _style(ws,r,2,display_name)
             for idx in range(len(DESTINATION_BUCKETS)):
                 c=3+2*idx
-                count,mt=per_name[(normalized(transport),idx)]
+                count,mt=per_name[(transport_key,idx)]
                 _style(ws,r,c,count,fmt=INT)
                 _style(ws,r,c+1,float(mt),fmt=NUM)
             _style(ws,r,89,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})",fmt=INT)

@@ -93,3 +93,44 @@ def test_unmapped_source_blocks_client_exports(amns_day):
     amns_day[0].buyer="UNVERIFIED CLIENT"
     with pytest.raises(ValueError,match="unmapped"):
         build_client_workbook("destination",amns_day,DAY,DAY)
+
+
+def test_transporter_html_amp_alias_is_one_row_without_double_counting():
+    """Regression: 14 trips/446.030 MT appeared twice as '&' and '&amp;'."""
+    first=group(7,"223.015","Self","Dabuna","S.Fines(60-62)","MAA-A")
+    second=group(7,"223.015","Self","Dabuna","S.Fines(60-62)","MAA-B")
+    for trip in first:
+        trip.transporter="M/S MAA KUANRI LOADING & TRANSPORT"
+    for trip in second:
+        trip.transporter="M/S MAA KUANRI LOADING &amp; TRANSPORT"
+    records=first+second
+    assert len({trip.epass_no for trip in records})==14
+    result, totals=build_client_workbook("transporter",records,DAY,DAY)
+    assert totals["trips"]==14
+    assert totals["quantityMt"]==446.03
+    wb=load_workbook(BytesIO(result.getvalue()),read_only=True)
+    ws=wb["26.10.26"]
+    assert ws["B28"].value=="M/S MAA KUANRI LOADING & TRANSPORT"
+    assert ws["B29"].value=="Grand Total"  # no second transporter row
+    assert ws["O28"].value==14   # Self / Dabuna / S.Fines(60-62) trips
+    assert ws["P28"].value==446.03
+    assert ws["C9"].value==14
+    assert ws["D9"].value==446.03
+    wb.close()
+
+
+@pytest.mark.parametrize("report_type,cell,sheet",[
+    ("trip","N1","Cancellation"),
+    ("transporter","C28","26.10.26"),
+    ("material","B28","Oct-26"),
+    ("destination","B31","Oct-26"),
+    ("despatch","B29","DESTINATION WISE"),
+])
+def test_numeric_zeros_are_visually_blank_but_still_zero(report_type,cell,sheet,amns_day):
+    """Custom Excel number format hides displayed zeros without changing formulas or totals."""
+    output,_=build_client_workbook(report_type,amns_day,DAY,DAY)
+    wb=load_workbook(BytesIO(output.getvalue()),read_only=True)
+    c=wb[sheet][cell]
+    assert c.value==0, (report_type,cell,c.value)
+    assert c.number_format.split(";")[2]=='""', (report_type,cell,c.number_format)
+    wb.close()
