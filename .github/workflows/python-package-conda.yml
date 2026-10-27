@@ -32,6 +32,7 @@ jobs:
       - name: Validate TIOM JavaScript
         run: |
           node --check app/static/tiom_phase1.js
+          node --check app/static/tiom_despatch.js
 
       - name: Run tests
         run: |

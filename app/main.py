@@ -647,10 +647,12 @@ async def response_headers(request, call_next):
         response.headers['Cache-Control'] = 'public, max-age=31536000, immutable' if request.url.query else 'public, max-age=300, must-revalidate'
     return response
 
-from app.routers import volvo, automation, sync
+from app.routers import volvo, automation, sync, tiom_despatch
+from app.services import tiom_despatch_mail  # register despatch Gmail message audit table before create_all
 app.include_router(volvo.router)
 app.include_router(automation.router)
 app.include_router(sync.router)
+app.include_router(tiom_despatch.router)
 app.include_router(health.router)
 app.include_router(webapp.router)
 app.include_router(sites.router)

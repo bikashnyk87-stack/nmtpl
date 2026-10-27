@@ -62,7 +62,8 @@ def test_dpr_excel_dates_sections_formulas_and_mtd():
     assert ws["BI5"].value is None or isinstance(ws["BI5"].value,str)  # no false hardcoded opening stock
     assert ws["AA32"].value=="ELGI-1"
     assert ws["AG32"].value==2
-    assert wb["Summary"]["G4"].value==100.0
+    assert wb["Summary"]["F4"].value==100.0  # ROM MT
+    assert wb["Summary"]["G4"].value==0.0  # OB MT; correctly separate from ROM
     assert wb["Drilling Detail"]["C4"].value=="ELGI-1"
     assert wb["Stack Summary"]["G4"].value is None  # no invented dispatch MT
     assert wb["Stack Summary"]["H4"].value is None  # no invented closing stock

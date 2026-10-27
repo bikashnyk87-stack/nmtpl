@@ -156,6 +156,16 @@ def gmail_once():
     logger.info("WB Gmail cloud poll complete messages=%s counts=%s", len(results), counts)
     return {"ok": True, "state": "RUNNING", "messages_seen": len(results), "counts": counts}
 
+def despatch_gmail_once():
+    """Separate dispatch importer; does not affect the WB Gmail process."""
+    from app.services.tiom_despatch_mail import gmail_scan
+    result = gmail_scan(100)
+    logger.info("TIOM despatch Gmail poll complete counts=%s", {
+        k: v for k, v in result.items() if k != "errors"
+    })
+    return result
+
+
 
 def _volvo_credentials() -> tuple[str, str]:
     secret_env = _secret_dotenv_values()
@@ -217,6 +227,17 @@ def run_gmail(
             pass
         raise HTTPException(503, f"WB Gmail automation failed: {exc}") from exc
 
+@router.post("/despatch-gmail")
+def run_despatch_gmail(
+    x_automation_key: str | None = Header(default=None, alias="X-Automation-Key"),
+):
+    _require_automation_key(x_automation_key)
+    try:
+        return despatch_gmail_once()
+    except Exception as exc:
+        logger.exception("TIOM despatch Gmail poll failed")
+        raise HTTPException(503, f"Despatch Gmail automation failed: {exc}") from exc
+
 
 @router.post("/volvo")
 def run_volvo(
@@ -242,6 +263,7 @@ async def automation_loop():
     gmail_interval = max(60, int(os.getenv("WB_GMAIL_POLL_SECONDS", "180")))
     volvo_interval = max(60, int(os.getenv("VOLVO_POLL_SECONDS", "300")))
     gmail_due = 0.0
+    despatch_due = 0.0
     volvo_due = 0.0
     gmail_missing_logged = False
     volvo_missing_logged = False
@@ -267,6 +289,14 @@ async def automation_loop():
             elif not gmail_missing_logged:
                 logger.warning("WB Gmail auto-poll waiting for Gmail token environment variable or Secret File")
                 gmail_missing_logged = True
+
+        if now >= despatch_due:
+            despatch_due = now + max(180, int(os.getenv("TIOM_DESPATCH_GMAIL_POLL_SECONDS", "360")))
+            if _gmail_token_raw() and os.getenv("TIOM_DESPATCH_GMAIL_ENABLED", "true").strip().lower() not in {"0", "no", "off", "false"}:
+                try:
+                    await asyncio.to_thread(despatch_gmail_once)
+                except Exception:
+                    logger.exception("Automatic despatch Gmail poll failed")
 
         if now >= volvo_due:
             volvo_due = now + volvo_interval
