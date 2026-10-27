@@ -1,0 +1,27 @@
+
+.dd-root{padding:10px 3px;color:#173447}.dd-header{display:flex;align-items:end;flex-wrap:wrap;gap:10px;margin-bottom:8px}
+.dd-header>div:first-child{flex:1;min-width:220px}.dd-header h2{margin:0;font-size:20px}.dd-header p{margin:4px 0;font-size:11px;color:#647e8e}
+.dd-header label{display:grid;font-size:11px;gap:4px}.dd-header input{height:31px;padding:4px 7px;border:1px solid #cbd9e0;border-radius:6px}
+.dd-tabs{display:flex;gap:4px;border-bottom:1px solid #d8e2e8;overflow-x:auto;margin-bottom:10px}
+.dd-tabs button{background:transparent;border:0;border-bottom:2px solid transparent;padding:10px 13px;white-space:nowrap;font-size:12px;cursor:pointer;color:#486778}
+.dd-tabs button.active{border-color:#117e78;color:#105955;font-weight:700}.dd-root #dd_notice{font-size:11px;min-height:13px;margin:5px 0}
+.dd-kpis{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:7px;margin-bottom:8px}
+.dd-kpis>div{background:white;border:1px solid #d9e4e7;border-radius:8px;padding:12px;display:flex;flex-direction:column;gap:8px}
+.dd-kpis span{font-size:10px;color:#687d89}.dd-kpis strong{font-size:20px;color:#154d65}
+.dd-grid{display:grid;grid-template-columns:repeat(2,minmax(260px,1fr));gap:8px}
+.dd-box{background:white;border:1px solid #d9e4e7;border-radius:8px;padding:12px;margin-bottom:8px;min-width:0}
+.dd-box>b{display:block;font-size:13px;margin-bottom:10px;color:#193d51}.dd-box p{font-size:11px;line-height:1.5;color:#657986}
+.dd-bar{display:grid;grid-template-columns:minmax(95px,170px) 1fr 115px;gap:10px;align-items:center;margin:7px 0;font-size:10px}
+.dd-bar span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.dd-bar i{height:8px;background:#ecf1f5;border-radius:5px;overflow:hidden;display:block}.dd-bar em{background:#0d857b;display:block;height:100%}
+.dd-bar strong{text-align:right;font-weight:650;font-variant-numeric:tabular-nums}
+.dd-trend{height:140px;display:flex;align-items:end;gap:3px;padding:12px 4px 17px;border-bottom:1px solid #d1dbe0}
+.dd-trend>div{min-width:0;flex:1;height:100%;display:flex;flex-direction:column;align-items:center;justify-content:end;gap:5px;position:relative}
+.dd-trend i{width:60%;max-width:22px;min-height:2px;background:#15978a;display:block}.dd-trend small{font-size:8px}
+.dd-tools{display:flex;align-items:end;gap:7px;flex-wrap:wrap;margin:10px 0;font-size:11px}
+.dd-tools label{font-size:10px;display:grid;gap:4px}.dd-tools input,.dd-tools select,.dd-box>input{max-width:260px;min-width:130px;min-height:31px;border:1px solid #cad8df;border-radius:5px;padding:5px}
+.dd-scroll{overflow:auto;max-height:550px;border:1px solid #dbe4e8;border-radius:6px}
+.dd-scroll table{width:100%;font-size:10px;border-collapse:collapse}.dd-scroll th{position:sticky;top:0;background:#eaf2f6;text-align:left;white-space:nowrap;padding:7px}
+.dd-scroll td{padding:6px;border-bottom:1px solid #ebf0f2;white-space:nowrap}
+.dd-report,.dd-image{display:flex;gap:10px;align-items:center;justify-content:space-between;border-top:1px solid #e6ecef;padding:9px}
+.dd-image{flex-wrap:wrap}.dd-image small{font-size:10px;color:#67808f}
+@media(max-width:850px){.dd-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.dd-grid{grid-template-columns:1fr}.dd-bar{grid-template-columns:105px 1fr 90px}}
