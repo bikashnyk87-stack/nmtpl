@@ -83,10 +83,19 @@ window.tiomDDPanel=async function(which){
        '<div class="dd-scroll"><table><thead><tr>'+['Date','E-Pass','Permit','Vehicle','Transporter','Destination','Grade','Net MT','Status','Edit'].map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+
        data.rows.map((x,i)=>'<tr><td>'+h(x.report_date)+'</td><td>'+h(x.epass_no)+'</td><td>'+h(x.permit_no)+'</td><td>'+h(x.vehicle_no)+'</td><td>'+h(x.transporter)+'</td><td>'+h(x.destination)+'</td><td>'+h(x.material_grade)+'</td><td>'+f(x.net_mt)+'</td><td>'+h(x.status)+'</td><td><button class="btn secondary tiny" onclick="tiomDDEdit('+i+')">Edit</button></td></tr>').join('')+'</tbody></table></div><div id="dd_editor"></div>';
     } else if(tab==='imports'){
-      const imgs=await api('images');
-      $('dd_body').innerHTML='<div class="dd-grid"><section class="dd-box"><b>Upload E-Pass data</b><p>Trip Summary Excel, or October historical CSV. Existing trips are not duplicated.</p>'+
+      const [imgs,mail]=await Promise.all([api('images'),api('mail-status')]);
+      const lastSuccess=mail.lastSuccess?new Date(mail.lastSuccess).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'Not yet confirmed';
+      const lastAttempt=mail.lastAttempt?new Date(mail.lastAttempt).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'Not yet recorded';
+      $('dd_body').innerHTML='<section class="dd-box"><b>MIS Gmail Automatic Import Status</b>'+
+        '<p>Mailbox: '+h(mail.configuredMailbox)+' · Last successful scan: <strong>'+h(lastSuccess)+'</strong> · Last attempted: '+h(lastAttempt)+'</p>'+
+        '<p>Processed emails: '+f(mail.messagesProcessed,0)+' · Emails containing Despatch data: '+f(mail.messagesWithDespatchData,0)+
+        ' · Most recent scan trips: '+f((mail.lastResult||{}).tripsInserted||0,0)+'</p>'+
+        (mail.lastError?'<p class="dd-warning">Gmail error: '+h(mail.lastError)+'</p>':
+         (!mail.lastSuccess?'<p class="dd-warning">Automatic sync has not yet been verified. Use Sync Approved Gmail Now to check the connection.</p>':''))+
+        '<p>Daily image upload is OPTIONAL if an approved sender emailed it. AMNS images need verification; uploading an image does not start Gmail sync.</p></section>'+
+        '<div class="dd-grid"><section class="dd-box"><b>Upload E-Pass data</b><p>Original Trip Summary Excel or historical CSV for gap recovery only; no daily manual upload required when Gmail is fetching correctly.</p>'+
        '<input id="dd_importfile" type="file" accept=".xlsx,.csv"><button class="btn primary small" onclick="tiomDDImport()">Import</button><button class="btn secondary small" onclick="tiomDDMail()">Sync Approved Gmail Now</button>'+
-       '<hr><b>AMNS daily image</b><label>Report date <input type="date" id="dd_imgdate" value="'+h(v('dd_to'))+'"></label>'+
+       '<hr><b>AMNS image (optional, if not received by Gmail)</b><label>Report date <input type="date" id="dd_imgdate" value="'+h(v('dd_to'))+'"></label>'+
        '<input id="dd_imgfile" type="file" accept="image/jpeg,image/png,image/webp">'+
        '<button class="btn secondary small" onclick="tiomDDImage()">Upload for review</button><p>Images are retained; their figures require confirmation before use in reports.</p></section>'+
        '<section class="dd-box"><b>Images pending verification</b>'+
