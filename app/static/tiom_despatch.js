@@ -44,7 +44,7 @@ window.tiomProdTab=function(name){
   document.querySelectorAll('.tiom-prod-tabs button').forEach(b=>b.classList.remove('active'));
   $('tp_despatch')?.classList.add('active');
   const today=latestCompletedDespatchDate();
-  $('tiom_prod_body').innerHTML='<div class="dd-root"><div class="dd-header"><div><h2>Despatch Dashboard</h2><p>Last completed despatch day (today's report = yesterday's activity) · Mail and AMNS verification</p></div>'+
+  $('tiom_prod_body').innerHTML='<div class="dd-root"><div class="dd-header"><div><h2>Despatch Dashboard</h2><p>Last completed despatch day (report date defaults to the previous day) · Mail and AMNS verification</p></div>'+
    '<label>From <input type="date" id="dd_from" value="'+h(today.slice(0,7)+'-01')+'"></label>'+
    '<label>To <input type="date" id="dd_to" value="'+h(today)+'"></label><button class="btn primary small" onclick="tiomDDPanel()">Apply</button></div>'+
    '<div id="dd_notice" role="status"></div><nav class="dd-tabs">'+
