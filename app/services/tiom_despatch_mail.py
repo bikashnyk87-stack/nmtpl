@@ -115,6 +115,7 @@ def gmail_scan(max_messages=25):
             items = listing.get("messages", [])
             if not items:
                 break
+            scanned_ids = []
             for entry in items:
                 remaining -= 1
                 msgid = entry["id"]
