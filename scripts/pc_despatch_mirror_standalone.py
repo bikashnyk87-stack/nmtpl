@@ -27,7 +27,8 @@ ROOT = Path(os.environ.get(
 )).resolve()
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
-os.chdir(ROOT)
+if ROOT.is_dir():
+    os.chdir(ROOT)
 
 from sqlalchemy import (
     Boolean, Column, Date, DateTime, Integer, MetaData, Numeric, String, Table,
