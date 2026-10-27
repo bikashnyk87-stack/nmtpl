@@ -85,7 +85,7 @@ def test_end_to_end_despatch_management():
             if kind == "trip":
                 assert ws["N1"].value == 2
                 assert ws["P1"].value == 62
-                assert ws["P6"].value == "10:00"
+                assert ws["P5"].value == "10:00"
             else:
                 assert ws.cell(ws.max_row,ws.max_column).value == 62
             wb.close()
