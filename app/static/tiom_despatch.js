@@ -51,6 +51,13 @@ window.tiomDDPanel=async function(which){
   try {
     if(tab==='dashboard'){
       const data=await api('dashboard?'+dates()),total=data.totals;last.dashboard=data;
+      if(total.trips===0){
+        $('dd_body').innerHTML='<div class="dd-empty"><h3>No despatch records imported yet</h3>'+
+          '<p>The Despatch module is installed and working, but the October E-Pass ledger has not been loaded into its database. The production/WB ledger is separate and is not automatically the Despatch ledger.</p>'+
+          '<button class="btn primary small" onclick="tiomDDPanel(\'imports\')">Import October Trip Summary / CSV</button>'+
+          '<p class="dd-note">Once imported, return to Dashboard to see trips, tonnage, daily trend and breakdowns. Existing E-passes are not duplicated on re-import.</p></div>';
+        return;
+      }
       const max=Math.max(...data.daily.map(x=>+x.tonnes),1);
       $('dd_body').innerHTML='<div class="dd-kpis">'+[['Active trips',f(total.trips,0)],['Dispatch MT',f(total.tonnes)],['Cancelled trips',f(total.cancelled,0)],['Images pending',f(total.imagesReview,0)]]
        .map(x=>'<div><span>'+x[0]+'</span><strong>'+x[1]+'</strong></div>').join('')+'</div>'+
@@ -96,8 +103,17 @@ window.tiomDDMail=async()=>{
 window.tiomDDImport=async()=>{
   const file=$('dd_importfile')?.files?.[0];if(!file)return say('Choose an import file',true);
   const fd=new FormData();fd.append('file',file);
-  try{const r=await api('upload',fd);say(r.ok?'Imported '+r.inserted+' trips; '+r.skippedExisting+' existing; '+r.conflictCount+' conflicts.':'Import rejected: '+r.errorCount+' invalid rows.',!r.ok);}
-  catch(e){say(e.message,true);}
+  const button=$('dd_importfile')?.nextElementSibling;
+  if(button){button.disabled=true;button.textContent='Importing…';}
+  say('Validating and importing '+file.name+'…');
+  try{
+    const r=await api('upload',fd);
+    if(!r.ok){say('Import blocked: '+r.errorCount+' invalid rows. '+(r.errors||[]).slice(0,3).map(x=>'Row '+x.row+': '+x.error).join('; '),true);return;}
+    say('Import completed: '+r.inserted+' new trips, '+r.skippedExisting+' existing, '+r.conflictCount+' conflicts.');
+    if(r.conflictCount) return;
+    await window.tiomDDPanel('dashboard');
+  } catch(e){say(e.message,true);}
+  finally{if(button){button.disabled=false;button.textContent='Import';}}
 };
 window.tiomDDImage=async()=>{
   const file=$('dd_imgfile')?.files?.[0];if(!file)return say('Choose the AMNS image',true);
