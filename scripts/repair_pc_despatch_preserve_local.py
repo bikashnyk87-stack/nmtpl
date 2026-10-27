@@ -84,19 +84,27 @@ def preflight(root: Path):
         url.startswith("git@github.com:") or url.startswith("ssh://git@github.com/")
     ):
         raise RuntimeError("Unexpected Git origin; refusing source update")
-    changes = decode(git(root, "status", "--porcelain=v1", "--untracked-files=no").stdout)
+    # Git porcelain's FIRST COLUMN IS SIGNIFICANT, including its leading
+    # whitespace. Do not pass through decode()/str.strip(): doing so strips
+    # the first row's leading blank and turns ' M path' into 'M path'.
+    changes = git(
+        root, "status", "--porcelain=v1", "--untracked-files=no"
+    ).stdout.decode("utf-8", "replace").rstrip("\r\n")
     if not changes:
         print("Tracked sources are clean; using ordinary fast-forward instead.")
         return changes
     modified = {}
     for line in changes.splitlines():
         flag, path = line[:2], line[3:]
-        if path not in PROTECTED or flag != " M":
+        # Both staged and unstaged edits are preserved in the working-tree
+        # three-way merge. Deletes, renames, unmerged files, and any edits
+        # outside the three audited paths are rejected before mutation.
+        if path not in PROTECTED or flag not in {" M", "M ", "MM"}:
             raise RuntimeError(
-                "Additional or staged Git changes detected; no tracked source was changed:\n" +
+                "Additional or unsupported Git changes detected; no tracked source was changed:\n" +
                 changes
             )
-        modified[path] = True
+        modified[path] = "staged" if flag[0] == "M" else "unstaged"
     print("Protected local modifications:", ", ".join(modified))
     return changes
 

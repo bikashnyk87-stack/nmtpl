@@ -84,5 +84,37 @@ def test_preflight_rejects_unexpected_local_modifications(tmp_path,monkeypatch):
     # Production never tries to update arbitrary modified source.
     (root/"app"/"routers"/"other.py").write_text("CUSTOM = True\n")
     _git(root,"add","app/routers/other.py")
-    with pytest.raises(RuntimeError,match="Additional or staged"):
+    with pytest.raises(RuntimeError,match="Additional or unsupported"):
         updater.preflight(root)
+
+
+@pytest.mark.parametrize("stage_router,stage_worker",[
+    (False, False),  # all unstaged; leading porcelain space must survive
+    (True, False),   # exactly what the PC may have: first staged
+    (False, True),   # other mixed index/worktree state
+    (True, True),    # all supported changes staged
+])
+def test_preflight_keeps_porcelain_status_prefix_for_protected_paths(
+    tmp_path, stage_router, stage_worker
+):
+    root, original = _project(tmp_path)
+    _git(root, "remote", "set-url", "origin",
+         "https://github.com/bikashnyk87-stack/nmtpl.git")
+    router = "app/routers/sync.py"
+    cloud = "app/services/cloud_sync.py"
+    worker = "scripts/pull_render_sync.py"
+    for path in (router, cloud, worker):
+        (root / path).write_text(
+            original[path] + "\n# LOCAL PC WB CUSTOMIZATION\n", encoding="utf-8"
+        )
+    if stage_router:
+        _git(root, "add", router)
+    if stage_worker:
+        _git(root, "add", worker)
+    status = updater.preflight(root)
+    expected_router = "M " if stage_router else " M"
+    expected_worker = "M " if stage_worker else " M"
+    assert status.startswith(expected_router + " " + router)
+    assert (" M " + cloud) in status
+    assert (expected_worker + " " + worker) in status
+    assert len(status.splitlines()) == 3
