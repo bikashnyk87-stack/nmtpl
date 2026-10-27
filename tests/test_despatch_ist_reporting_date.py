@@ -23,7 +23,7 @@ def test_despatch_yesterday_india_calendar_not_shift_date(now_utc, expected):
     end = source.index("\n}\n", start) + 2
     func = source[start:end]
     script = (
-        "const RealDate = Date;\n"
+        "const RealDate = global.Date;\n"
         "class FakeDate extends RealDate {\n"
         "  constructor(...args){super(...(args.length?args:[" +
         json.dumps(now_utc) + "]))}\n"
