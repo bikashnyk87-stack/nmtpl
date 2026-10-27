@@ -55,9 +55,9 @@ def test_three_way_preserves_pc_customizations_and_remote_despatch(tmp_path):
     _git(root, "reset", "--hard", "HEAD~1")
     # Simulate WB customizations added after the PC baseline.
     (root/"app"/"services"/"cloud_sync.py").write_text(
-        originals["app/services/cloud_sync.py"] + "PC_WB_CUSTOM=True\n",encoding="utf-8")
+        "PC_WB_CUSTOM=True\n" + originals["app/services/cloud_sync.py"],encoding="utf-8")
     (root/"scripts"/"pull_render_sync.py").write_text(
-        originals["scripts/pull_render_sync.py"]+"PC_LOCAL_WB_FIX=True\n",encoding="utf-8")
+        "PC_LOCAL_WB_FIX=True\n"+originals["scripts/pull_render_sync.py"],encoding="utf-8")
     (root/"app"/"routers"/"sync.py").write_text(
         originals["app/routers/sync.py"]+"PC_TWO_WAY_SYNC=True\n",encoding="utf-8")
     with pytest.raises(RuntimeError, match="Unexpected Git origin"):
@@ -80,7 +80,7 @@ def test_three_way_preserves_pc_customizations_and_remote_despatch(tmp_path):
 
 def test_preflight_rejects_unexpected_local_modifications(tmp_path,monkeypatch):
     root,_ = _project(tmp_path)
-    monkeypatch.setattr(updater,"OFFICIAL_REPO",str((tmp_path/"remote.git").as_posix()))
+    _git(root,"remote","set-url","origin","https://github.com/bikashnyk87-stack/nmtpl.git")
     # Production never tries to update arbitrary modified source.
     (root/"app"/"routers"/"other.py").write_text("CUSTOM = True\n")
     _git(root,"add","app/routers/other.py")
