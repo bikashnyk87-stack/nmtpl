@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.routers import tiom_despatch as mod
-from app.services.tiom_despatch_mail import DespatchEmailProcessed
+from app.services.tiom_despatch_mail import DespatchEmailProcessed, DespatchMailPoll
 
 
 def client():
@@ -22,7 +22,7 @@ def client():
     Base.metadata.create_all(engine, tables=[
         mod.DespatchAudit.__table__, mod.DespatchDocument.__table__,
         mod.DespatchPermitDay.__table__, mod.DespatchSender.__table__,
-        mod.DespatchTrip.__table__, DespatchEmailProcessed.__table__,
+        mod.DespatchTrip.__table__, DespatchEmailProcessed.__table__, DespatchMailPoll.__table__,
     ])
     app = FastAPI()
     app.include_router(mod.router)
@@ -59,6 +59,20 @@ def test_end_to_end_despatch_management():
         assert r.status_code == 200 and r.json()["inserted"] == 2
         r=api.post("/api/tiom/despatch/upload",files={"file":("oct.csv",csv_data(),"text/csv")})
         assert r.status_code == 200 and r.json()["skippedExisting"] == 2
+        # The 27th is not a valid report day until the 27th's source arrives.
+        pending=api.get("/api/tiom/despatch/export-check/trip?from_date=2026-10-27&to_date=2026-10-27")
+        assert pending.status_code == 200
+        assert pending.json()["ready"] is False
+        assert "2026-10-26" in pending.json()["message"]
+        ready=api.get("/api/tiom/despatch/export-check/trip?from_date=2026-10-26&to_date=2026-10-26")
+        assert ready.status_code == 200
+        assert ready.json()["ready"] is True
+        assert ready.json()["activeTrips"] == 2
+        mail=api.get("/api/tiom/despatch/mail-status")
+        assert mail.status_code == 200
+        assert mail.json()["lastSuccess"] is None
+        assert mail.json()["configuredMailbox"] == "mistiom@nmtpl.com"
+
         dash=api.get("/api/tiom/despatch/dashboard").json()
         assert dash["totals"]["trips"] == 2 and dash["totals"]["tonnes"] == 62
         r=api.get("/api/tiom/despatch/trips?show_cancelled=true").json()
