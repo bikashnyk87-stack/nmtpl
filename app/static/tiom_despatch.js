@@ -80,9 +80,13 @@ window.tiomDDPanel=async function(which){
        '<section class="dd-box"><b>Images pending verification</b>'+
        (imgs.map(x=>'<div class="dd-image"><a target="_blank" href="/api/tiom/despatch/image/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a><small>'+h(x.report_date||'Date pending')+' · '+h(x.review_status)+'</small><button class="btn secondary tiny" onclick="tiomDDReview(\''+h(x.id)+'\')">Verify permit</button></div>').join('')||'No images uploaded yet')+'</section></div><div id="dd_editor"></div>';
     } else if(tab==='reports'){
-      $('dd_body').innerHTML='<section class="dd-box"><b>Download report</b><p>Date range above applies to all five reports.</p>'+
-       [['trip','Trip Summary'],['transporter','Transporter Wise'],['material','Material Wise'],['destination','Destination Wise'],['despatch','Captive / Non-captive Despatch']].map(x=>
-       '<div class="dd-report"><strong>'+x[1]+'</strong><button class="btn primary small" onclick="tiomDDExport(\''+x[0]+'\')">Download Excel</button></div>').join('')+'</section>';
+      $('dd_body').innerHTML='<section class="dd-box"><b>Five Client-Format Reports</b>'+
+       '<p>Original Excel headings and layouts. All FTM / cumulative figures are calculated from the first day of the month, excluding cancelled trips.</p>'+
+       '<div class="dd-tools"><label>Export basis <select id="dd_reportbasis"><option value="daily">Daily submission (To date + MTD)</option><option value="month">Month-to-date workbook (all daily sheets)</option></select></label>'+
+       '<span>Submission date: '+h(v('dd_to'))+'</span></div>'+
+       [['trip','Trip Summary · Daily, Cummulative, Cancellation'],['transporter','Transporter-wise Dispatch · FTD / FTM'],['material','Material-wise Dispatch · Date & Total'],['destination','Destination-wise · Buyers, Trips, Quantity'],['despatch','Captive / Non-captive · Date & Cumulative']].map(x=>
+       '<div class="dd-report"><strong>'+x[1]+'</strong><button class="btn primary small" onclick="tiomDDExport(\''+x[0]+'\')">Export Client XLSX</button></div>').join('')+
+       '<p class="dd-note">An export is blocked when no authenticated E-Pass data exists or source buyer / material categories cannot be matched. Correct mappings instead of submitting wrong quantities.</p></section>';
     } else {
       const users=await api('senders');last.senders=users;
       $('dd_body').innerHTML='<section class="dd-box"><b>Authorized dispatch mail senders</b><p>Only management can change this list; WB sender rules are separate.</p>'+
@@ -94,7 +98,28 @@ window.tiomDDPanel=async function(which){
 };
 window.tiomDDSearch=()=>{search=v('dd_search');page=1;window.tiomDDPanel('trips');};
 window.tiomDDPage=delta=>{page=Math.max(1,page+delta);window.tiomDDPanel('trips');};
-window.tiomDDExport=type=>window.location.assign('/api/tiom/despatch/export/'+encodeURIComponent(type)+'?'+dates());
+window.tiomDDExport=async type=>{
+  const to=v('dd_to');
+  if(!to)return say('Select a submission date first',true);
+  const mode=v('dd_reportbasis')||'daily';
+  const from=mode==='daily'?to:to.slice(0,7)+'-01';
+  const search=new URLSearchParams({from_date:from,to_date:to});
+  say('Generating client format '+type+' report…');
+  try{
+    const response=await fetch('/api/tiom/despatch/export/'+encodeURIComponent(type)+'?'+search.toString(),{credentials:'same-origin'});
+    if(!response.ok){
+      const body=await response.json().catch(()=>({}));
+      throw Error(body.detail||'Report unavailable: HTTP '+response.status);
+    }
+    const blob=await response.blob();
+    const url=URL.createObjectURL(blob);
+    const anchor=document.createElement('a');
+    anchor.href=url;anchor.download='AMIPL_'+type+'_'+to+'_Client_Format.xlsx';
+    document.body.appendChild(anchor);anchor.click();anchor.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    say('Client format '+type+' workbook prepared. Please verify output before submitting.');
+  }catch(err){say(err.message,true);}
+};
 window.tiomDDMail=async()=>{
   say('Checking MIS Gmail mailbox…');
   try{const d=await api('mail-sync',JSON.stringify({}));say('Mailbox '+d.mailbox+': '+d.messagesScanned+' scanned, '+d.tripsInserted+' trips, '+d.imagesSaved+' images imported.');}
