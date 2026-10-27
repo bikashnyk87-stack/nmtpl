@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.auth import csrf, get_user, require
+from app.services.pc_upload import receive, SyncConflict
 from app.db import get_db
 from app.services.cloud_sync import (
     create_device,
@@ -17,6 +18,12 @@ from app.services.cloud_sync import (
 )
 
 router = APIRouter(prefix="/api/sync", tags=["sync"])
+
+
+class UploadIn(BaseModel):
+    baseChangeId: int = Field(ge=0)
+    initialLocalId: int = Field(default=0, ge=0)
+    changes: list[dict] = Field(min_length=1, max_length=100)
 
 
 class PairIn(BaseModel):
@@ -87,3 +94,23 @@ def get_snapshot_table(
         return read_snapshot_table(db, table_name, offset, limit)
     except ValueError as exc:
         raise HTTPException(404, str(exc)) from exc
+
+
+@router.post("/upload")
+def upload(
+    payload: UploadIn,
+    x_nmtpl_sync_token: str | None = Header(default=None, alias="X-NMTPL-Sync-Token"),
+    db: Session = Depends(get_db),
+):
+    _source_required()
+    device = validate_device(db, x_nmtpl_sync_token or "")
+    if not device:
+        raise HTTPException(401, "Invalid or inactive sync device token.")
+    try:
+        return receive(db, device["device_id"], payload.baseChangeId, payload.changes, payload.initialLocalId)
+    except SyncConflict as exc:
+        db.rollback()
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from exc
