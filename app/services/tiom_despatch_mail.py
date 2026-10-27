@@ -64,7 +64,19 @@ def _attachment(service, msgid, item):
     return base64.urlsafe_b64decode(encoded + "=" * (-len(encoded) % 4))
 
 
-def gmail_scan(max_messages=100):
+def _gmail_query(senders):
+    """Restrict Gmail search to approved senders before fetching full messages."""
+    if not senders:
+        return ""
+    safe = sorted(e.lower() for e in senders if re.fullmatch(r"[a-z0-9_.+%-]+@[a-z0-9.-]+", e.lower()))
+    if not safe:
+        return ""
+    return "after:2026/09/30 has:attachment -label:NMTPL_DESPATCH_PROCESSED {" + (
+        " ".join("from:" + e for e in safe)
+    ) + "}"
+
+
+def gmail_scan(max_messages=25):
     from app.routers.automation import _prepare_gmail_token
     from scripts.wb_gmail_worker import gmail_service
 
@@ -81,22 +93,35 @@ def gmail_scan(max_messages=100):
     with SessionLocal() as db:
         _seed_senders(db)
         senders = set(db.scalars(select(DespatchSender.email).where(DespatchSender.active.is_(True))).all())
-        remaining = min(max_messages, 250)
+        remaining = min(max_messages, 25)
+        query = _gmail_query(senders)
+        if not query:
+            return result
+        # One distinct label avoids repeatedly reading October attachments.
+        label_name = "NMTPL_DESPATCH_PROCESSED"
+        labels = service.users().labels().list(userId="me").execute().get("labels", [])
+        label_id = next((x["id"] for x in labels if x["name"] == label_name), None)
+        if not label_id:
+            label_id = service.users().labels().create(
+                userId="me", body={"name": label_name}
+            ).execute()["id"]
         page = None
         while remaining:
-            args = {"userId": "me", "q": "after:2026/09/30 has:attachment",
-                    "maxResults": min(remaining, 50)}
+            args = {"userId": "me", "q": query,
+                    "maxResults": min(remaining, 25)}
             if page:
                 args["pageToken"] = page
             listing = service.users().messages().list(**args).execute()
             items = listing.get("messages", [])
             if not items:
                 break
+            scanned_ids = []
             for entry in items:
                 remaining -= 1
                 msgid = entry["id"]
                 result["messagesScanned"] += 1
                 if db.get(DespatchEmailProcessed, msgid):
+                    scanned_ids.append(msgid)
                     result["skipped"] += 1
                     continue
                 msg = service.users().messages().get(userId="me", id=msgid, format="full").execute()
@@ -143,10 +168,17 @@ def gmail_scan(max_messages=100):
                     status="IMPORTED" if relevant else "NO_MATCHING_DATA",
                     details=f"Trips inserted={imported}; images={images}"))
                 db.commit()
+                scanned_ids.append(msgid)
                 result["tripsInserted"] += imported
                 result["imagesSaved"] += images
                 if relevant:
                     result["messagesImported"] += 1
+            if scanned_ids:
+                # One batch request instead of one Gmail modification per email.
+                service.users().messages().batchModify(
+                    userId="me",
+                    body={"ids": scanned_ids, "addLabelIds": [label_id]}
+                ).execute()
             page = listing.get("nextPageToken")
             if not page:
                 break

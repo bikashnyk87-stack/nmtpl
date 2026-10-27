@@ -159,7 +159,7 @@ def gmail_once():
 def despatch_gmail_once():
     """Separate dispatch importer; does not affect the WB Gmail process."""
     from app.services.tiom_despatch_mail import gmail_scan
-    result = gmail_scan(100)
+    result = gmail_scan(25)
     logger.info("TIOM despatch Gmail poll complete counts=%s", {
         k: v for k, v in result.items() if k != "errors"
     })
@@ -263,7 +263,8 @@ async def automation_loop():
     gmail_interval = max(60, int(os.getenv("WB_GMAIL_POLL_SECONDS", "180")))
     volvo_interval = max(60, int(os.getenv("VOLVO_POLL_SECONDS", "300")))
     gmail_due = 0.0
-    despatch_due = 0.0
+    # Stagger despatch behind the existing WB Gmail fetch to protect Gmail's per-user quota.
+    despatch_due = time.monotonic() + 90
     volvo_due = 0.0
     gmail_missing_logged = False
     volvo_missing_logged = False
@@ -291,7 +292,7 @@ async def automation_loop():
                 gmail_missing_logged = True
 
         if now >= despatch_due:
-            despatch_due = now + max(180, int(os.getenv("TIOM_DESPATCH_GMAIL_POLL_SECONDS", "360")))
+            despatch_due = now + max(600, int(os.getenv("TIOM_DESPATCH_GMAIL_POLL_SECONDS", "600")))
             if _gmail_token_raw() and os.getenv("TIOM_DESPATCH_GMAIL_ENABLED", "true").strip().lower() not in {"0", "no", "off", "false"}:
                 try:
                     await asyncio.to_thread(despatch_gmail_once)
