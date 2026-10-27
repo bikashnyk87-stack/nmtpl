@@ -568,8 +568,15 @@ def export_report(report_type: str, request: Request, from_date: date = date(202
     ws.auto_filter.ref = f"A3:{__import__('openpyxl').utils.get_column_letter(len(heads))}{max(4, len(rows)+3)}"
     last = len(rows)+5
     ws.cell(last, 1, "TOTAL")
-    ws.cell(last, len(heads)-1, len(all_trips))
-    ws.cell(last, len(heads), float(sum((x.net_mt for x in all_trips), Decimal(0))))
+    if report_type == "trip":
+        # Original Trip Summary totals are N1 (count) and P1 (net MT).
+        # Never put totals into the Date and Time columns.
+        ws["N1"] = len(all_trips)
+        ws["P1"] = float(sum((x.net_mt for x in all_trips), Decimal(0)))
+        ws.cell(last, 14, float(sum((x.net_mt for x in all_trips), Decimal(0))))
+    else:
+        ws.cell(last, len(heads)-1, len(all_trips))
+        ws.cell(last, len(heads), float(sum((x.net_mt for x in all_trips), Decimal(0))))
     for c in ws[last]:
         c.font = Font(bold=True)
     buffer = BytesIO()
