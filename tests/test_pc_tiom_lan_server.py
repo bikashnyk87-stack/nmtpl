@@ -11,7 +11,8 @@ INSTALLER=ROOT/"scripts"/"install_pc_tiom_lan.ps1"
 
 def test_lan_install_security_and_isolation():
     text=INSTALLER.read_text(encoding="utf-8")
-    assert 'Profile="Private"' in text
+    assert 'Profile="Private,Domain"' in text
+    assert 'DomainAuthenticated' in text
     assert 'RemoteAddress="LocalSubnet"' in text
     assert 'LocalPort=8765' in text
     assert 'Program=$pythonw' in text
