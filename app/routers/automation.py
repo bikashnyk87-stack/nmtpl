@@ -263,7 +263,8 @@ async def automation_loop():
     gmail_interval = max(60, int(os.getenv("WB_GMAIL_POLL_SECONDS", "180")))
     volvo_interval = max(60, int(os.getenv("VOLVO_POLL_SECONDS", "300")))
     gmail_due = 0.0
-    # Stagger despatch behind the existing WB Gmail fetch to protect Gmail's per-user quota.\n    despatch_due = time.monotonic() + 90
+    # Stagger despatch behind the existing WB Gmail fetch to protect Gmail's per-user quota.
+    despatch_due = time.monotonic() + 90
     volvo_due = 0.0
     gmail_missing_logged = False
     volvo_missing_logged = False
