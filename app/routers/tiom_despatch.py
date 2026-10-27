@@ -227,9 +227,14 @@ def _import_data(db, data, filename, actor):
             errors.append({"row": i, "error": str(exc)})
     if errors:
         return {"ok": False, "inserted": 0, "errors": errors[:30], "errorCount": len(errors), "reviewRequired": True}
-    existing = {t.epass_no.upper(): t for t in db.scalars(
-        select(DespatchTrip).where(DespatchTrip.epass_no.in_([x["epass_no"] for x in trip_records]))
-    )}
+    # Batch lookups: the PC SQLite mirror may have a 999-bind limit.
+    existing = {}
+    keys = [x["epass_no"] for x in trip_records]
+    for offset in range(0, len(keys), 500):
+        for trip in db.scalars(select(DespatchTrip).where(
+            DespatchTrip.epass_no.in_(keys[offset:offset + 500])
+        )):
+            existing[trip.epass_no.upper()] = trip
     inserted = 0
     mismatches = []
     for entry in trip_records:
@@ -572,3 +577,14 @@ def export_report(report_type: str, request: Request, from_date: date = date(202
     buffer.seek(0)
     return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                              headers={"Content-Disposition": f'attachment; filename="TIOM_{report_type}_{from_date}_{to_date}.xlsx"'})
+
+@router.post("/mail-sync")
+def mail_sync(request: Request, db: Session = Depends(get_db)):
+    """Management-triggered mailbox sync, separate from WB ingestion."""
+    csrf(request)
+    _user(request, db, edit=True)
+    from app.services.tiom_despatch_mail import gmail_scan
+    try:
+        return gmail_scan(50)
+    except RuntimeError as exc:
+        raise HTTPException(503, str(exc)) from exc
