@@ -57,8 +57,8 @@ def _digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def init_sync_source(engine) -> int:
-    if not source_enabled():
+def init_sync_source(engine, force_local: bool = False) -> int:
+    if not source_enabled() and not force_local:
         logger.info("Render-to-PC sync source is disabled on this instance.")
         return 0
 
@@ -79,9 +79,11 @@ def init_sync_source(engine) -> int:
                 table_name VARCHAR(120) NOT NULL,
                 operation VARCHAR(1) NOT NULL,
                 row_data JSONB NOT NULL,
-                changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
+                changed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                origin_device VARCHAR(80) NULL
             )
         """))
+        conn.execute(text("ALTER TABLE sync_change_log ADD COLUMN IF NOT EXISTS origin_device VARCHAR(80)"))
         conn.execute(text("""
             CREATE INDEX IF NOT EXISTS ix_sync_change_log_changed_at
             ON sync_change_log(changed_at)
@@ -94,17 +96,21 @@ def init_sync_source(engine) -> int:
             CREATE OR REPLACE FUNCTION nmtpl_capture_sync_change()
             RETURNS trigger AS $$
             BEGIN
+                IF current_setting('nmtpl.sync_apply', true) = 'on' THEN
+                    IF TG_OP = 'DELETE' THEN RETURN OLD; END IF;
+                    RETURN NEW;
+                END IF;
                 IF TG_OP = 'DELETE' THEN
-                    INSERT INTO sync_change_log(table_name, operation, row_data)
-                    VALUES (TG_TABLE_NAME, 'D', to_jsonb(OLD));
+                    INSERT INTO sync_change_log(table_name, operation, row_data, origin_device)
+                    VALUES (TG_TABLE_NAME, 'D', to_jsonb(OLD), nullif(current_setting('nmtpl.sync_device', true), ''));
                     RETURN OLD;
                 ELSIF TG_OP = 'UPDATE' THEN
-                    INSERT INTO sync_change_log(table_name, operation, row_data)
-                    VALUES (TG_TABLE_NAME, 'U', to_jsonb(NEW));
+                    INSERT INTO sync_change_log(table_name, operation, row_data, origin_device)
+                    VALUES (TG_TABLE_NAME, 'U', to_jsonb(NEW), nullif(current_setting('nmtpl.sync_device', true), ''));
                     RETURN NEW;
                 ELSE
-                    INSERT INTO sync_change_log(table_name, operation, row_data)
-                    VALUES (TG_TABLE_NAME, 'I', to_jsonb(NEW));
+                    INSERT INTO sync_change_log(table_name, operation, row_data, origin_device)
+                    VALUES (TG_TABLE_NAME, 'I', to_jsonb(NEW), nullif(current_setting('nmtpl.sync_device', true), ''));
                     RETURN NEW;
                 END IF;
             END;
