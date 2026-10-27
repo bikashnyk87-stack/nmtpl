@@ -6,6 +6,18 @@ const v=id=>$(id)?.value||'';
 const h=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const f=(n,d=3)=>Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:d,maximumFractionDigits:d});
 const base=window.renderProduction, oldTab=window.tiomProdTab;
+function latestCompletedDespatchDate(){
+  // MIS reports a completed despatch day the NEXT morning. Compute from
+  // the TIOM's site-local boot date, not the UTC date of the Render host.
+  const raw=String(S.boot.today||'').slice(0,10);
+  const parts=raw.split('-').map(Number);
+  const d=parts.length===3&&parts.every(Number.isFinite)
+    ?new Date(parts[0],parts[1]-1,parts[2]-1)
+    :new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate()-1);
+  return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),
+          String(d.getDate()).padStart(2,'0')].join('-');
+}
+
 let tab='dashboard',last={},page=1,search='';
 async function api(path,body){
   const options={credentials:'same-origin',headers:{'X-NMTPL-Request':'webapp'}};
@@ -31,8 +43,8 @@ window.tiomProdTab=function(name){
   sessionStorage.setItem('TIOM_DESPATCH_TAB','YES');
   document.querySelectorAll('.tiom-prod-tabs button').forEach(b=>b.classList.remove('active'));
   $('tp_despatch')?.classList.add('active');
-  const today=S.boot.today||'2026-10-26';
-  $('tiom_prod_body').innerHTML='<div class="dd-root"><div class="dd-header"><div><h2>Despatch Dashboard</h2><p>External E-Pass dispatch / transporter / permit data</p></div>'+
+  const today=latestCompletedDespatchDate();
+  $('tiom_prod_body').innerHTML='<div class="dd-root"><div class="dd-header"><div><h2>Despatch Dashboard</h2><p>Last completed despatch day (today's report = yesterday's activity) · Mail and AMNS verification</p></div>'+
    '<label>From <input type="date" id="dd_from" value="'+h(today.slice(0,7)+'-01')+'"></label>'+
    '<label>To <input type="date" id="dd_to" value="'+h(today)+'"></label><button class="btn primary small" onclick="tiomDDPanel()">Apply</button></div>'+
    '<div id="dd_notice" role="status"></div><nav class="dd-tabs">'+
@@ -83,7 +95,7 @@ window.tiomDDPanel=async function(which){
       $('dd_body').innerHTML='<section class="dd-box"><b>Five Client-Format Reports</b>'+
        '<p>Original Excel headings and layouts. All FTM / cumulative figures are calculated from the first day of the month, excluding cancelled trips.</p>'+
        '<div class="dd-tools"><label>Export basis <select id="dd_reportbasis"><option value="daily">Daily submission (To date + MTD)</option><option value="month">Month-to-date workbook (all daily sheets)</option></select></label>'+
-       '<span>Submission date: '+h(v('dd_to'))+'</span></div>'+
+       '<span>Reporting date: '+h(v('dd_to'))+' · Client submission next day</span></div>'+
        [['trip','Trip Summary · Daily, Cummulative, Cancellation'],['transporter','Transporter-wise Dispatch · FTD / FTM'],['material','Material-wise Dispatch · Date & Total'],['destination','Destination-wise · Buyers, Trips, Quantity'],['despatch','Captive / Non-captive · Date & Cumulative']].map(x=>
        '<div class="dd-report"><strong>'+x[1]+'</strong><button class="btn primary small" onclick="tiomDDExport(\''+x[0]+'\')">Export Client XLSX</button></div>').join('')+
        '<p class="dd-note">An export is blocked when no authenticated E-Pass data exists or source buyer / material categories cannot be matched. Correct mappings instead of submitting wrong quantities.</p></section>';
@@ -100,24 +112,24 @@ window.tiomDDSearch=()=>{search=v('dd_search');page=1;window.tiomDDPanel('trips'
 window.tiomDDPage=delta=>{page=Math.max(1,page+delta);window.tiomDDPanel('trips');};
 window.tiomDDExport=async type=>{
   const to=v('dd_to');
-  if(!to)return say('Select a submission date first',true);
+  if(!to)return say('Select a reporting date first',true);
   const mode=v('dd_reportbasis')||'daily';
   const from=mode==='daily'?to:to.slice(0,7)+'-01';
-  const search=new URLSearchParams({from_date:from,to_date:to});
-  say('Generating client format '+type+' report…');
+  const p=new URLSearchParams({from_date:from,to_date:to});
+  say('Checking despatch data for '+to+'…');
   try{
-    const response=await fetch('/api/tiom/despatch/export/'+encodeURIComponent(type)+'?'+search.toString(),{credentials:'same-origin'});
-    if(!response.ok){
-      const body=await response.json().catch(()=>({}));
-      throw Error(body.detail||'Report unavailable: HTTP '+response.status);
-    }
-    const blob=await response.blob();
-    const url=URL.createObjectURL(blob);
-    const anchor=document.createElement('a');
-    anchor.href=url;anchor.download='AMIPL_'+type+'_'+to+'_Client_Format.xlsx';
-    document.body.appendChild(anchor);anchor.click();anchor.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),60000);
-    say('Client format '+type+' workbook prepared. Please verify output before submitting.');
+    const ready=await api('export-check/'+encodeURIComponent(type)+'?'+p.toString());
+    if(!ready.ready)throw Error(ready.message||'Source data not ready');
+    // Let Chrome handle the Excel download directly. Buffering a large
+    // workbook in fetch(blob) caused a long apparently frozen spinner.
+    const link=document.createElement('a');
+    link.href='/api/tiom/despatch/export/'+encodeURIComponent(type)+'?'+p.toString();
+    link.rel='nofollow';
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    say('Download started: '+type+' · '+ready.activeTrips+
+        ' MTD E-passes / '+f(ready.activeMt)+' MT. Date '+to+'.');
   }catch(err){say(err.message,true);}
 };
 window.tiomDDMail=async()=>{
