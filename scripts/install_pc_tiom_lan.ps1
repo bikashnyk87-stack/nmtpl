@@ -16,7 +16,7 @@ if (-not $administrator.IsInRole([Security.Principal.WindowsBuiltInRole]::Admini
     throw "Open PowerShell with Run as administrator; inbound Private-LAN firewall permission is required."
 }
 $privateIps=@(
-    Get-NetConnectionProfile | Where-Object {$_.NetworkCategory -eq "Private"} | ForEach-Object {
+    Get-NetConnectionProfile | Where-Object {$_.NetworkCategory -in @("Private","DomainAuthenticated")} | ForEach-Object {
         $iface=$_.InterfaceIndex
         Get-NetIPAddress -InterfaceIndex $iface -AddressFamily IPv4 -ErrorAction SilentlyContinue | Where-Object {
             $_.IPAddress -notmatch "^(127|169\.254)\." -and $_.IPAddress -notmatch "^0\."
@@ -25,7 +25,7 @@ $privateIps=@(
 )
 if ($privateIps.Count -eq 0) {
     Get-NetConnectionProfile | Format-Table InterfaceAlias,NetworkCategory,IPv4Connectivity | Out-Host
-    throw "No Private IPv4 network found. Only mark your trusted office network as Private; public Wi-Fi is not supported."
+    throw "No trusted Private/Domain office IPv4 network found. Public and guest Wi-Fi are not supported."
 }
 
 $dest=Join-Path $project "data\lan_server"
@@ -60,7 +60,7 @@ $firewallParams=@{
     Protocol="TCP"
     LocalPort=8765
     Program=$pythonw
-    Profile="Private"
+    Profile="Private,Domain"
     RemoteAddress="LocalSubnet"
     Action="Allow"
     Enabled="True"
@@ -78,7 +78,7 @@ Write-Host ""
 Write-Host "OFFICE LAN ACCESS CONFIGURED"
 @($privateIps | Select-Object -ExpandProperty IPAddress -Unique) | ForEach-Object {Write-Host ("Office browser URL: http://"+$_+":8765/tiom")}
 Write-Host "Local browser URL: http://127.0.0.1:8765/tiom"
-Write-Host "Firewall: Private LocalSubnet only, program=pythonw.exe, TCP 8765"
+Write-Host "Firewall: Private/Domain LocalSubnet only (never Public), pythonw.exe, TCP 8765"
 Write-Host "Startup task: $taskName"
 Write-Host "Server log: $project\logs\lan_server\uvicorn_8765.log"
 $listening=@(Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue)
