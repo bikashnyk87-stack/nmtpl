@@ -309,11 +309,130 @@ def _bootstrap_baseline(base_url: str, token: str) -> dict:
     }
 
 
+
+# These Despatch entities were introduced AFTER the original 77-table PC
+# baseline. Existing sync cursors must never be reset to pick them up.
+DESPATCH_MIRROR_TABLES = (
+    "tiom_despatch_sender",
+    "tiom_despatch_trip",
+    "tiom_despatch_permit_day",
+    "tiom_despatch_audit",
+)
+DESPATCH_BACKFILL_PATH = ROOT / "data" / "render_despatch_backfill.json"
+
+
+def _ensure_despatch_local_schema() -> list[str]:
+    """Create only missing Despatch schema on the local PostgreSQL PC.
+
+    Never drops any table, reinitializes the WB data or changes the watermark.
+    """
+    _assert_local_database()
+    from app.db import Base
+    from app.routers.tiom_despatch import (
+        DespatchSender, DespatchTrip, DespatchPermitDay, DespatchAudit,
+    )
+    from app.services.cloud_sync import init_sync_source
+    models = (DespatchSender, DespatchTrip, DespatchPermitDay, DespatchAudit)
+    with engine.connect() as conn:
+        before = set(inspect(conn).get_table_names())
+    missing = [model.__tablename__ for model in models
+               if model.__tablename__ not in before]
+    Base.metadata.create_all(engine, tables=[model.__table__ for model in models],
+                             checkfirst=True)
+    if missing:
+        # Existing bidirectional installations may have enabled local change
+        # tracking before these tables existed. Install triggers for new ones.
+        init_sync_source(engine, force_local=True)
+        logger.info("Created missing PC Despatch tables: %s", missing)
+    return missing
+
+
+def _repair_despatch_baseline(base_url: str, token: str) -> dict:
+    """Reconcile late-added tables through authenticated Render snapshots.
+
+    A separate progress file means the 77-table baseline and WB cursor remain
+    untouched. Each row is an idempotent primary-key upsert. A partial/failed
+    import simply retries on the next normal sync tick.
+    """
+    _assert_local_database()
+    manifest = _fetch_snapshot_manifest(base_url, token)
+    remote = set(manifest.get("tables") or ())
+    missing_remote = [t for t in DESPATCH_MIRROR_TABLES if t not in remote]
+    if missing_remote:
+        raise RuntimeError(
+            "Render snapshot is missing required Despatch tables: "
+            + ", ".join(missing_remote)
+        )
+    state = _load_json(DESPATCH_BACKFILL_PATH, {"completed": {}})
+    completed = dict(state.get("completed") or {})
+    merged = {}
+    verified = {}
+    with engine.connect() as conn:
+        local_tables = set(inspect(conn).get_table_names())
+    for name in DESPATCH_MIRROR_TABLES:
+        if name not in local_tables:
+            raise RuntimeError("Despatch mirror table absent on PC: " + name)
+        if completed.get(name) is True:
+            continue
+        count = 0
+        offset = 0
+        while True:
+            payload = _fetch_snapshot_table(base_url, token, name, offset, 500)
+            batch = payload.get("rows") or []
+            applied = _apply_snapshot_rows(name, batch)
+            if applied != len(batch):
+                raise RuntimeError(f"{name} snapshot skipped {len(batch)-applied} rows")
+            count += applied
+            if not payload.get("hasMore"):
+                break
+            next_offset = payload.get("nextOffset")
+            if next_offset is None or int(next_offset) <= offset:
+                raise RuntimeError(f"{name} snapshot pagination stalled at {offset}")
+            offset = int(next_offset)
+        merged[name] = count
+        with engine.begin() as conn:
+            quoted = '"' + name + '"'
+            current = int(conn.execute(
+                __import__("sqlalchemy").text(f"SELECT COUNT(*) FROM {quoted}")
+            ).scalar() or 0)
+            # Serial IDs restored from Render need a safe next local value.
+            if name in {"tiom_despatch_permit_day", "tiom_despatch_audit"}:
+                sequence = conn.execute(__import__("sqlalchemy").text(
+                    "SELECT pg_get_serial_sequence(:table_name, 'id')"
+                ), {"table_name": name}).scalar()
+                if sequence:
+                    conn.execute(__import__("sqlalchemy").text(
+                        f"SELECT setval(:sequence, GREATEST((SELECT COALESCE(MAX(id), 0) FROM {quoted}), 1), "
+                        f"(SELECT COUNT(*) > 0 FROM {quoted}))"
+                    ), {"sequence": sequence})
+            verified[name] = current
+        if current < count:
+            raise RuntimeError(
+                f"{name}: only {current} local rows after receiving {count}; "
+                "preserving watermark and retrying."
+            )
+        completed[name] = True
+        state["completed"] = completed
+        state["last_checked_at"] = datetime.now().astimezone().isoformat()
+        tmp = DESPATCH_BACKFILL_PATH.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+        tmp.replace(DESPATCH_BACKFILL_PATH)
+        logger.info("Despatch mirror baseline verified: %s=%s", name, current)
+    return {
+        "tables": len(DESPATCH_MIRROR_TABLES),
+        "newly_imported": merged,
+        "verified_local_counts": verified,
+        "complete": all(completed.get(t) for t in DESPATCH_MIRROR_TABLES),
+    }
+
+
+
 def _sync_once_unlocked() -> dict:
     _assert_local_database()
     cfg = _load_json(CONFIG_PATH, {})
     if not cfg.get("base_url") or not cfg.get("token"):
         raise RuntimeError("Base PC is not paired. Run: python scripts/pair_render_sync.py")
+    newly_created = _ensure_despatch_local_schema()
     state = _load_json(
         STATE_PATH,
         {"last_change_id": 0, "baseline_complete": False},
@@ -339,17 +458,21 @@ def _sync_once_unlocked() -> dict:
         "batches": 0,
         "baseline": baseline_result,
         "uploaded_to_render": uploaded,
+        "despatch_tables_created": newly_created,
     }
 
     while True:
         payload = _fetch_changes(cfg["base_url"], cfg["token"], cursor)
         changes = payload.get("changes") or []
         if not changes:
+            totals["despatch_repair"] = _repair_despatch_baseline(
+                cfg["base_url"], cfg["token"]
+            )
             _write_status(
                 state="RUNNING",
                 last_change_id=cursor,
                 last_result=totals,
-                message="No new cloud changes.",
+                message="Cloud changes and Despatch backfill verified.",
             )
             enable_tracking()
             return totals
@@ -366,11 +489,14 @@ def _sync_once_unlocked() -> dict:
         )
 
         if not payload.get("hasMore"):
+            totals["despatch_repair"] = _repair_despatch_baseline(
+                cfg["base_url"], cfg["token"]
+            )
             _write_status(
                 state="RUNNING",
                 last_change_id=cursor,
                 last_result=totals,
-                message="Cloud changes merged successfully.",
+                message="Cloud changes and Despatch backfill verified.",
             )
             enable_tracking()
             return totals
