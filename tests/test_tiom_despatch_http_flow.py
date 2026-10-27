@@ -87,7 +87,7 @@ def test_end_to_end_despatch_management():
                 assert ws["P1"].value == 62
                 assert ws["P5"].value == "10:00"
             else:
-                assert ws.cell(ws.max_row,ws.max_column).value == 62
+                assert ws.cell(ws.max_row, len(['Transporter', 'Destination', 'Material/Grade', 'Trips', 'Despatch MT'])).value == 62
             wb.close()
         with Session(engine) as db:
             actions=[x.action for x in db.scalars(select(mod.DespatchAudit)).all()]
