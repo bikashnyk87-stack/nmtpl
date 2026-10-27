@@ -328,8 +328,9 @@ def _sync_once_unlocked() -> dict:
         )
 
     from scripts.push_render_sync import PUSH_STATE, enable_tracking, push_pending
+    uploaded = 0
     if PUSH_STATE.exists():
-        push_pending(cfg["base_url"], cfg["token"], int(state.get("last_change_id", 0) or 0))
+        uploaded = push_pending(cfg["base_url"], cfg["token"], int(state.get("last_change_id", 0) or 0))
     cursor = int(state.get("last_change_id", 0) or 0)
     totals = {
         "insert_or_update": 0,
@@ -337,6 +338,7 @@ def _sync_once_unlocked() -> dict:
         "skipped": 0,
         "batches": 0,
         "baseline": baseline_result,
+        "uploaded_to_render": uploaded,
     }
 
     while True:
