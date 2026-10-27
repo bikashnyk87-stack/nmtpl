@@ -7,15 +7,15 @@ const h=s=>String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','
 const f=(n,d=3)=>Number(n||0).toLocaleString('en-IN',{minimumFractionDigits:d,maximumFractionDigits:d});
 const base=window.renderProduction, oldTab=window.tiomProdTab;
 function latestCompletedDespatchDate(){
-  // MIS reports a completed despatch day the NEXT morning. Compute from
-  // the TIOM's site-local boot date, not the UTC date of the Render host.
-  const raw=String(S.boot.today||'').slice(0,10);
-  const parts=raw.split('-').map(Number);
-  const d=parts.length===3&&parts.every(Number.isFinite)
-    ?new Date(parts[0],parts[1]-1,parts[2]-1)
-    :new Date(new Date().getFullYear(),new Date().getMonth(),new Date().getDate()-1);
-  return [d.getFullYear(),String(d.getMonth()+1).padStart(2,'0'),
-          String(d.getDate()).padStart(2,'0')].join('-');
+  // Despatch reporting follows the Asia/Kolkata CALENDAR DAY, independent of
+  // the TIOM mine shift date. After midnight on 28 Oct, C shift still belongs
+  // to the 27th, but the Despatch report must default to the 27th (not 26th).
+  const parts=new Intl.DateTimeFormat('en-GB',{
+    timeZone:'Asia/Kolkata',year:'numeric',month:'2-digit',day:'2-digit'
+  }).formatToParts(new Date());
+  const value=type=>Number(parts.find(p=>p.type===type)?.value);
+  const last=new Date(Date.UTC(value('year'),value('month')-1,value('day')-1));
+  return last.toISOString().slice(0,10);
 }
 
 let tab='dashboard',last={},page=1,search='';
