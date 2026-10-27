@@ -105,6 +105,9 @@ def test_installer_never_overwrites_existing_wb_sync_code():
     assert "data\\despatch_addon" in content
     assert "app.include_router(tiom_despatch.router)" in content
     assert "schtasks.exe /Create" in content
+    assert "pythonw.exe" in content
+    assert "without popup windows" in content
+    assert "wb sync" not in content.lower() or "unchanged" in content.lower()
     assert "git reset" not in content.lower()
     assert "git merge" not in content.lower()
     assert "scripts\\pull_render_sync.py" not in content
