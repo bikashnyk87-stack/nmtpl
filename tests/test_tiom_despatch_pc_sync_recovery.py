@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from sqlalchemy import create_engine, text
+from datetime import datetime
 from scripts import pull_render_sync as sync
 
 
@@ -34,7 +35,7 @@ def test_backfill_reconciles_late_tables_without_modifying_wb_cursor(tmp_path, m
     existing_cursor = tmp_path / "old_wb_cursor.json"
     existing_cursor.write_text('{"last_change_id": 48774, "baseline_complete": true}')
     fake_remote = {"tiom_despatch_sender": [
-        {"email": "allowed@example.com", "name": "Valid", "active": True}
+        {"email": "allowed@example.com", "name": "Valid", "active": True, "created_at": "2026-10-27T00:00:00"}
     ], "tiom_despatch_trip": [
         {"epass_no": "T1", "report_date": "2026-10-26", "permit_no": "P1",
          "net_mt": 30, "tare_mt": 15, "gross_mt": 45, "status": "ACTIVE"}
@@ -57,7 +58,10 @@ def test_backfill_reconciles_late_tables_without_modifying_wb_cursor(tmp_path, m
                              {"key": row[pk]})
                 from sqlalchemy import MetaData, Table
                 tbl = Table(table, MetaData(), autoload_with=conn)
-                conn.execute(tbl.insert().values(**row))
+                prepared = dict(row)
+                if "created_at" in prepared:
+                    prepared["created_at"] = datetime.fromisoformat(prepared["created_at"])
+                conn.execute(tbl.insert().values(**prepared))
         return len(rows)
     monkeypatch.setattr(sync, "_fetch_snapshot_manifest", manifest)
     monkeypatch.setattr(sync, "_fetch_snapshot_table", snapshot)
