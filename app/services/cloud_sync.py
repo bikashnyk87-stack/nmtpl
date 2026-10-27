@@ -42,6 +42,9 @@ SYNC_TABLES = (
     "maintenance_lubricant_usage", "maintenance_spare_usage",
     "maintenance_tyre", "maintenance_tyre_fitment",
     "maintenance_equipment_document",
+    # External despatch facts; image BLOBs stay on the canonical server.
+    "tiom_despatch_trip", "tiom_despatch_sender",
+    "tiom_despatch_permit_day", "tiom_despatch_audit",
 )
 
 _NAME_RE = re.compile(r"^[a-z_][a-z0-9_]*$")
