@@ -81,13 +81,35 @@ def test_end_to_end_despatch_management():
             assert resp.status_code == 200, (kind, resp.text)
             wb=load_workbook(BytesIO(resp.content),read_only=True)
             ws=wb.active
-            assert ws.max_row >= 6
             if kind == "trip":
-                assert ws["N1"].value == 2
-                assert ws["P1"].value == 62
-                assert ws["P5"].value == "10:00"
+                assert "Cummulative" in wb.sheetnames
+                assert "Cancellation" in wb.sheetnames
+                assert wb["01.10.26"]["N1"].value == 1
+                assert wb["26.10.26"]["P1"].value == 32
+                assert wb["Cummulative"]["N1"].value == 2
+                assert wb["Cummulative"]["P1"].value == 62
+            elif kind == "transporter":
+                assert "26.10.26" in wb.sheetnames
+                assert wb["26.10.26"]["D9"].value == 32
+                assert wb["26.10.26"]["D10"].value == 62
+                assert wb["26.10.26"]["CL24"].value == "Total Quantity"
+            elif kind == "material":
+                assert ws["A2"].value == "Date"
+                assert ws["O2"].value == "Total Dispatch"
+                assert ws["H3"].value == 30
+                assert ws["H28"].value == 32
+                assert ws["O34"].value.startswith("=SUM(")
+            elif kind == "destination":
+                assert ws["A2"].value == "DATE"
+                assert ws["N5"].value == "Trips"
+                assert ws["O6"].value == 30
+                assert ws["CN6"].value.startswith("=CM")
             else:
-                assert ws.cell(ws.max_row, 4 if kind == "material" else 5).value == 62
+                assert ws["B2"].value == "DABUNA PLANT"
+                assert ws["I2"].value == "NON CAPTIVE"
+                assert ws["F4"].value == 30
+                assert ws["F29"].value == 32
+                assert ws["V35"].value == "=V34"
             wb.close()
         with Session(engine) as db:
             actions=[x.action for x in db.scalars(select(mod.DespatchAudit)).all()]

@@ -501,89 +501,38 @@ def permit_reviews(request: Request, from_date: date = date(2026, 10, 1),
 
 
 @router.get("/export/{report_type}")
-def export_report(report_type: str, request: Request, from_date: date = date(2026, 10, 1),
-                  to_date: date = date(2026, 10, 31), db: Session = Depends(get_db)):
+def export_report(report_type: str, request: Request,
+                  from_date: date = date(2026, 10, 1),
+                  to_date: date = date(2026, 10, 31),
+                  db: Session = Depends(get_db)):
+    """Original client workbook layouts; cumulative data starts from month day 1."""
     _user(request, db)
     if report_type not in {"trip", "transporter", "material", "destination", "despatch"}:
         raise HTTPException(404, "Unknown report")
-    if (to_date - from_date).days > 370 or to_date < from_date:
-        raise HTTPException(422, "Invalid period")
-    wb = Workbook()
-    ws = wb.active
-    names = {"trip": "TRIP SUMMARY", "transporter": "TRANSPORTER WISE DISPATCH",
-             "material": "MATERIAL WISE DISPATCH", "destination": "DESTINATION WISE REPORT",
-             "despatch": "DESPATCH REPORT"}
-    ws.title = names[report_type][:31]
-    ws.merge_cells("A1:L1" if report_type == "trip" else "A1:E1")
-    ws["A1"] = f"TIOM — {names[report_type]} ({from_date:%d.%m.%Y} to {to_date:%d.%m.%Y})"
-    ws["A1"].font = Font(bold=True, size=14)
-    all_trips = db.scalars(select(DespatchTrip)
-                           .where(DespatchTrip.report_date.between(from_date, to_date),
-                                  DespatchTrip.status == "ACTIVE")
-                           .order_by(DespatchTrip.report_date, DespatchTrip.epass_no)).all()
-    if report_type == "trip":
-        heads = ["Sl.No.", "Permit No.", "Permit Qty.", "Buyer Name", "E-Pass No",
-                 "Vehicle RegNo", "Transporter Name", "Destination", "Material/Grade",
-                 "Stack No.", "Consignee Name", "Tare Wt.", "Gross Wt.", "Net Wt.", "Date", "Time"]
-        rows = [(i, x.permit_no, float(x.permit_qty), x.buyer, x.epass_no,
-                 x.vehicle_no, x.transporter, x.destination, x.material_grade,
-                 x.stack_no, x.consignee, float(x.tare_mt), float(x.gross_mt),
-                 float(x.net_mt), x.report_date.isoformat(), x.dispatch_time)
-                for i, x in enumerate(all_trips, 1)]
-    else:
-        from collections import defaultdict
-        groups = defaultdict(lambda: [0, Decimal("0")])
-        for x in all_trips:
-            if report_type == "transporter":
-                key = (x.transporter, x.destination, x.material_grade)
-            elif report_type == "material":
-                key = (x.report_date.isoformat(), x.material_grade)
-            elif report_type == "destination":
-                key = (x.buyer, x.destination, x.material_grade)
-            else:
-                key = (x.report_date.isoformat(),
-                       "CAPTIVE" if (x.buyer.casefold() == "self" or "ARCELOR" in x.consignee.upper()) else "NON CAPTIVE",
-                       x.destination)
-            groups[key][0] += 1
-            groups[key][1] += x.net_mt
-        heads = {
-            "transporter": ["Transporter", "Destination", "Material/Grade", "Trips", "Despatch MT"],
-            "material": ["Date", "Material/Grade", "Trips", "Despatch MT"],
-            "destination": ["Buyer Name", "Destination", "Material/Grade", "Trips", "Despatch MT"],
-            "despatch": ["Date", "Captive / Non-captive", "Destination", "Trips", "Despatch MT"],
-        }[report_type]
-        rows = [(*key, count, float(mt)) for key, (count, mt) in sorted(groups.items())]
-    for i, v in enumerate(heads, 1):
-        c = ws.cell(3, i, v)
-        c.fill = PatternFill("solid", fgColor="163D52")
-        c.font = Font(color="FFFFFF", bold=True)
-        c.alignment = Alignment(wrap_text=True)
-    for i, row in enumerate(rows, 4):
-        for col, v in enumerate(row, 1):
-            ws.cell(i, col, v)
-    for col in range(1, len(heads)+1):
-        ws.column_dimensions[__import__("openpyxl").utils.get_column_letter(col)].width = (
-            24 if col <= 4 else 18)
-    ws.freeze_panes = "A4"
-    ws.auto_filter.ref = f"A3:{__import__('openpyxl').utils.get_column_letter(len(heads))}{max(4, len(rows)+3)}"
-    last = len(rows)+5
-    ws.cell(last, 1, "TOTAL")
-    if report_type == "trip":
-        # Original Trip Summary totals are N1 (count) and P1 (net MT).
-        # Never put totals into the Date and Time columns.
-        ws["N1"] = len(all_trips)
-        ws["P1"] = float(sum((x.net_mt for x in all_trips), Decimal(0)))
-        ws.cell(last, 14, float(sum((x.net_mt for x in all_trips), Decimal(0))))
-    else:
-        ws.cell(last, len(heads)-1, len(all_trips))
-        ws.cell(last, len(heads), float(sum((x.net_mt for x in all_trips), Decimal(0))))
-    for c in ws[last]:
-        c.font = Font(bold=True)
-    buffer = BytesIO()
-    wb.save(buffer)
-    buffer.seek(0)
-    return StreamingResponse(buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                             headers={"Content-Disposition": f'attachment; filename="TIOM_{report_type}_{from_date}_{to_date}.xlsx"'})
+    if to_date < from_date or (to_date - from_date).days > 370:
+        raise HTTPException(422, "Invalid date range")
+    if (from_date.year, from_date.month) != (to_date.year, to_date.month):
+        raise HTTPException(422, "Export one calendar month at a time")
+    beginning = from_date.replace(day=1)
+    records = db.scalars(
+        select(DespatchTrip).where(
+            DespatchTrip.report_date.between(beginning, to_date),
+            DespatchTrip.status.in_(["ACTIVE", "CANCELLED"]),
+        ).order_by(DespatchTrip.report_date, DespatchTrip.epass_no)
+    ).all()
+    from app.services.tiom_despatch_client_reports import build_client_workbook
+    try:
+        buffer, summary = build_client_workbook(report_type, records, from_date, to_date)
+    except ValueError as exc:
+        raise HTTPException(409, str(exc)) from exc
+    filename = f"AMIPL_{report_type}_{to_date:%Y-%m-%d}_Client_Format.xlsx"
+    return StreamingResponse(
+        buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"',
+                 "X-Despatch-Trip-Count": str(summary["trips"]),
+                 "X-Despatch-Quantity-MT": str(summary["quantityMt"])}
+    )
+
 
 @router.post("/mail-sync")
 def mail_sync(request: Request, db: Session = Depends(get_db)):
