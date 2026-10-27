@@ -576,6 +576,28 @@ def export_report(report_type: str, request: Request,
     )
 
 
+@router.get("/mail-status")
+def mail_status(request: Request, db: Session = Depends(get_db)):
+    """Expose verified MIS Gmail importer health, never claim sync from configuration alone."""
+    _user(request, db)
+    from app.services.tiom_despatch_mail import DespatchMailPoll, DespatchEmailProcessed
+    p=db.get(DespatchMailPoll, "MIS")
+    imported=db.scalar(select(func.count()).select_from(DespatchEmailProcessed).where(
+        DespatchEmailProcessed.status=="IMPORTED")) or 0
+    rows=db.scalar(select(func.count()).select_from(DespatchEmailProcessed)) or 0
+    return {
+        "configuredMailbox": "mistiom@nmtpl.com",
+        "lastAttempt": p.last_attempt.isoformat() if p and p.last_attempt else None,
+        "lastSuccess": p.last_success.isoformat() if p and p.last_success else None,
+        "lastError": p.last_error if p else "",
+        "lastResult": json.loads(p.last_result or "{}") if p else {},
+        "messagesProcessed":rows,
+        "messagesWithDespatchData":imported,
+        "automaticPolling":"enabled_if_oauth_token_available",
+        "imageRule":"Emailed images are collected independently; permit figures require verification before reporting",
+    }
+
+
 @router.post("/mail-sync")
 def mail_sync(request: Request, db: Session = Depends(get_db)):
     """Management-triggered mailbox sync, separate from WB ingestion."""
