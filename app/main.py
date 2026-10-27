@@ -648,6 +648,7 @@ async def response_headers(request, call_next):
     return response
 
 from app.routers import volvo, automation, sync, tiom_despatch
+from app.services import tiom_despatch_mail  # register despatch Gmail message audit table before create_all
 app.include_router(volvo.router)
 app.include_router(automation.router)
 app.include_router(sync.router)
