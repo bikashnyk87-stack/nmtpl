@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from sqlalchemy import create_engine, text
-from datetime import datetime
+from datetime import date, datetime
 from scripts import pull_render_sync as sync
 
 
@@ -61,6 +61,8 @@ def test_backfill_reconciles_late_tables_without_modifying_wb_cursor(tmp_path, m
                 prepared = dict(row)
                 if "created_at" in prepared:
                     prepared["created_at"] = datetime.fromisoformat(prepared["created_at"])
+                if "report_date" in prepared:
+                    prepared["report_date"] = date.fromisoformat(prepared["report_date"])
                 conn.execute(tbl.insert().values(**prepared))
         return len(rows)
     monkeypatch.setattr(sync, "_fetch_snapshot_manifest", manifest)
