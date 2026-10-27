@@ -56,8 +56,7 @@ def test_backfill_reconciles_late_tables_without_modifying_wb_cursor(tmp_path, m
                 pk = "email" if table == "tiom_despatch_sender" else "epass_no"
                 conn.execute(text(f'DELETE FROM "{table}" WHERE "{pk}" = :key'),
                              {"key": row[pk]})
-                from sqlalchemy import MetaData, Table
-                tbl = Table(table, MetaData(), autoload_with=conn)
+                tbl = Base.metadata.tables[table]
                 prepared = dict(row)
                 if "created_at" in prepared:
                     prepared["created_at"] = datetime.fromisoformat(prepared["created_at"])
