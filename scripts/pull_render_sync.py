@@ -365,15 +365,29 @@ def _repair_despatch_baseline(base_url: str, token: str) -> dict:
         )
     state = _load_json(DESPATCH_BACKFILL_PATH, {"completed": {}})
     completed = dict(state.get("completed") or {})
+    remote_counts = manifest.get("despatchRowCounts") or {}
     merged = {}
     verified = {}
     with engine.connect() as conn:
         local_tables = set(inspect(conn).get_table_names())
+        local_counts = {
+            name: int(conn.execute(__import__("sqlalchemy").text(
+                f'SELECT COUNT(*) FROM "{name}"'
+            )).scalar() or 0)
+            for name in DESPATCH_MIRROR_TABLES if name in local_tables
+        }
     for name in DESPATCH_MIRROR_TABLES:
         if name not in local_tables:
             raise RuntimeError("Despatch mirror table absent on PC: " + name)
-        if completed.get(name) is True:
+        expected = remote_counts.get(name)
+        if completed.get(name) is True and (
+            expected is None or int(expected) == local_counts[name]
+        ):
+            verified[name] = local_counts[name]
             continue
+        # Source and PC disagree or this table has never been baselined:
+        # restore through authenticated PK upserts, never reset WB history.
+        completed.pop(name, None)
         count = 0
         offset = 0
         while True:
@@ -406,10 +420,12 @@ def _repair_despatch_baseline(base_url: str, token: str) -> dict:
                         f"(SELECT COUNT(*) > 0 FROM {quoted}))"
                     ), {"sequence": sequence})
             verified[name] = current
-        if current < count:
+        target = int(expected) if expected is not None else count
+        if current != target:
             raise RuntimeError(
-                f"{name}: only {current} local rows after receiving {count}; "
-                "preserving watermark and retrying."
+                f"{name} mirror row count mismatch: Render={target}, PC={current}. "
+                "No rows were deleted and WB cursor remains unchanged. "
+                "Review pending local edits or retry snapshot."
             )
         completed[name] = True
         state["completed"] = completed
