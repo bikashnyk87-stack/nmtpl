@@ -259,9 +259,20 @@ def snapshot_manifest(db: Session) -> dict:
         for deps in remaining.values():
             deps.difference_update(ready)
 
+    # Small late-added modules need safe baseline checks without resetting the
+    # existing PC cursor. Counts are for verification, not a destructive diff.
+    despatch_names = (
+        "tiom_despatch_sender", "tiom_despatch_trip",
+        "tiom_despatch_permit_day", "tiom_despatch_audit",
+    )
+    despatch_counts = {
+        name: int(db.execute(text(f'SELECT COUNT(*) FROM "{name}"')).scalar() or 0)
+        for name in despatch_names if name in existing_set
+    }
     return {
         "watermark": latest_change_id(db),
         "tables": ordered,
+        "despatchRowCounts": despatch_counts,
         "dependencies": {
             name: sorted(dependencies[name])
             for name in ordered
