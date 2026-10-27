@@ -136,12 +136,19 @@ app.include_router(tiom_despatch.router)
     # Scheduled task belongs only to Despatch. The existing every-3-min WB
     # scheduler, state files and token stay untouched.
     $taskName="NMTPL Despatch Mirror - Every 5 Minutes"
-    $command='"'+$python+'" "'+$worker+'"'
+    # Use the console-free executable: python.exe produces a visible terminal
+    # every five minutes when the task runs in the logged-on user's session.
+    # Keep the exact same task interval, current user, pairing and database.
+    $pythonw=Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
+    if (-not (Test-Path -LiteralPath $pythonw)) {
+        throw "Windows background Python missing: $pythonw. Despatch was mirrored, but no visible-window scheduler was created."
+    }
+    $command='"'+$pythonw+'" "'+$worker+'"'
     & schtasks.exe /Create /TN $taskName /SC MINUTE /MO 5 /TR $command /F | Out-Host
     if($LASTEXITCODE -ne 0) {
-        Write-Warning "Despatch data synced, but automatic task creation failed. Run PowerShell with rights to create your own scheduled task."
+        Write-Warning "Despatch data synced, but silent task creation failed. Existing WB tasks are unchanged."
     } else {
-        Write-Host "Automatic Despatch mirror scheduled every 5 minutes."
+        Write-Host "Automatic Despatch mirror scheduled every 5 minutes without popup windows."
     }
     $status=Join-Path $tools "mirror_status.json"
     Write-Host ""
