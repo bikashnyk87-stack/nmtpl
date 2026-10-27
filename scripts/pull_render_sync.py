@@ -134,12 +134,51 @@ def _coerce(column, value):
     return value
 
 
+
+def _upsert_row(conn, table, row, pk_names):
+    """Reconcile a meter reading by its unique site/date/shift/asset/type."""
+    stmt = pg_insert(table).values(**row)
+    update_values = {
+        key: getattr(stmt.excluded, key) for key in row if key not in pk_names
+    }
+    if table.name == "site_asset_meter":
+        pk_exists = conn.execute(
+            table.select().with_only_columns(table.c.reading_id).where(
+                table.c.reading_id == row["reading_id"]
+            )
+        ).first() is not None
+        if not pk_exists:
+            natural_key = [
+                "site_id", "operating_date", "shift", "asset_id", "meter_type"
+            ]
+            stmt = stmt.on_conflict_do_update(
+                constraint="uq_site_asset_meter",
+                set_={
+                    key: getattr(stmt.excluded, key)
+                    for key in row if key not in natural_key
+                },
+            )
+            conn.execute(stmt)
+            return
+    if update_values:
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[table.c[name] for name in pk_names],
+            set_=update_values,
+        )
+    else:
+        stmt = stmt.on_conflict_do_nothing(
+            index_elements=[table.c[name] for name in pk_names]
+        )
+    conn.execute(stmt)
+
+
 def _apply_batch(changes: list[dict]) -> dict:
     metadata = MetaData()
     reflected: dict[str, Table] = {}
     counts = {"insert_or_update": 0, "delete": 0, "skipped": 0}
 
     with engine.begin() as conn:
+        conn.execute(__import__("sqlalchemy").text("SELECT set_config('nmtpl.sync_apply', 'on', true)"))
         existing_tables = set(inspect(conn).get_table_names())
 
         for change in changes:
@@ -174,22 +213,7 @@ def _apply_batch(changes: list[dict]) -> dict:
                 counts["delete"] += 1
                 continue
 
-            stmt = pg_insert(table).values(**row)
-            update_values = {
-                key: getattr(stmt.excluded, key)
-                for key in row
-                if key not in pk_names
-            }
-            if update_values:
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=[table.c[name] for name in pk_names],
-                    set_=update_values,
-                )
-            else:
-                stmt = stmt.on_conflict_do_nothing(
-                    index_elements=[table.c[name] for name in pk_names]
-                )
-            conn.execute(stmt)
+            _upsert_row(conn, table, row, pk_names)
             counts["insert_or_update"] += 1
 
     return counts
@@ -201,6 +225,7 @@ def _apply_snapshot_rows(table_name: str, rows: list[dict]) -> int:
 
     metadata = MetaData()
     with engine.begin() as conn:
+        conn.execute(__import__("sqlalchemy").text("SELECT set_config('nmtpl.sync_apply', 'on', true)"))
         existing_tables = set(inspect(conn).get_table_names())
         if table_name not in SYNC_TABLES or table_name not in existing_tables:
             logger.warning("Baseline skipped local-missing table %s", table_name)
@@ -222,22 +247,7 @@ def _apply_snapshot_rows(table_name: str, rows: list[dict]) -> int:
                 raise RuntimeError(
                     f"Cannot baseline {table_name}: primary key missing from row."
                 )
-            stmt = pg_insert(table).values(**row)
-            update_values = {
-                key: getattr(stmt.excluded, key)
-                for key in row
-                if key not in pk_names
-            }
-            if update_values:
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=[table.c[name] for name in pk_names],
-                    set_=update_values,
-                )
-            else:
-                stmt = stmt.on_conflict_do_nothing(
-                    index_elements=[table.c[name] for name in pk_names]
-                )
-            conn.execute(stmt)
+            _upsert_row(conn, table, row, pk_names)
             applied += 1
         return applied
 
@@ -299,7 +309,7 @@ def _bootstrap_baseline(base_url: str, token: str) -> dict:
     }
 
 
-def sync_once() -> dict:
+def _sync_once_unlocked() -> dict:
     _assert_local_database()
     cfg = _load_json(CONFIG_PATH, {})
     if not cfg.get("base_url") or not cfg.get("token"):
@@ -317,6 +327,9 @@ def sync_once() -> dict:
             {"last_change_id": 0, "baseline_complete": False},
         )
 
+    from scripts.push_render_sync import PUSH_STATE, enable_tracking, push_pending
+    if PUSH_STATE.exists():
+        push_pending(cfg["base_url"], cfg["token"], int(state.get("last_change_id", 0) or 0))
     cursor = int(state.get("last_change_id", 0) or 0)
     totals = {
         "insert_or_update": 0,
@@ -336,6 +349,7 @@ def sync_once() -> dict:
                 last_result=totals,
                 message="No new cloud changes.",
             )
+            enable_tracking()
             return totals
 
         result = _apply_batch(changes)
@@ -356,7 +370,25 @@ def sync_once() -> dict:
                 last_result=totals,
                 message="Cloud changes merged successfully.",
             )
+            enable_tracking()
             return totals
+
+
+def sync_once() -> dict:
+    # Scheduled task and startup worker may overlap; one sync owns both cursors.
+    import msvcrt
+    lock_path = LOG_DIR / 'two_way_sync.lock'
+    with open(lock_path, 'a+b') as lock:
+        lock.seek(0)
+        try:
+            msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return {'busy': True, 'message': 'Sync is already running.'}
+        try:
+            return _sync_once_unlocked()
+        finally:
+            lock.seek(0)
+            msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
 
 
 def main() -> int:
