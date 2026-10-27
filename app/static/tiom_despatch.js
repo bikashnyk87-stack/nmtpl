@@ -17,13 +17,14 @@ async function api(path,body){
 const dates=()=>new URLSearchParams({from_date:v('dd_from'),to_date:v('dd_to')}).toString();
 function say(s,error=false){if($('dd_notice')){$('dd_notice').textContent=s;$('dd_notice').style.color=error?'#b42318':'#187463';}}
 window.renderProduction=function(){
+  const reopen=sessionStorage.getItem('TIOM_DESPATCH_TAB')==='YES';
   base();
   const nav=document.querySelector('.tiom-prod-tabs');
   if(nav&&!$('tp_despatch')){
     const b=document.createElement('button');b.id='tp_despatch';b.textContent='Despatch Report';
     b.onclick=()=>window.tiomProdTab('DESPATCH');nav.appendChild(b);
   }
-  if(sessionStorage.getItem('TIOM_DESPATCH_TAB')==='YES')window.tiomProdTab('DESPATCH');
+  if(reopen)window.tiomProdTab('DESPATCH');
 };
 window.tiomProdTab=function(name){
   if(name!=='DESPATCH'){sessionStorage.removeItem('TIOM_DESPATCH_TAB');return oldTab(name);}
