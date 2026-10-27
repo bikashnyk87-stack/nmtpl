@@ -514,7 +514,7 @@ def export_report(report_type: str, request: Request, from_date: date = date(202
              "material": "MATERIAL WISE DISPATCH", "destination": "DESTINATION WISE REPORT",
              "despatch": "DESPATCH REPORT"}
     ws.title = names[report_type][:31]
-    ws.merge_cells("A1:J1")
+    ws.merge_cells("A1:P1" if report_type == "trip" else "A1:E1")
     ws["A1"] = f"TIOM — {names[report_type]} ({from_date:%d.%m.%Y} to {to_date:%d.%m.%Y})"
     ws["A1"].font = Font(bold=True, size=14)
     all_trips = db.scalars(select(DespatchTrip)
