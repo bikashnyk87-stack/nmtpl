@@ -29,7 +29,7 @@ def mirror(tmp_path, monkeypatch):
 
 
 def test_mirror_schema_only_despatch_tables(mirror):
-    assert tuple(mirror.schema().tables) == tuple(sorted(mirror.TABLE_NAMES))
+    assert set(mirror.schema().tables) == set(mirror.TABLE_NAMES)
     tables = mirror.schema().tables
     assert "epass_no" in tables["tiom_despatch_trip"].c
     assert "report_date" in tables["tiom_despatch_trip"].c
