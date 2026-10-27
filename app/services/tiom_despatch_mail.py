@@ -33,6 +33,37 @@ class DespatchEmailProcessed(Base):
     checked_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class DespatchMailPoll(Base):
+    """Persistent evidence of automatic/manual MIS mailbox sync attempts."""
+    __tablename__ = "tiom_despatch_mail_poll"
+    id: Mapped[str] = mapped_column(String(30), primary_key=True)
+    last_attempt: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str] = mapped_column(Text, default="")
+    last_result: Mapped[str] = mapped_column(Text, default="{}")
+
+
+def _save_poll(stage, result=None, error=""):
+    import json
+    from datetime import timezone
+    with SessionLocal() as db:
+        item=db.get(DespatchMailPoll, "MIS")
+        if item is None:
+            item=DespatchMailPoll(id="MIS")
+            db.add(item)
+        now=datetime.now(timezone.utc)
+        if stage=="STARTED":
+            item.last_attempt=now
+            item.last_error=""
+        elif stage=="SUCCESS":
+            item.last_success=now
+            item.last_error=""
+            item.last_result=json.dumps(result or {})
+        elif stage=="ERROR":
+            item.last_error=str(error)[:400]
+        db.commit()
+
+
 def _message_date(text):
     for match in re.finditer(r"(?<!\d)(\d{1,2})[./-](\d{1,2})[./-](20\d{2}|\d{2})(?!\d)", text or ""):
         d, m, y = (int(part) for part in match.groups())
@@ -76,7 +107,7 @@ def _gmail_query(senders):
     ) + "}"
 
 
-def gmail_scan(max_messages=25):
+def _gmail_scan_actual(max_messages=25):
     from app.routers.automation import _prepare_gmail_token
     from scripts.wb_gmail_worker import gmail_service
 
@@ -183,3 +214,16 @@ def gmail_scan(max_messages=25):
             if not page:
                 break
     return result
+
+def gmail_scan(max_messages=25):
+    """Audit every poll, including idle/empty ones and Gmail quota failures."""
+    _save_poll("STARTED")
+    try:
+        report=_gmail_scan_actual(max_messages)
+    except Exception as exc:
+        _save_poll("ERROR",error=f"{type(exc).__name__}: {exc}")
+        log.exception("Despatch MIS Gmail sync failed")
+        raise
+    _save_poll("SUCCESS",result=report)
+    log.info("Despatch MIS Gmail poll succeeded: %s", report)
+    return report

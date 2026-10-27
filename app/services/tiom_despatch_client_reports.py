@@ -161,10 +161,16 @@ def _detail_page(ws, trips, cancellation=False):
     sizes=[8,17,15,33,24,18,39,25,25,19,55,12,12,12,18,21]
     for j,width in enumerate(sizes,1):
         ws.column_dimensions[col(j)].width=width
-    for i,trip in enumerate(trips,3):
-        vals=_trip_row(trip,i-2)
-        for j,v in enumerate(vals,1):
-            _style(ws,i,j,v,fmt=NUM if j in {3,12,13,14} else None)
+    # Thousands of trip records are present twice (daily + cumulative).
+    # Keep original values/number formats but bulk-append data rows: constructing
+    # 16 new Font, Border and Alignment objects PER TRIP was the main slowdown.
+    for i, trip in enumerate(trips, 1):
+        ws.append(_trip_row(trip, i))
+    for row in ws.iter_rows(min_row=3, max_row=len(trips)+2,
+                            min_col=3, max_col=14):
+        for c in row:
+            if c.column in (3, 12, 13, 14):
+                c.number_format=NUM
     ws.print_title_rows="1:2"
     ws.auto_filter.ref=f"A2:P{max(3,len(trips)+2)}"
     ws.print_area=f"A1:P{max(5,len(trips)+2)}"

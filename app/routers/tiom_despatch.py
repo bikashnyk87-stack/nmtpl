@@ -500,6 +500,48 @@ def permit_reviews(request: Request, from_date: date = date(2026, 10, 1),
     return [_as_dict(x) for x in rows]
 
 
+@router.get("/export-check/{report_type}")
+def export_check(report_type: str, request: Request,
+                 from_date: date, to_date: date,
+                 db: Session = Depends(get_db)):
+    """Fast report readiness check, before triggering a browser-native download."""
+    _user(request, db)
+    if report_type not in {"trip", "transporter", "material", "destination", "despatch"}:
+        raise HTTPException(404, "Unknown client report")
+    if to_date < from_date or (to_date-from_date).days > 370:
+        raise HTTPException(422, "Invalid reporting date range")
+    if (from_date.year, from_date.month) != (to_date.year, to_date.month):
+        raise HTTPException(422, "Choose one calendar month per client report")
+    begin=from_date.replace(day=1)
+    rows=db.scalars(select(DespatchTrip).where(
+        DespatchTrip.report_date.between(begin,to_date),
+        DespatchTrip.status=="ACTIVE")).all()
+    day_count=sum(x.report_date==to_date for x in rows)
+    total_mt=sum((Decimal(str(x.net_mt)) for x in rows),Decimal(0))
+    last_date=max((x.report_date for x in rows),default=None)
+    if not rows or not day_count:
+        last=last_date.isoformat() if last_date else "none"
+        return {"ready":False,"activeTrips":len(rows),"activeMt":float(total_mt),
+                "reportDate":to_date.isoformat(),
+                "message":f"No verified E-Pass trips for {to_date.isoformat()}. Latest available date: {last}. Check MIS Gmail import and the selected report date."}
+    from app.services.tiom_despatch_client_reports import _keymap, _material_counts
+    errors=[]
+    if report_type in {"destination","transporter"}:
+        _, missing = _keymap(rows)
+        if missing:
+            errors.append(f"{len(missing)} unmatched buyer/destination categories (e.g. {missing[0].epass_no})")
+    if report_type in {"material","despatch","transporter"}:
+        _, missing = _material_counts(rows)
+        if missing:
+            errors.append(f"{len(missing)} unmatched material grades (e.g. {missing[0].epass_no})")
+    if errors:
+        return {"ready":False,"activeTrips":len(rows),"activeMt":float(total_mt),
+                "reportDate":to_date.isoformat(),
+                "message":"Export needs source mapping corrections: "+"; ".join(errors)}
+    return {"ready":True,"activeTrips":len(rows),"activeMt":float(total_mt),
+            "reportDate":to_date.isoformat(),"lastImportedDay":last_date.isoformat()}
+
+
 @router.get("/export/{report_type}")
 def export_report(report_type: str, request: Request,
                   from_date: date = date(2026, 10, 1),
@@ -532,6 +574,28 @@ def export_report(report_type: str, request: Request,
                  "X-Despatch-Trip-Count": str(summary["trips"]),
                  "X-Despatch-Quantity-MT": str(summary["quantityMt"])}
     )
+
+
+@router.get("/mail-status")
+def mail_status(request: Request, db: Session = Depends(get_db)):
+    """Expose verified MIS Gmail importer health, never claim sync from configuration alone."""
+    _user(request, db)
+    from app.services.tiom_despatch_mail import DespatchMailPoll, DespatchEmailProcessed
+    p=db.get(DespatchMailPoll, "MIS")
+    imported=db.scalar(select(func.count()).select_from(DespatchEmailProcessed).where(
+        DespatchEmailProcessed.status=="IMPORTED")) or 0
+    rows=db.scalar(select(func.count()).select_from(DespatchEmailProcessed)) or 0
+    return {
+        "configuredMailbox": "mistiom@nmtpl.com",
+        "lastAttempt": p.last_attempt.isoformat() if p and p.last_attempt else None,
+        "lastSuccess": p.last_success.isoformat() if p and p.last_success else None,
+        "lastError": p.last_error if p else "",
+        "lastResult": json.loads(p.last_result or "{}") if p else {},
+        "messagesProcessed":rows,
+        "messagesWithDespatchData":imported,
+        "automaticPolling":"enabled_if_oauth_token_available",
+        "imageRule":"Emailed images are collected independently; permit figures require verification before reporting",
+    }
 
 
 @router.post("/mail-sync")
