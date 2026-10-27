@@ -45,8 +45,6 @@ def receive(db, device_id: str, base: int, entries: list[dict], initial: int = 0
         number = int(entry.get('changeId', -1))
         if number <= cursor:
             continue
-        if number != cursor + 1:
-            raise ValueError('Upload sequence gap.')
         name = entry.get('table')
         op = entry.get('operation')
         raw = entry.get('row')
