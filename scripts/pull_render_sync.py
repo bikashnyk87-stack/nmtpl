@@ -410,13 +410,14 @@ def _repair_despatch_baseline(base_url: str, token: str) -> dict:
                 __import__("sqlalchemy").text(f"SELECT COUNT(*) FROM {quoted}")
             ).scalar() or 0)
             # Serial IDs restored from Render need a safe next local value.
-            if name in {"tiom_despatch_permit_day", "tiom_despatch_audit"}:
+            if (engine.dialect.name == "postgresql" and
+                    name in {"tiom_despatch_permit_day", "tiom_despatch_audit"}):
                 sequence = conn.execute(__import__("sqlalchemy").text(
                     "SELECT pg_get_serial_sequence(:table_name, 'id')"
                 ), {"table_name": name}).scalar()
                 if sequence:
                     conn.execute(__import__("sqlalchemy").text(
-                        f"SELECT setval(:sequence, GREATEST((SELECT COALESCE(MAX(id), 0) FROM {quoted}), 1), "
+                        f"SELECT setval(CAST(:sequence AS regclass), GREATEST((SELECT COALESCE(MAX(id), 0) FROM {quoted}), 1), "
                         f"(SELECT COUNT(*) > 0 FROM {quoted}))"
                     ), {"sequence": sequence})
             verified[name] = current
