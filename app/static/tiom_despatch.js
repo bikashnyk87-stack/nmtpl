@@ -65,7 +65,7 @@ window.tiomDDPanel=async function(which){
     } else if(tab==='imports'){
       const imgs=await api('images');
       $('dd_body').innerHTML='<div class="dd-grid"><section class="dd-box"><b>Upload E-Pass data</b><p>Trip Summary Excel, or October historical CSV. Existing trips are not duplicated.</p>'+
-       '<input id="dd_importfile" type="file" accept=".xlsx,.csv"><button class="btn primary small" onclick="tiomDDImport()">Import</button>'+
+       '<input id="dd_importfile" type="file" accept=".xlsx,.csv"><button class="btn primary small" onclick="tiomDDImport()">Import</button><button class="btn secondary small" onclick="tiomDDMail()">Sync Approved Gmail Now</button>'+
        '<hr><b>AMNS daily image</b><label>Report date <input type="date" id="dd_imgdate" value="'+h(v('dd_to'))+'"></label>'+
        '<input id="dd_imgfile" type="file" accept="image/jpeg,image/png,image/webp">'+
        '<button class="btn secondary small" onclick="tiomDDImage()">Upload for review</button><p>Images are retained; their figures require confirmation before use in reports.</p></section>'+
@@ -87,6 +87,11 @@ window.tiomDDPanel=async function(which){
 window.tiomDDSearch=()=>{search=v('dd_search');page=1;window.tiomDDPanel('trips');};
 window.tiomDDPage=delta=>{page=Math.max(1,page+delta);window.tiomDDPanel('trips');};
 window.tiomDDExport=type=>window.location.assign('/api/tiom/despatch/export/'+encodeURIComponent(type)+'?'+dates());
+window.tiomDDMail=async()=>{
+  say('Checking MIS Gmail mailbox…');
+  try{const d=await api('mail-sync',JSON.stringify({}));say('Mailbox '+d.mailbox+': '+d.messagesScanned+' scanned, '+d.tripsInserted+' trips, '+d.imagesSaved+' images imported.');}
+  catch(e){say(e.message,true);}
+};
 window.tiomDDImport=async()=>{
   const file=$('dd_importfile')?.files?.[0];if(!file)return say('Choose an import file',true);
   const fd=new FormData();fd.append('file',file);
