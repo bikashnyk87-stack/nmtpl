@@ -580,7 +580,10 @@ def _local_gmail_setup_allowed(request: Request, user) -> bool:
     """Never accept OAuth secrets through an unencrypted office LAN connection."""
     from ipaddress import ip_address
     try:
-        return bool(user.admin and request.client and ip_address(request.client.host).is_loopback)
+        host = request.headers.get("host", "").split(":")[0].lower()
+        return bool(user.admin and request.client
+                    and ip_address(request.client.host).is_loopback
+                    and host in {"127.0.0.1", "localhost", "[::1]"})
     except ValueError:
         return False
 
