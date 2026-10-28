@@ -182,7 +182,7 @@ def parse_despatch_sources(data: bytes, filename: str) -> list[dict]:
             fields["source"] = (filename + " / " + sheet)[:200]
             extracted.append(fields)
     if not recognized or not extracted:
-        raise ValueError("No E-Pass-level source detected. Check the date/vehicle/pass/weight column headings")
+        raise ValueError("No E-Pass-level source detected (aggregate reports without E-Passes cannot create trips). Check date/vehicle/pass/weight headers")
     if len(extracted) > 100_000:
         raise ValueError("Too many E-Pass rows")
     return extracted
