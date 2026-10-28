@@ -165,7 +165,7 @@ def read_report(tokens: list[dict], width: float = 1000, height: float = 500) ->
         rowtext = normalize(group["text"])
         if "CANCEL" in rowtext or "NOTE" in rowtext or "TOTAL" in rowtext:
             continue
-        pm = PERMIT_PATTERN.search(rowtext.replace(" ", ""))
+        pm = PERMIT_PATTERN.search(rowtext)
         if not pm:
             continue
         permit = pm.group(0)
