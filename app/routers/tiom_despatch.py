@@ -691,6 +691,61 @@ def permit_reviews(request: Request, from_date: date = date(2026, 10, 1),
     return [_as_dict(x) for x in rows]
 
 
+@router.get("/mapping-status")
+def source_mapping_status(request: Request, report_date: date,
+                          db: Session = Depends(get_db)):
+    """Show true unmatched permits rather than hundreds of individual rows."""
+    _user(request, db)
+    from app.services.tiom_despatch_mapping import mapping_status
+    return mapping_status(db, report_date)
+
+
+class SourceMapReconcile(BaseModel):
+    report_date: date
+
+
+@router.post("/mapping-reconcile")
+def source_mapping_reconcile(p: SourceMapReconcile, request: Request,
+                             db: Session = Depends(get_db)):
+    csrf(request)
+    user = _user(request, db, edit=True)
+    from app.services.tiom_despatch_mapping import reconcile_known_permits, OPEN_DAY
+    if p.report_date < OPEN_DAY:
+        raise HTTPException(422, "1–26 October is completed; choose 27 October onward")
+    result = reconcile_known_permits(
+        db, actor=user.login_id, start_day=OPEN_DAY, end_day=p.report_date
+    )
+    return {**result, "mapping": source_mapping_status(request, p.report_date, db)}
+
+
+class SourceMapConfirm(BaseModel):
+    report_date: date
+    permit_no: str
+    category_index: int
+    document_id: str
+    expected_trips: int
+    confirmed_against_amns: bool
+
+
+@router.post("/mapping-confirm")
+def source_mapping_confirm(p: SourceMapConfirm, request: Request,
+                           db: Session = Depends(get_db)):
+    csrf(request)
+    user = _user(request, db, edit=True)
+    if not p.confirmed_against_amns:
+        raise HTTPException(422, "Compare the permit and grade against the AMNS image first")
+    from app.services.tiom_despatch_mapping import apply_confirmed_category
+    try:
+        result = apply_confirmed_category(
+            db, actor=user.login_id, report_date=p.report_date, permit_no=p.permit_no,
+            category_index=p.category_index, document_id=p.document_id,
+            expected_trips=p.expected_trips,
+        )
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    return result
+
+
 @router.get("/export-check/{report_type}")
 def export_check(report_type: str, request: Request,
                  from_date: date, to_date: date,
