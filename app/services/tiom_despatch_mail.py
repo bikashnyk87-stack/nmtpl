@@ -481,6 +481,17 @@ def _gmail_scan_actual(max_messages=25):
                 page = listing.get("nextPageToken")
                 if not page:
                     break
+    # Apply only provable exact-permit categories from completed E-Pass records.
+    # An unknown permit remains an explicit source-mapping exception; this
+    # never changes 1–26 October or the daily weight/vehicle/permit ledger.
+    try:
+        from app.services.tiom_despatch_mapping import reconcile_known_permits
+        with SessionLocal() as mapping_db:
+            mapping = reconcile_known_permits(mapping_db)
+        result["sourceCategoriesAutofilled"] = mapping["updatedTrips"]
+    except Exception:
+        log.exception("Automatic Despatch permit source reconciliation failed")
+        result["sourceCategoriesAutofilled"] = 0
     return result
 
 
