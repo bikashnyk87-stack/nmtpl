@@ -107,7 +107,8 @@ window.tiomDDPanel=async function(which){
        '<input id="dd_imgfile" type="file" accept="image/jpeg,image/png,image/webp">'+
        '<button class="btn secondary small" onclick="tiomDDImage()">Upload for review</button><p>Images are retained; their figures require confirmation before use in reports.</p></section>'+
        '<section class="dd-box"><b>Images pending verification</b>'+
-       (imgs.map(x=>'<div class="dd-image"><a target="_blank" href="/api/tiom/despatch/image/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a><small>'+h(x.report_date||'Date pending')+' · '+h(x.review_status)+'</small><button class="btn secondary tiny" onclick="tiomDDReview(\''+h(x.id)+'\')">Verify permit</button></div>').join('')||'No images uploaded yet')+'</section></div>'+
+       (imgs.filter(x=>!x.report_date||x.report_date>='2026-10-27').map(x=>'<div class="dd-image"><a target="_blank" href="/api/tiom/despatch/image/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a><small>'+h(x.report_date||'Date pending')+' · '+h(x.review_status)+'</small>'+
+       (x.review_status==='NEEDS_REVIEW'?'<button class="btn secondary tiny" onclick="tiomDDReview(\''+h(x.id)+'\')">Review against E-Passes</button>':'<small>Confirmed</small>')+'</div>').join('')||'No active AMNS images to verify (older images remain archived)')+'</section></div>'+
        '<section class="dd-box"><b>New Despatch exceptions · 27 Oct onward</b> · '+f(mail.attachmentsNeedingReview||0,0)+' pending'+
        '<p>Records through 26 Oct are already accepted and excluded from this list. Only verified E-Pass rows are imported; old files and trips are preserved.</p>'+
        '<button class="btn secondary small" onclick="tiomDDReconcileArchives()">Retry new exceptions</button>'+
@@ -242,19 +243,63 @@ window.tiomDDAddSender=async()=>{
   try{await api('senders',JSON.stringify({email:v('dd_newemail'),name:v('dd_newname'),active:true}));window.tiomDDPanel('senders');}
   catch(e){say(e.message,true);}
 };
-window.tiomDDReview=doc=>{
-  $('dd_editor').innerHTML='<section class="dd-box"><b>Verified permit from AMNS image</b><div class="dd-tools">'+
-  [['rdate','Date','date'],['permit','Permit','text'],['buyer','Buyer','text'],['dest','Destination','text'],['mat','Material','text'],
-   ['grade','Grade %','text'],['qty','Permit MT','number'],['trips','Reported trips','number'],['tonnes','Reported MT','number'],['balance','Balance MT','number']]
-   .map(x=>'<label>'+x[1]+' <input id="dd_'+x[0]+'" type="'+x[2]+'" '+(x[0]==='rdate'?'value="'+h(v('dd_to'))+'"':'')+'></label>').join('')+
-   '<button class="btn primary small" onclick="tiomDDSaveReview(\''+h(doc)+'\')">Save verified permit</button></div><p>Enter values exactly as checked on the original image; invalid grades above 100% are rejected.</p></section>';
+let activePermitPrefill=null;
+
+window.tiomDDReview=async doc=>{
+  say('Fetching permit details and despatch figures from the E-Pass ledger…');
+  try{
+    const source=await api('permit-prefill/'+encodeURIComponent(doc));
+    activePermitPrefill=source;
+    const permits=source.permits||[];
+    const heading='<section class="dd-box"><b>AMNS permit verification — ledger prefilled</b>'+
+      '<p>Report date: <strong>'+h(source.reportDate||'unverified')+'</strong> · '+f(source.totalTrips||0,0)+
+      ' active E-Passes · '+f(source.totalMt||0)+' MT. No trip records are edited by this form.</p>';
+    const select=permits.length?
+      '<label>Permit number (from E-Pass records) <select id="dd_permitselect" onchange="tiomDDPickPermit()">'+
+      permits.map((p,i)=>'<option value="'+i+'">'+h(p.permit_no)+' · '+p.reported_trips+' trips · '+f(p.reported_mt)+' MT</option>').join('')+
+      '</select></label>':'<p class="dd-warning">No matching E-Pass permit found for the image date. Image cannot be marked verified without source records.</p>';
+    const fields='<div class="dd-tools">'+
+      [['rdate','Date','date'],['permit','Permit','text'],['buyer','Buyer','text'],
+       ['dest','Destination','text'],['mat','Material / grade','text'],['grade','Grade % (image)','text'],
+       ['qty','Permit MT (image)','number'],['trips','E-Pass trips','number'],
+       ['tonnes','E-Pass despatch MT','number'],['balance','Balance MT (image)','number']]
+       .map(x=>'<label>'+x[1]+' <input id="dd_'+x[0]+'" type="'+x[2]+'" '+
+        (x[0]==='rdate'||x[0]==='permit'||x[0]==='trips'||x[0]==='tonnes'?'readonly ':'')+
+        (x[2]==='number'?'step="0.001" ':'')+'></label>').join('')+'</div>';
+    const foot='<p id="dd_permitnotice" class="dd-note"></p>'+
+      '<p>Fields unavailable from E-Pass source remain blank for comparison with the AMNS image. Do not guess material grade, permit quantity or balance.</p>'+
+      '<a target="_blank" rel="noopener" href="/api/tiom/despatch/image/'+encodeURIComponent(doc)+'">Open original AMNS image</a> · '+
+      '<button class="btn primary small" '+(!permits.length?'disabled ':'')+'onclick="tiomDDSaveReview(\''+h(doc)+'\')">Confirm checked permit</button></section>';
+    $('dd_editor').innerHTML=heading+select+fields+foot;
+    if(permits.length)window.tiomDDPickPermit();
+    else $('dd_rdate').value=source.reportDate||'';
+    $('dd_editor').scrollIntoView({block:'nearest'});
+  }catch(err){say('Could not fetch permit details: '+err.message,true);}
+};
+window.tiomDDPickPermit=()=>{
+  const permits=activePermitPrefill?.permits||[];
+  const p=permits[Number(v('dd_permitselect'))];
+  if(!p)return;
+  const vals={rdate:p.report_date,permit:p.permit_no,buyer:p.buyer,dest:p.destination,
+    mat:p.material,grade:p.grade_percent,qty:p.permit_qty,trips:p.reported_trips,
+    tonnes:p.reported_mt,balance:p.balance_mt};
+  Object.keys(vals).forEach(k=>{const element=$('dd_'+k);
+    if(element)element.value=(vals[k]===null||vals[k]===undefined)?'':String(vals[k]);});
+  $('dd_permitnotice').textContent=p.issues?.length?
+    'Requires image verification: '+p.issues.join('; '):
+    'Date, buyer, destination, material, permit quantity, trip count and MT fetched from E-Pass source. Image-only fields still require checking.';
 };
 window.tiomDDSaveReview=async doc=>{
   const body={report_date:v('dd_rdate'),permit_no:v('dd_permit'),buyer:v('dd_buyer'),destination:v('dd_dest'),
     material:v('dd_mat'),grade_percent:v('dd_grade'),permit_qty:v('dd_qty')||null,
     reported_trips:v('dd_trips')?Number(v('dd_trips')):null,reported_mt:v('dd_tonnes')||null,
     balance_mt:v('dd_balance')||null,document_id:doc};
-  try{await api('permit-review',JSON.stringify(body));say('Verified AMNS permit recorded');$('dd_editor').innerHTML='';}
-  catch(e){say(e.message,true);}
+  if(!body.permit_no||!body.report_date)return say('Select a verified E-Pass permit first.',true);
+  try{
+    await api('permit-review',JSON.stringify(body));
+    say('Permit reconciled and original AMNS image marked VERIFIED; E-Pass trips unchanged.');
+    $('dd_editor').innerHTML='';
+    await window.tiomDDPanel('imports');
+  }catch(e){say(e.message,true);}
 };
 })();
