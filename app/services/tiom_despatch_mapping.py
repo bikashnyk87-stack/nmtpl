@@ -72,6 +72,7 @@ def _is_classified(row):
 
 def mapping_status(db, day: date):
     from app.routers.tiom_despatch import DespatchTrip, DespatchDocument
+    from app.services.tiom_despatch_client_layout import material_normalized
     if day < OPEN_DAY:
         return {"reportDate": day.isoformat(), "closed": True, "totalTrips": 0,
                 "unmappedTrips": 0, "permits": [], "categories": [], "images": []}
@@ -109,7 +110,8 @@ def mapping_status(db, day: date):
         "unmappedTrips": sum(len(x) for x in pending.values()),
         "permits": sorted(permits, key=lambda x: (-x["tripCount"], x["permit_no"])),
         "categories": [{"index": i, "buyer": x[0], "destination": x[1], "material": x[2]}
-                       for i, x in enumerate(DESTINATION_BUCKETS)],
+                       for i, x in enumerate(DESTINATION_BUCKETS)
+                       if material_normalized(x[2], day) in VALID_MATERIALS],
         "images": [{"id": i.id, "name": i.filename} for i in images],
     }
 
@@ -208,6 +210,9 @@ def apply_confirmed_category(db, *, actor: str, report_date: date, permit_no: st
     if not rows or len(rows) != expected_trips:
         raise ValueError("Permit trip count changed; refresh before confirmation")
     choice = dict(zip(FIELDS, DESTINATION_BUCKETS[category_index]))
+    from app.services.tiom_despatch_client_layout import material_normalized
+    if material_normalized(choice["material_grade"], report_date) not in VALID_MATERIALS:
+        raise ValueError("This destination bucket is not recognized by the material-wise report; choose a supported grade")
     # Confirmed customer mapping cannot overwrite known, contradictory source.
     for row in rows:
         if not _matches_existing(row, choice):
