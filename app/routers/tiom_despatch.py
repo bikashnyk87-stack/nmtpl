@@ -511,10 +511,11 @@ async def upload_image(request: Request, file: UploadFile = File(...),
                            media_type=ctype, sha256=digest, image_data=contents)
     db.add(doc)
     db.add(DespatchAudit(actor=user.login_id, action="IMAGE_UPLOAD", entity_key=doc.id,
-                         reason="Image retained for comparison; needs manual review",
+                         reason="AMNS image retained; scheduled automatic E-Pass and cancellation reconciliation",
                          before_json=None, after_json=json.dumps({"filename": doc.filename, "date": str(report_date)})))
     db.commit()
-    return {"ok": True, "id": doc.id, "reviewStatus": "NEEDS_REVIEW"}
+    return {"ok": True, "id": doc.id, "reviewStatus": "NEEDS_REVIEW",
+            "automaticReconciliation": "Scheduled with next MIS Gmail check"}
 
 
 @router.get("/images")
@@ -522,6 +523,32 @@ def images(request: Request, db: Session = Depends(get_db)):
     _user(request, db)
     rows = db.scalars(select(DespatchDocument).order_by(DespatchDocument.created_at.desc()).limit(100)).all()
     return [_as_dict(x) for x in rows]
+
+
+@router.get("/amns-reconciliation/{document_id}")
+def amns_reconciliation_status(document_id: str, request: Request,
+                               db: Session = Depends(get_db)):
+    """Display automatic audit evidence, never expose unverified image guesses."""
+    _user(request, db)
+    image = db.get(DespatchDocument, document_id)
+    if not image:
+        raise HTTPException(404, "AMNS source image not found")
+    latest = db.scalar(select(DespatchAudit).where(
+        DespatchAudit.entity_key == image.id,
+        DespatchAudit.action == "AMNS_OCR_EXCEPTION",
+    ).order_by(DespatchAudit.changed_at.desc()).limit(1))
+    matched = db.scalars(select(DespatchPermitDay).where(
+        DespatchPermitDay.document_id == image.id,
+        DespatchPermitDay.report_date == image.report_date,
+        DespatchPermitDay.review_status == "CONFIRMED",
+    )).all() if image.report_date else []
+    return {"documentId":image.id, "reportDate":image.report_date.isoformat() if image.report_date else None,
+            "status":image.review_status,
+            "verifiedPermits":len(matched),
+            "verifiedTrips":sum((p.reported_trips or 0 for p in matched)),
+            "verifiedMt":float(sum((p.reported_mt or Decimal("0") for p in matched),
+                                   Decimal("0"))),
+            "reason":latest.reason if image.review_status == "OCR_EXCEPTION" and latest else None}
 
 
 @router.get("/image/{document_id}")
