@@ -64,8 +64,10 @@ def _populate_day(db):
         _trip("OLD-SNN","L102603256","25",before,
               "S N N MINERALS PRIVATE LIMITED.","Chandil","5-18mm(60-62)"),
     ])
-    for i in range(85):
-        db.add(_trip(f"L102604670/{i+1}","L102604670",
+    valid_epasses=[i for i in range(1,87) if i!=80]
+    assert len(valid_epasses)==85
+    for i,epass_no in enumerate(valid_epasses):
+        db.add(_trip(f"L102604670/{epass_no}","L102604670",
                      "39.290" if i==84 else "30.000"))
     # /80 is the precisely identified cancelled E-Pass; replace its original
     # weight with 31.850 and compensate another active E-Pass to keep the
