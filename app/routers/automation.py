@@ -63,10 +63,26 @@ def _secret_dotenv_values() -> dict[str, str]:
 
 
 def _gmail_token_raw() -> str:
-    return (
+    """Use cloud provisioned credentials, or a locally authorized PC token.
+
+    A local OAuth file is the canonical input for scripts/wb_gmail_worker.py.
+    Formerly the PC was forced to set a Render-only environment variable even
+    when its authorized token already existed at config/gmail_token.json.
+    Never log or return the credential content.
+    """
+    cloud = (
         os.getenv("GMAIL_TOKEN_JSON", "").strip()
         or _secret_file_text("gmail_token.json", "GMAIL_TOKEN_JSON")
     )
+    if cloud:
+        return cloud
+    path = ROOT / "config" / "gmail_token.json"
+    try:
+        if path.is_file() and path.stat().st_size <= 65536:
+            return path.read_text(encoding="utf-8-sig").strip()
+    except OSError:
+        pass
+    return ""
 
 
 def _prepare_gmail_token() -> Path:
