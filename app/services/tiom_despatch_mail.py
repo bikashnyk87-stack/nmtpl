@@ -303,6 +303,10 @@ def _scan_message(service, db, msgid, senders, result, *, recovery=False):
     imported, enriched, images, pending, matched = 0, 0, 0, 0, False
     reasons = []
     date_guess = _message_date(headers.get("subject", ""))
+    if date_guess is not None and date_guess < DESPATCH_OPEN_FROM:
+        # 1–26 October is already accepted by site. Never reimport it from Gmail.
+        result["skipped"] += 1
+        return None
     candidates = []
     for part in _parts(msg.get("payload", {})):
         filename = (part.get("filename") or "").strip()
