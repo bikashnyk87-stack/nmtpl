@@ -533,6 +533,84 @@ def image(document_id: str, request: Request, db: Session = Depends(get_db)):
     return Response(row.image_data, media_type=row.media_type, headers={"Cache-Control": "private, no-store"})
 
 
+def _single_source_value(rows, name):
+    """Return a ledger field only if all nonempty values agree."""
+    values = {str(getattr(row, name) or "").strip() for row in rows
+              if str(getattr(row, name) or "").strip()}
+    return next(iter(values)) if len(values) == 1 else ""
+
+
+def _prefill_permits_for_date(db, report_date: date):
+    """Read-only grouping of authenticated E-Pass rows for AMNS review."""
+    rows = list(db.scalars(select(DespatchTrip).where(
+        DespatchTrip.report_date == report_date, DespatchTrip.status == "ACTIVE"
+    )))
+    grouped = {}
+    for item in rows:
+        key = (item.permit_no or "").strip()
+        if not key:
+            continue
+        grouped.setdefault(key, []).append(item)
+    permits = []
+    for key, trips in grouped.items():
+        qtys = {Decimal(str(t.permit_qty)) for t in trips
+                if t.permit_qty is not None and t.permit_qty > 0}
+        known_qty = next(iter(qtys)) if len(qtys) == 1 else None
+        net = sum((Decimal(str(t.net_mt)) for t in trips), Decimal("0"))
+        issues = []
+        for col, label in (("buyer", "Buyer"), ("destination", "Destination"),
+                           ("material_grade", "Material / grade")):
+            distinct = {str(getattr(t, col) or "").strip().casefold()
+                        for t in trips if str(getattr(t, col) or "").strip()}
+            if len(distinct) > 1:
+                issues.append(label + " differs between E-Passes")
+            elif not distinct:
+                issues.append(label + " not provided by source")
+        if known_qty is None:
+            issues.append("Permit quantity not established in source")
+        if len(qtys) > 1:
+            issues.append("Conflicting permit quantities in source")
+        permits.append({
+            "permit_no": key, "report_date": report_date.isoformat(),
+            "buyer": _single_source_value(trips, "buyer"),
+            "destination": _single_source_value(trips, "destination"),
+            "material": _single_source_value(trips, "material_grade"),
+            "permit_qty": float(known_qty) if known_qty is not None else None,
+            "reported_trips": len(trips), "reported_mt": float(net),
+            # Balance requires a trustworthy permit issue quantity and
+            # opening utilization. It must NOT be guessed from daily MT.
+            "balance_mt": None, "grade_percent": "",
+            "issues": issues, "source": "Verified TIOM E-Pass ledger",
+        })
+    return {
+        "reportDate": report_date.isoformat(),
+        "totalTrips": len(rows),
+        "totalMt": float(sum((Decimal(str(t.net_mt)) for t in rows), Decimal("0"))),
+        "permits": sorted(permits, key=lambda p: (-p["reported_trips"], p["permit_no"])),
+        "unlinkedTrips": len(rows) - sum(len(group) for group in grouped.values()),
+    }
+
+
+@router.get("/permit-prefill/{document_id}")
+def permit_prefill(document_id: str, request: Request, db: Session = Depends(get_db)):
+    """Populate the AMNS review from EXISTING Despatch E-Passes, without OCR."""
+    _user(request, db)
+    document = db.get(DespatchDocument, document_id)
+    if not document:
+        raise HTTPException(404, "AMNS image not found")
+    if not document.report_date:
+        return {"ok": True, "reportDate": None, "documentId": document_id,
+                "status": document.review_status, "permits": [], "totalTrips": 0,
+                "totalMt": 0, "unlinkedTrips": 0,
+                "warning": "Image date is missing; report date must be confirmed."}
+    result = _prefill_permits_for_date(db, document.report_date)
+    result.update({"ok": True, "documentId": document_id,
+                   "status": document.review_status,
+                   "warning": ("Choose the permit shown in the image. Trip counts and MT are read-only; "
+                               "missing buyer, material and image-only fields need verification.")})
+    return result
+
+
 class PermitReview(BaseModel):
     report_date: date
     permit_no: str
@@ -555,8 +633,35 @@ def save_permit_review(p: PermitReview, request: Request, db: Session = Depends(
         raise HTTPException(422, "Permit number required")
     if p.grade_percent and (not re.fullmatch(r"\d{1,2}(?:\.\d{1,3})?%?", p.grade_percent) or float(p.grade_percent.rstrip("%")) > 100):
         raise HTTPException(422, "Grade requires correction; cannot exceed 100%")
-    if p.document_id and not db.get(DespatchDocument, p.document_id):
+    document = db.get(DespatchDocument, p.document_id) if p.document_id else None
+    if p.document_id and document is None:
         raise HTTPException(422, "Image reference not found")
+    if document:
+        if document.report_date and document.report_date != p.report_date:
+            raise HTTPException(422, "AMNS image date does not match the permit review date")
+        matches = list(db.scalars(select(DespatchTrip).where(
+            DespatchTrip.report_date == p.report_date,
+            DespatchTrip.permit_no == p.permit_no,
+            DespatchTrip.status == "ACTIVE",
+        )))
+        if not matches:
+            raise HTTPException(422, "No verified E-Pass records for this date and permit; cannot confirm image automatically")
+        verified_mt = sum((Decimal(str(t.net_mt)) for t in matches), Decimal("0"))
+        if p.reported_trips is not None and p.reported_trips != len(matches):
+            raise HTTPException(422, "Reported trips do not match existing E-Pass ledger")
+        if p.reported_mt is not None and abs(p.reported_mt - verified_mt) > Decimal(".025"):
+            raise HTTPException(422, "Reported MT does not match existing E-Pass ledger")
+        p.reported_trips = len(matches)
+        p.reported_mt = verified_mt
+        # Never silently overwrite loaded buyer/material/destination values
+        # with data typed from an image; expose disagreements for correction.
+        for field, source_field in (("buyer", "buyer"),
+                                    ("destination", "destination"),
+                                    ("material", "material_grade")):
+            candidate = str(getattr(p, field) or "").strip()
+            known = _single_source_value(matches, source_field)
+            if known and candidate and known.casefold() != candidate.casefold():
+                raise HTTPException(422, f"{field.title()} differs from the E-Pass ledger; review the source before confirming.")
     old = db.scalar(select(DespatchPermitDay).where(
         DespatchPermitDay.report_date == p.report_date,
         DespatchPermitDay.permit_no == p.permit_no))
@@ -567,6 +672,8 @@ def save_permit_review(p: PermitReview, request: Request, db: Session = Depends(
     for key, value in p.model_dump(exclude={"report_date", "permit_no"}).items():
         setattr(old, key, value)
     old.review_status = "CONFIRMED"
+    if document:
+        document.review_status = "VERIFIED"
     db.add(DespatchAudit(actor=user.login_id, action="AMNS_PERMIT_REVIEW",
                          entity_key=p.permit_no, reason="Image verified entry",
                          before_json=json.dumps(before), after_json=p.model_dump_json()))
