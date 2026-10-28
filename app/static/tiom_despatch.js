@@ -108,10 +108,10 @@ window.tiomDDPanel=async function(which){
        '<button class="btn secondary small" onclick="tiomDDImage()">Upload for review</button><p>Images are retained; their figures require confirmation before use in reports.</p></section>'+
        '<section class="dd-box"><b>Images pending verification</b>'+
        (imgs.map(x=>'<div class="dd-image"><a target="_blank" href="/api/tiom/despatch/image/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a><small>'+h(x.report_date||'Date pending')+' · '+h(x.review_status)+'</small><button class="btn secondary tiny" onclick="tiomDDReview(\''+h(x.id)+'\')">Verify permit</button></div>').join('')||'No images uploaded yet')+'</section></div>'+
-       '<section class="dd-box"><b>Gmail Excel exceptions only</b> · '+f(mail.attachmentsNeedingReview||0,0)+' pending'+
-       '<p>Verified imports are hidden automatically. Only verified E-Pass rows import. Aggregate totals are NOT converted into individual E-Pass trips; unresolved mismatches remain reviewable.</p>'+
-       '<button class="btn primary small" onclick="tiomDDReconcileArchives()">Reconcile saved Gmail files</button>'+
-       '<p><small>Automatically rechecked in batches during scheduled Gmail scans. Use this once to reconcile the existing historical backlog.</small></p>'+
+       '<section class="dd-box"><b>New Despatch exceptions · 27 Oct onward</b> · '+f(mail.attachmentsNeedingReview||0,0)+' pending'+
+       '<p>Records through 26 Oct are already accepted and excluded from this list. Only verified E-Pass rows are imported; old files and trips are preserved.</p>'+
+       '<button class="btn secondary small" onclick="tiomDDReconcileArchives()">Retry new exceptions</button>'+
+       '<p><small>New approved Gmail is checked automatically. Retry only when a new report needs correction.</small></p>'+
        (attachments.map(x=>'<div class="dd-image"><a download href="/api/tiom/despatch/mail-attachment/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a>'+
         '<small>'+h(x.reportDate||'Date unverified')+' · '+h(x.reason)+'</small></div>').join('')||'<p>No pending Excel exceptions. Existing imported records are preserved.</p>')+
        ((mail.attachmentsNeedingReview||0)>attachments.length?'<p><small>Showing the latest '+attachments.length+' unresolved files; the total appears above.</small></p>':'')+
@@ -171,7 +171,7 @@ window.tiomDDGmailConnect=async()=>{
 };
 window.tiomDDReconcileArchives=async()=>{
   let cursor='',messages=0,resolved=0,inserted=0,enriched=0,historical=0,remaining=0;
-  say('Reconciling saved approved-sender Gmail files against E-Pass ledger…');
+  say('Checking only Despatch files dated 27 Oct onward…');
   try{
     for(let batch=0;batch<25;batch++){
       const r=await api('mail-review-reconcile',JSON.stringify({after:cursor,force:true}));
@@ -184,7 +184,7 @@ window.tiomDDReconcileArchives=async()=>{
       cursor=r.nextCursor;
     }
     await window.tiomDDPanel('imports');
-    say('Saved Gmail sources checked: '+messages+' email(s); '+resolved+' source files verified; '+
+    say('New Despatch files checked: '+messages+' email(s); '+resolved+' source files verified; '+
         inserted+' new E-Passes; '+enriched+' transporter details enriched; '+
         historical+' out-of-scope files archived; '+remaining+' actual exceptions remain.');
   }catch(e){say('Saved Gmail reconciliation failed: '+e.message,true);}
