@@ -105,10 +105,13 @@ window.tiomDDPanel=async function(which){
        '<input id="dd_importfile" type="file" accept=".xls,.xlsx,.csv" multiple><button class="btn primary small" onclick="tiomDDImport()">Import</button><button class="btn secondary small" onclick="tiomDDMail()">Sync Approved Gmail Now</button>'+
        '<hr><b>AMNS image (optional, if not received by Gmail)</b><label>Report date <input type="date" id="dd_imgdate" value="'+h(v('dd_to'))+'"></label>'+
        '<input id="dd_imgfile" type="file" accept="image/jpeg,image/png,image/webp">'+
-       '<button class="btn secondary small" onclick="tiomDDImage()">Upload for review</button><p>Images are retained; their figures require confirmation before use in reports.</p></section>'+
-       '<section class="dd-box"><b>Images pending verification</b>'+
+       '<button class="btn secondary small" onclick="tiomDDImage()">Upload AMNS image</button><p>Images are processed automatically in the next Gmail scan; original image and reconciliation audit are retained.</p></section>'+
+       '<section class="dd-box"><b>AMNS reports — automatic E-Pass reconciliation</b>'+
+       '<p>AMNS image is read automatically on the MIS Gmail schedule. Permit details, cancellations and totals are checked against original E-Passes; only mismatches need review.</p>'+
        (imgs.filter(x=>!x.report_date||x.report_date>='2026-10-27').map(x=>'<div class="dd-image"><a target="_blank" href="/api/tiom/despatch/image/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a><small>'+h(x.report_date||'Date pending')+' · '+h(x.review_status)+'</small>'+
-       (x.review_status==='NEEDS_REVIEW'?'<button class="btn secondary tiny" onclick="tiomDDReview(\''+h(x.id)+'\')">Review against E-Passes</button>':'<small>Confirmed</small>')+'</div>').join('')||'No active AMNS images to verify (older images remain archived)')+'</section></div>'+
+       (x.review_status==='NEEDS_REVIEW'?'<small>Awaiting automatic source check</small>':
+         x.review_status==='VERIFIED'?'<small>Verified against E-Passes</small>':
+         '<button class="btn secondary tiny" onclick="tiomDDAmnsIssue(\''+h(x.id)+'\')">Show reconciliation issue</button>')+'</div>').join('')||'No active AMNS images to verify (older images remain archived)')+'</section></div>'+
        '<section class="dd-box"><b>New Despatch exceptions · 27 Oct onward</b> · '+f(mail.attachmentsNeedingReview||0,0)+' pending'+
        '<p>Records through 26 Oct are already accepted and excluded from this list. Only verified E-Pass rows are imported; old files and trips are preserved.</p>'+
        '<button class="btn secondary small" onclick="tiomDDReconcileArchives()">Retry new exceptions</button>'+
@@ -257,6 +260,14 @@ window.tiomDDImport=async()=>{
     say('Import verified: '+r.inserted+' new E-Passes, '+r.enriched+
       ' transporter details enriched, '+r.skippedExisting+' existing records preserved.');
     await window.tiomDDPanel('dashboard');
+  }catch(e){say(e.message,true);}
+};
+window.tiomDDAmnsIssue=async id=>{
+  try{
+    const status=await api('amns-reconciliation/'+encodeURIComponent(id));
+    say(status.reason?'AMNS reconciliation exception: '+status.reason:
+        'AMNS '+status.status+' · '+status.verifiedPermits+' verified permits · '+
+        status.verifiedTrips+' trips · '+f(status.verifiedMt)+' MT',!!status.reason);
   }catch(e){say(e.message,true);}
 };
 window.tiomDDImage=async()=>{
