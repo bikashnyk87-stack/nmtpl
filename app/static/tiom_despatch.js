@@ -118,7 +118,25 @@ window.tiomDDPanel=async function(which){
        ((mail.attachmentsNeedingReview||0)>attachments.length?'<p><small>Showing the latest '+attachments.length+' unresolved files; the total appears above.</small></p>':'')+
        '</section><div id="dd_editor"></div>';
     } else if(tab==='reports'){
-      $('dd_body').innerHTML='<section class="dd-box"><b>Five Client-Format Reports</b>'+
+      const mapping=await api('mapping-status?report_date='+encodeURIComponent(v('dd_to')));
+      last.sourceMapping=mapping;
+      const mapPanel=mapping.unmappedTrips?
+        '<section class="dd-box"><b>Source mapping · '+f(mapping.unmappedTrips,0)+' unclassified trips / '+mapping.permits.length+' permits</b>'+
+        '<p>Only missing classifications are corrected. Existing E-Pass weights, trip counts and 1–26 October records remain unchanged.</p>'+
+        '<button class="btn primary small" onclick="tiomDDRepairCategories()">Auto-fill from completed permit history</button>'+
+        mapping.permits.map((p,i)=>
+          '<div class="dd-report"><div><strong>'+h(p.permit_no)+'</strong> · '+f(p.tripCount,0)+' trips · '+f(p.netMt)+' MT'+
+          '<p><small>'+h(p.sourceMapped?'Verified prior permit available — use Auto-fill':'New or unmatched permit — check AMNS before selecting a client category')+'</small></p></div>'+
+          (p.sourceMapped?'<small>Auto-fill available</small>':
+           '<div><select id="dd_bucket_'+i+'"><option value="">Choose verified buyer / destination / grade</option>'+
+           mapping.categories.map(b=>'<option value="'+b.index+'">'+h(b.buyer)+' · '+h(b.destination)+' · '+h(b.material)+'</option>').join('')+
+           '</select><select id="dd_amns_'+i+'"><option value="">Choose the AMNS image</option>'+
+           mapping.images.map(img=>'<option value="'+h(img.id)+'">'+h(img.name)+'</option>').join('')+
+           '</select><button class="btn secondary small" onclick="tiomDDConfirmCategory('+i+')">Confirm one permit</button></div>')+
+          '</div>').join('')+'</section>':
+        '<section class="dd-box"><b>Source mappings verified for '+h(mapping.reportDate)+'</b> · '+
+        f(mapping.totalTrips,0)+' E-Passes classified</section>';
+      $('dd_body').innerHTML=mapPanel+'<section class="dd-box"><b>Five Client-Format Reports</b>'+
        '<p>Original Excel headings and layouts. All FTM / cumulative figures are calculated from the first day of the month, excluding cancelled trips.</p>'+
        '<div class="dd-tools"><label>Export basis <select id="dd_reportbasis"><option value="daily">Daily submission (To date + MTD)</option><option value="month">Month-to-date workbook (all daily sheets)</option></select></label>'+
        '<span>Reporting date: '+h(v('dd_to'))+' · Client submission next day</span></div>'+
@@ -136,6 +154,37 @@ window.tiomDDPanel=async function(which){
 };
 window.tiomDDSearch=()=>{search=v('dd_search');page=1;window.tiomDDPanel('trips');};
 window.tiomDDPage=delta=>{page=Math.max(1,page+delta);window.tiomDDPanel('trips');};
+window.tiomDDRepairCategories=async()=>{
+  const date=v('dd_to');if(!date)return say('Choose a Despatch reporting date',true);
+  say('Reconciling categories against exact, previously verified permits…');
+  try{
+    const x=await api('mapping-reconcile',JSON.stringify({report_date:date}));
+    await window.tiomDDPanel('reports');
+    say('Verified permit categories filled for '+f(x.updatedTrips,0)+' trips. '+
+        f(x.mapping?.unmappedTrips||0,0)+' trips still need confirmed permit classification.');
+  }catch(e){say(e.message,true);}
+};
+window.tiomDDConfirmCategory=async i=>{
+  const item=last.sourceMapping?.permits?.[i];
+  if(!item)return say('Refresh source mappings before confirming.',true);
+  const category=v('dd_bucket_'+i),image=v('dd_amns_'+i);
+  if(category==='')return say('Select the matching buyer, destination and material from AMNS.',true);
+  if(!image)return say('Select the matching-date AMNS image for verification.',true);
+  const selected=last.sourceMapping.categories.find(c=>c.index===Number(category));
+  if(!selected)return say('Invalid category selection.',true);
+  if(!window.confirm('Confirm AMNS image shows permit '+item.permit_no+
+    ' as '+selected.buyer+' / '+selected.destination+' / '+selected.material+
+    '? This will fill missing classification fields for '+item.tripCount+' trips, without changing MT.'))return;
+  try{
+    const r=await api('mapping-confirm',JSON.stringify({
+      report_date:last.sourceMapping.reportDate,permit_no:item.permit_no,
+      category_index:Number(category),document_id:image,
+      expected_trips:item.tripCount,confirmed_against_amns:true
+    }));
+    await window.tiomDDPanel('reports');
+    say('Confirmed '+r.tripsChecked+' trips for '+r.permit+'. Existing quantities were not changed.');
+  }catch(e){say(e.message,true);}
+};
 window.tiomDDExport=async type=>{
   const to=v('dd_to');
   if(!to)return say('Select a reporting date first',true);
