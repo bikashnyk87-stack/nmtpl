@@ -121,7 +121,9 @@ def _gmail_query(senders, *, recovery=False):
     safe = sorted(e.lower() for e in senders if re.fullmatch(r"[a-z0-9_.+%-]+@[a-z0-9.-]+", e.lower()))
     if not safe:
         return ""
-    label_filter = ("{label:NMTPL_DESPATCH_PROCESSED label:NMTPL_DESPATCH_REVIEW_REQUIRED}" if recovery else
+    # REVIEW_REQUIRED attachments are rechecked from their stored original bytes.
+    # Do not repeatedly re-download the same 25 Gmail review messages every poll.
+    label_filter = ("label:NMTPL_DESPATCH_PROCESSED" if recovery else
                     "-label:NMTPL_DESPATCH_PROCESSED -label:NMTPL_DESPATCH_REVIEW_REQUIRED")
     return "after:2026/09/30 has:attachment " + label_filter + " {" + (
         " ".join("from:" + e for e in safe)
@@ -278,7 +280,7 @@ def _scan_message(service, db, msgid, senders, result, *, recovery=False):
     """
     from app.services.tiom_despatch_source_adapters import detect_source_type
     existing = db.get(DespatchEmailProcessed, msgid)
-    if existing and not (recovery and existing.status in {"NO_MATCHING_DATA", "REVIEW_REQUIRED"}):
+    if existing and not (recovery and existing.status == "NO_MATCHING_DATA"):
         return None
     msg = service.users().messages().get(userId="me", id=msgid, format="full").execute()
     headers = {x["name"].lower(): x.get("value", "") for x in msg.get("payload", {}).get("headers", [])}
@@ -423,7 +425,7 @@ def _gmail_scan_actual(max_messages=25):
                 log.warning("Archived E-Pass records reconciled; Gmail review label could not be updated", exc_info=True)
         for recovery in (False, True):
             if recovery and not db.scalar(select(DespatchEmailProcessed.message_id).where(
-                DespatchEmailProcessed.status.in_(("NO_MATCHING_DATA", "REVIEW_REQUIRED"))).limit(1)):
+                DespatchEmailProcessed.status == "NO_MATCHING_DATA").limit(1)):
                 break
             remaining = min(max(1, max_messages), 50)
             query = _gmail_query(senders, recovery=recovery)
