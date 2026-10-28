@@ -118,7 +118,7 @@ def test_review_api_filters_already_imported_and_limits_results(monkeypatch):
 
 def test_frontend_only_exceptions_and_single_click_reconcile():
     js = (Path(__file__).parents[1] / "app" / "static" / "tiom_despatch.js").read_text("utf-8")
-    assert "Gmail Excel exceptions only" in js
+    assert "New Despatch exceptions · 27 Oct onward" in js
     assert "tiomDDReconcileArchives" in js
     assert "mail-review-reconcile" in js
     assert "Original Date-wise / Transporter-wise XLS summary files" not in js
