@@ -109,7 +109,7 @@ window.tiomDDPanel=async function(which){
        '<section class="dd-box"><b>Images pending verification</b>'+
        (imgs.map(x=>'<div class="dd-image"><a target="_blank" href="/api/tiom/despatch/image/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a><small>'+h(x.report_date||'Date pending')+' · '+h(x.review_status)+'</small><button class="btn secondary tiny" onclick="tiomDDReview(\''+h(x.id)+'\')">Verify permit</button></div>').join('')||'No images uploaded yet')+'</section></div>'+
        '<section class="dd-box"><b>Gmail Excel exceptions only</b> · '+f(mail.attachmentsNeedingReview||0,0)+' pending'+
-       '<p>Verified imports are hidden automatically. Existing source files are preserved; unresolved mismatches remain reviewable.</p>'+
+       '<p>Verified imports are hidden automatically. Only verified E-Pass rows import. Aggregate totals are NOT converted into individual E-Pass trips; unresolved mismatches remain reviewable.</p>'+
        '<button class="btn primary small" onclick="tiomDDReconcileArchives()">Reconcile saved Gmail files</button>'+
        '<p><small>Automatically rechecked in batches during scheduled Gmail scans. Use this once to reconcile the existing historical backlog.</small></p>'+
        (attachments.map(x=>'<div class="dd-image"><a download href="/api/tiom/despatch/mail-attachment/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a>'+
