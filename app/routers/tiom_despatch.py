@@ -172,118 +172,114 @@ def _trip(d):
 
 
 def _extract(data, filename):
-    """Read dated E-Pass trip sheets only; never turn summary totals into trips.
+    from app.services.tiom_despatch_source_adapters import parse_despatch_sources
+    return parse_despatch_sources(data, filename)
 
-    Supports both genuine legacy Excel .xls (BIFF8 via xlrd) and .xlsx. Some
-    legacy MIS exports have a .xls filename but contain OpenXML bytes.
-    """
-    if filename.lower().endswith(".csv"):
-        text = data.decode("utf-8-sig")
-        if not text.startswith("report_date,") and "report_date" not in text.splitlines()[0]:
-            raise ValueError("CSV must use TIOM October import column headings")
-        return list(csv.DictReader(StringIO(text)))
-    if not filename.lower().endswith((".xls", ".xlsx")):
-        raise ValueError("Use Trip Summary XLS/XLSX or TIOM dispatch CSV")
-    zip_format = data.startswith(bytes.fromhex("504B0304"))
-    legacy_format = data.startswith(bytes.fromhex("D0CF11E0A1B11AE1"))
-    if zip_format:
-        wb = load_workbook(BytesIO(data), read_only=True, data_only=True)
-        try:
-            sheets = [
-                (ws.title, [list(row) for row in ws.iter_rows(values_only=True)])
-                for ws in wb
-            ]
-        finally:
-            wb.close()
-    elif legacy_format:
-        try:
-            import xlrd
-        except ImportError as exc:
-            raise ValueError("Legacy XLS support (xlrd) is not installed") from exc
-        book = xlrd.open_workbook(file_contents=data, on_demand=True)
-        try:
-            sheets = [
-                (ws.name, [ws.row_values(i) for i in range(ws.nrows)])
-                for ws in book.sheets()
-            ]
-        finally:
-            book.release_resources()
-    else:
-        raise ValueError("Unsupported Excel binary format; review this file without importing trips")
-    extracted = []
-    for title, rows in sheets:
-        try:
-            day = datetime.strptime(title, "%d.%m.%y").date()
-        except ValueError:
-            continue  # Aggregate/cumulative/undated reports are not E-Pass trip ledgers.
-        if len(rows) < 2:
-            continue
-        header = [str(v or "").strip().casefold() for v in rows[1]]
-        if not all(x in header for x in ("e-pass no", "net wt.", "permit no.")):
-            continue
-        for row in rows[2:]:
-            if len(row) < 16 or not str(row[4] or "").strip():
-                continue
-            extracted.append(dict(zip(
-                ("serial", "permit_no", "permit_qty", "buyer", "epass_no",
-                 "vehicle_no", "transporter", "destination", "material_grade",
-                 "stack_no", "consignee", "tare_mt", "gross_mt", "net_mt",
-                 "dispatch_date", "dispatch_time"), row[:16]
-            ), report_date=day.isoformat(), source=filename + " / " + title))
-    if not extracted:
-        raise ValueError(
-            "No dated E-Pass Trip Summary sheets found; a Date-wise or "
-            "Transporter-wise aggregate cannot populate individual E-Pass trips"
-        )
-    return extracted
 
 def _import_data(db, data, filename, actor):
+    """Import verified weighments and enrich other source data by E-Pass ID.
+
+    Detailed sources add E-Pass rows; transporter manifests may fill only
+    missing transporter metadata, never fabricate weights or override a match.
+    Both source types are atomic: a mismatch blocks the entire upload.
+    """
     if len(data) > 12_000_000:
         raise ValueError("File exceeds 12 MB")
     raw = _extract(data, filename)
     if len(raw) > 100_000:
         raise ValueError("Too many rows")
-    seen = set()
-    trip_records = []
-    errors = []
-    for i, row in enumerate(raw, 1):
+    detailed = [row for row in raw if row.get("_role", "detailed") == "detailed"]
+    enrichment = [row for row in raw if row.get("_role") == "enrichment"]
+    seen, parsed, errors = set(), [], []
+    for i, row in enumerate(detailed, 1):
         try:
             trip = _trip(row)
             key = trip["epass_no"].upper()
             if key in seen:
-                raise ValueError("Repeated E-Pass within the upload")
+                raise ValueError("Repeated E-Pass within source")
             seen.add(key)
-            trip_records.append(trip)
+            parsed.append(trip)
         except ValueError as exc:
             errors.append({"row": i, "error": str(exc)})
+    seen_aux = set()
+    for i, row in enumerate(enrichment, 1):
+        epass = str(row.get("epass_no") or "").strip()
+        try:
+            if epass.upper() in seen_aux:
+                raise ValueError("Repeated E-Pass in transporter source")
+            seen_aux.add(epass.upper())
+            _date(row.get("report_date"))
+            _amount(row.get("net_mt"))
+            if not row.get("transporter") or not row.get("vehicle_no"):
+                raise ValueError("Vehicle and transporter are mandatory for enrichment")
+        except ValueError as exc:
+            errors.append({"row": i + len(detailed), "error": str(exc)})
     if errors:
-        return {"ok": False, "inserted": 0, "errors": errors[:30], "errorCount": len(errors), "reviewRequired": True}
-    # Batch lookups: the PC SQLite mirror may have a 999-bind limit.
+        return {"ok": False, "inserted": 0, "enriched": 0,
+                "errors": errors[:30], "errorCount": len(errors), "reviewRequired": True}
+    lookup_keys = list({x["epass_no"] for x in parsed} |
+                       {str(x["epass_no"]) for x in enrichment})
     existing = {}
-    keys = [x["epass_no"] for x in trip_records]
-    for offset in range(0, len(keys), 500):
+    for offset in range(0, len(lookup_keys), 500):
         for trip in db.scalars(select(DespatchTrip).where(
-            DespatchTrip.epass_no.in_(keys[offset:offset + 500])
+            DespatchTrip.epass_no.in_(lookup_keys[offset:offset + 500])
         )):
             existing[trip.epass_no.upper()] = trip
-    inserted = 0
-    mismatches = []
-    for entry in trip_records:
-        old = existing.get(entry["epass_no"].upper())
+    new_trips, enriched, mismatches = [], 0, []
+    for entry in parsed:
+        key = entry["epass_no"].upper()
+        old = existing.get(key)
         if old:
-            if old.net_mt != entry["net_mt"] or old.report_date != entry["report_date"]:
-                mismatches.append(entry["epass_no"])
+            if (abs(old.net_mt - entry["net_mt"]) > Decimal(".025") or
+                    old.report_date != entry["report_date"] or
+                    (old.vehicle_no and entry["vehicle_no"] and
+                     old.vehicle_no.strip().upper() != entry["vehicle_no"].strip().upper())):
+                mismatches.append(key + ": existing E-Pass weight/date/vehicle differs")
             continue
-        db.add(DespatchTrip(**entry))
-        inserted += 1
-    db.add(DespatchAudit(actor=actor, action="IMPORT", entity_key=filename[:160],
-                         reason="Historical despatch data import",
-                         before_json=None,
-                         after_json=json.dumps({"inserted": inserted, "duplicates": len(raw)-inserted,
-                                                "conflicts": mismatches[:100]})))
+        trip = DespatchTrip(**entry)
+        existing[key] = trip
+        new_trips.append(trip)
+    for entry in enrichment:
+        epass = str(entry["epass_no"]).strip()
+        old = existing.get(epass.upper())
+        if not old:
+            mismatches.append(epass + ": transporter manifest has no matching weighment E-Pass")
+            continue
+        if (old.report_date != _date(entry["report_date"]) or
+                abs(old.net_mt - _amount(entry["net_mt"])) > Decimal(".025") or
+                (old.vehicle_no.strip().upper() != str(entry["vehicle_no"]).strip().upper())):
+            mismatches.append(epass + ": transporter manifest date/MT/vehicle mismatch")
+            continue
+        transporter = str(entry["transporter"]).strip()
+        if old.transporter and old.transporter.strip().casefold() != transporter.casefold():
+            mismatches.append(epass + ": conflicting transporter; original retained")
+        elif not old.transporter:
+            old.transporter = transporter
+            enriched += 1
+    if mismatches:
+        db.rollback()
+        return {"ok": False, "inserted": 0, "enriched": 0, "errorCount": len(mismatches),
+                "errors": [{"row": 0, "error": x} for x in mismatches[:30]],
+                "reviewRequired": True, "conflicts": mismatches[:30],
+                "conflictCount": len(mismatches)}
+    for trip in new_trips:
+        db.add(trip)
+    db.add(DespatchAudit(
+        actor=actor, action="IMPORT", entity_key=filename[:160],
+        reason="Schema-detected E-Pass import / cross-source enrichment",
+        before_json=None, after_json=json.dumps({
+            "sourceRows": len(raw), "detailedRows": len(detailed),
+            "enrichmentRows": len(enrichment), "inserted": len(new_trips),
+            "transporterEnriched": enriched,
+            "duplicateEPasses": len(detailed) - len(new_trips),
+        })
+    ))
     db.commit()
-    return {"ok": True, "inserted": inserted, "skippedExisting": len(raw)-inserted,
-            "conflicts": mismatches[:30], "conflictCount": len(mismatches)}
+    return {"ok": True, "inserted": len(new_trips), "enriched": enriched,
+            "skippedExisting": len(detailed) - len(new_trips),
+            "conflicts": [], "conflictCount": 0, "sourceRows": len(raw),
+            "sourceType": "weighment" if detailed else "transporter_enrichment"}
+
 
 
 def _as_dict(x):
