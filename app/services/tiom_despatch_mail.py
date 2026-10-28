@@ -211,6 +211,7 @@ def recheck_archived_despatch(*, limit_messages=8, after="", force=False):
                         attachment.status = "OUT_OF_SCOPE"
                         attachment.reason = "Archived historical source; existing October ledger unchanged"
                         outside += 1
+                        db.commit()
                         continue
                     try:
                         if preliminary_error:
