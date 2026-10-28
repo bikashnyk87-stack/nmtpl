@@ -101,8 +101,8 @@ window.tiomDDPanel=async function(which){
         (mail.lastError?'<p class="dd-warning">Gmail error: '+h(mail.lastError)+'</p>':
          (!mail.lastSuccess?'<p class="dd-warning">Automatic sync has not yet been verified. Use Sync Approved Gmail Now to check the connection.</p>':''))+
         '<p>Daily image upload is OPTIONAL if an approved sender emailed it. AMNS images need verification; uploading an image does not start Gmail sync.</p></section>'+
-        '<div class="dd-grid"><section class="dd-box"><b>Upload E-Pass data</b><p>Original Trip Summary Excel or historical CSV for gap recovery only; no daily manual upload required when Gmail is fetching correctly.</p>'+
-       '<input id="dd_importfile" type="file" accept=".xlsx,.csv"><button class="btn primary small" onclick="tiomDDImport()">Import</button><button class="btn secondary small" onclick="tiomDDMail()">Sync Approved Gmail Now</button>'+
+        '<div class="dd-grid"><section class="dd-box"><b>Upload E-Pass data</b><p>Auto-detects E-Pass weighment and transporter report layouts from XLS, XLSX or CSV. Select both Date Wise and Transporter Wise together for verified merging. Existing trips are never overwritten.</p>'+
+       '<input id="dd_importfile" type="file" accept=".xls,.xlsx,.csv" multiple><button class="btn primary small" onclick="tiomDDImport()">Import</button><button class="btn secondary small" onclick="tiomDDMail()">Sync Approved Gmail Now</button>'+
        '<hr><b>AMNS image (optional, if not received by Gmail)</b><label>Report date <input type="date" id="dd_imgdate" value="'+h(v('dd_to'))+'"></label>'+
        '<input id="dd_imgfile" type="file" accept="image/jpeg,image/png,image/webp">'+
        '<button class="btn secondary small" onclick="tiomDDImage()">Upload for review</button><p>Images are retained; their figures require confirmation before use in reports.</p></section>'+
@@ -168,23 +168,23 @@ window.tiomDDGmailConnect=async()=>{
 };
 window.tiomDDMail=async()=>{
   say('Checking MIS Gmail mailbox…');
-  try{const d=await api('mail-sync',JSON.stringify({}));say('Mailbox '+d.mailbox+': '+d.messagesScanned+' scanned, '+d.tripsInserted+' trips, '+d.imagesSaved+' images imported.');}
+  try{const d=await api('mail-sync',JSON.stringify({}));say('Mailbox '+d.mailbox+': '+d.messagesScanned+' scanned, '+d.tripsInserted+' trips, '+(d.tripsEnriched||0)+' transporter details enriched, '+d.imagesSaved+' images.');}
   catch(e){say(e.message,true);}
 };
 window.tiomDDImport=async()=>{
-  const file=$('dd_importfile')?.files?.[0];if(!file)return say('Choose an import file',true);
-  const fd=new FormData();fd.append('file',file);
-  const button=$('dd_importfile')?.nextElementSibling;
-  if(button){button.disabled=true;button.textContent='Importing…';}
-  say('Validating and importing '+file.name+'…');
+  const files=[...($('dd_importfile')?.files||[])];
+  if(!files.length)return say('Choose one or more XLS, XLSX or CSV E-Pass sources.',true);
+  if(files.length>8)return say('Choose at most 8 source files per batch.',true);
+  const fd=new FormData();files.forEach(file=>fd.append('files',file));
+  say('Detecting source layouts and reconciling '+files.length+' file(s)…');
   try{
-    const r=await api('upload',fd);
-    if(!r.ok){say('Import blocked: '+r.errorCount+' invalid rows. '+(r.errors||[]).slice(0,3).map(x=>'Row '+x.row+': '+x.error).join('; '),true);return;}
-    say('Import completed: '+r.inserted+' new trips, '+r.skippedExisting+' existing, '+r.conflictCount+' conflicts.');
-    if(r.conflictCount) return;
+    const r=await api('upload-batch',fd);
+    if(!r.ok){say('Review required: '+(r.errors||[]).slice(0,3).map(x=>x.error).join('; ')+
+      (r.partial?' · Earlier validated files were committed.':''),true);return;}
+    say('Import verified: '+r.inserted+' new E-Passes, '+r.enriched+
+      ' transporter details enriched, '+r.skippedExisting+' existing records preserved.');
     await window.tiomDDPanel('dashboard');
-  } catch(e){say(e.message,true);}
-  finally{if(button){button.disabled=false;button.textContent='Import';}}
+  }catch(e){say(e.message,true);}
 };
 window.tiomDDImage=async()=>{
   const file=$('dd_imgfile')?.files?.[0];if(!file)return say('Choose the AMNS image',true);

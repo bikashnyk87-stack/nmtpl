@@ -118,7 +118,7 @@ def _gmail_query(senders, *, recovery=False):
     safe = sorted(e.lower() for e in senders if re.fullmatch(r"[a-z0-9_.+%-]+@[a-z0-9.-]+", e.lower()))
     if not safe:
         return ""
-    label_filter = ("label:NMTPL_DESPATCH_PROCESSED" if recovery else
+    label_filter = ("{label:NMTPL_DESPATCH_PROCESSED label:NMTPL_DESPATCH_REVIEW_REQUIRED}" if recovery else
                     "-label:NMTPL_DESPATCH_PROCESSED -label:NMTPL_DESPATCH_REVIEW_REQUIRED")
     return "after:2026/09/30 has:attachment " + label_filter + " {" + (
         " ".join("from:" + e for e in safe)
@@ -147,8 +147,14 @@ def _archive_for_review(db, msgid, sender, filename, binary, reason, report_date
 
 
 def _scan_message(service, db, msgid, senders, result, *, recovery=False):
+    """A single Gmail message can supply complementary weighment/manifests.
+
+    Detect each spreadsheet layout before processing so the detailed source
+    commits first and transporter rows can reconcile against its E-Pass IDs.
+    """
+    from app.services.tiom_despatch_source_adapters import detect_source_type
     existing = db.get(DespatchEmailProcessed, msgid)
-    if existing and not (recovery and existing.status == "NO_MATCHING_DATA"):
+    if existing and not (recovery and existing.status in {"NO_MATCHING_DATA", "REVIEW_REQUIRED"}):
         return None
     msg = service.users().messages().get(userId="me", id=msgid, format="full").execute()
     headers = {x["name"].lower(): x.get("value", "") for x in msg.get("payload", {}).get("headers", [])}
@@ -156,33 +162,52 @@ def _scan_message(service, db, msgid, senders, result, *, recovery=False):
     if sender not in senders:
         result["skipped"] += 1
         return None
-    imported, images, pending, matched = 0, 0, 0, False
+
+    imported, enriched, images, pending, matched = 0, 0, 0, 0, False
     reasons = []
     date_guess = _message_date(headers.get("subject", ""))
+    candidates = []
     for part in _parts(msg.get("payload", {})):
         filename = (part.get("filename") or "").strip()
         mime = (part.get("mimeType") or "").lower()
-        low = filename.lower()
-        if not low and mime not in {"image/jpeg", "image/png", "image/webp"}:
-            continue
-        spreadsheet = low.endswith((".xls", ".xlsx", ".csv"))
-        img = low.endswith((".jpg", ".jpeg", ".png", ".webp")) or mime in {
+        name = filename.lower()
+        spreadsheet = name.endswith((".xls", ".xlsx", ".csv"))
+        is_image = name.endswith((".jpg", ".jpeg", ".png", ".webp")) or mime in {
             "image/jpeg", "image/png", "image/webp"
         }
-        if not (spreadsheet or img):
+        if not (spreadsheet or is_image):
             continue
         binary = _attachment(service, msgid, part)
         if not binary or len(binary) > 12_000_000:
-            reasons.append(filename + ": missing attachment or file larger than 12 MB")
+            reasons.append(filename + ": missing data or exceeds 12 MB")
             continue
+        if spreadsheet:
+            try:
+                role = detect_source_type(binary, filename)
+                priority = 0 if role == "detailed" else 1
+            except ValueError:
+                priority = 2
+        else:
+            priority = 3
+        candidates.append((priority, filename, mime, binary, spreadsheet))
+    for _, filename, mime, binary, spreadsheet in sorted(candidates, key=lambda x: x[0]):
         if spreadsheet:
             try:
                 info = _import_data(db, binary, filename, "DESPATCH_GMAIL_ENGINE")
                 if not info.get("ok"):
-                    raise ValueError("E-Pass validation errors: " +
+                    raise ValueError("E-Pass validation failed: " +
                                      str(info.get("errors", [])[:2]))
                 imported += int(info.get("inserted", 0))
-                matched = True   # Idempotent existing E-Passes count as valid match.
+                enriched += int(info.get("enriched", 0))
+                matched = True
+                digest = sha256(binary).hexdigest()
+                old_review = db.scalar(select(DespatchMailAttachment).where(
+                    DespatchMailAttachment.message_id == msgid,
+                    DespatchMailAttachment.sha256 == digest,
+                ))
+                if old_review:
+                    old_review.status = "IMPORTED"
+                    old_review.reason = "Mapped and reconciled by E-Pass number"
             except ValueError as exc:
                 reason = str(exc)
                 if _archive_for_review(db, msgid, sender, filename, binary, reason, date_guess):
@@ -203,7 +228,8 @@ def _scan_message(service, db, msgid, senders, result, *, recovery=False):
             matched = True
     status = ("IMPORTED_WITH_REVIEW" if matched and pending else
               "IMPORTED" if matched else "REVIEW_REQUIRED")
-    details = ("Trips inserted=" + str(imported) + "; images=" + str(images) +
+    details = ("Trips inserted=" + str(imported) + "; transporter entries enriched=" +
+               str(enriched) + "; images=" + str(images) +
                "; spreadsheets for review=" + str(pending) + "; " +
                "; ".join(reasons)[:1200])
     if existing:
@@ -213,6 +239,7 @@ def _scan_message(service, db, msgid, senders, result, *, recovery=False):
                                      status=status, details=details))
     db.commit()
     result["tripsInserted"] += imported
+    result["tripsEnriched"] = result.get("tripsEnriched", 0) + enriched
     result["imagesSaved"] += images
     result["attachmentsForReview"] += pending
     if matched:
@@ -235,7 +262,7 @@ def _gmail_scan_actual(max_messages=25):
                            ", not the MIS mailbox mistiom@nmtpl.com.")
 
     result = {"mailbox": address, "messagesScanned": 0, "messagesImported": 0,
-              "tripsInserted": 0, "imagesSaved": 0, "skipped": 0,
+              "tripsInserted": 0, "tripsEnriched": 0, "imagesSaved": 0, "skipped": 0,
               "attachmentsForReview": 0, "recoveredEmails": 0, "errors": []}
     with SessionLocal() as db:
         _seed_senders(db)
@@ -252,7 +279,7 @@ def _gmail_scan_actual(max_messages=25):
                 ).execute()["id"]
         for recovery in (False, True):
             if recovery and not db.scalar(select(DespatchEmailProcessed.message_id).where(
-                DespatchEmailProcessed.status == "NO_MATCHING_DATA").limit(1)):
+                DespatchEmailProcessed.status.in_(("NO_MATCHING_DATA", "REVIEW_REQUIRED"))).limit(1)):
                 break
             remaining = min(max(1, max_messages), 50)
             query = _gmail_query(senders, recovery=recovery)
@@ -281,7 +308,8 @@ def _gmail_scan_actual(max_messages=25):
                 if processed_ids:
                     service.users().messages().batchModify(
                         userId="me", body={"ids": processed_ids,
-                            "addLabelIds": [label_ids["NMTPL_DESPATCH_PROCESSED"]]}
+                            "addLabelIds": [label_ids["NMTPL_DESPATCH_PROCESSED"]],
+                            "removeLabelIds": [label_ids["NMTPL_DESPATCH_REVIEW_REQUIRED"]]}
                     ).execute()
                 if review_ids:
                     service.users().messages().batchModify(
