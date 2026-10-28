@@ -370,3 +370,53 @@ def analyze_and_reconcile(db, document):
     if document.report_date and document.report_date != report["report_date"]:
         raise AMNSException("AMNS image printed date differs from supplied report date")
     return apply_reconciliation(db, document, report)
+
+
+
+def auto_process_pending_images(*, limit=3):
+    """Automatic idempotent batch on existing retained source images.
+
+    Handles Gmail-delivered and manually uploaded AMNS scans identically.
+    Failed OCR never touches E-Passes. Error is kept against image audit and
+    the document is not retried indefinitely until source/image is corrected.
+    """
+    from app.db import SessionLocal
+    from app.routers.tiom_despatch import DespatchAudit, DespatchDocument
+    from sqlalchemy import select
+    import json
+    passed = 0
+    issues = 0
+    outcomes = []
+    with SessionLocal() as db:
+        images = list(db.scalars(select(DespatchDocument).where(
+            DespatchDocument.report_date >= OPEN_DAY,
+            DespatchDocument.review_status == "NEEDS_REVIEW",
+        ).order_by(DespatchDocument.report_date, DespatchDocument.created_at).limit(limit)))
+        for doc in images:
+            try:
+                result = analyze_and_reconcile(db, doc)
+                passed += 1
+                outcomes.append(result)
+            except (AMNSException, ValueError) as exc:
+                db.rollback()
+                doc = db.get(DespatchDocument, doc.id)
+                doc.review_status = "OCR_EXCEPTION"
+                db.add(DespatchAudit(
+                    actor="AMNS_IMAGE_AUTO",
+                    action="AMNS_OCR_EXCEPTION",
+                    entity_key=doc.id,
+                    reason=str(exc)[:500],
+                    before_json=None,
+                    after_json=json.dumps({"documentId":doc.id,"sha256":doc.sha256,
+                                           "reportDate":doc.report_date.isoformat(),
+                                           "error":str(exc)[:400]})
+                ))
+                db.commit()
+                issues += 1
+                outcomes.append({"ok":False,"documentId":doc.id,
+                                 "reason":str(exc)[:240]})
+            except Exception:
+                db.rollback()
+                log.exception("AMNS automatic image processing failed unexpectedly")
+                raise
+    return {"verifiedImages":passed, "imagesNeedingReview":issues, "results":outcomes}
