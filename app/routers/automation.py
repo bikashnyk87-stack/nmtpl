@@ -89,7 +89,7 @@ def _prepare_gmail_token() -> Path:
     raw = _gmail_token_raw()
     if not raw:
         raise RuntimeError(
-            "Gmail token is not configured. Set GMAIL_TOKEN_JSON or add Render Secret File gmail_token.json."
+            "MIS Gmail is not connected on this server. On the PC use Despatch Report > Mail & Image Imports > Connect MIS Gmail; on Render set GMAIL_TOKEN_JSON or its Secret File."
         )
     try:
         payload = json.loads(raw)
