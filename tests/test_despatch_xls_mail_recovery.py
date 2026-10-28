@@ -98,4 +98,4 @@ def test_review_ui_keeps_original_xls_download_separate_from_trip_ledger():
     source=(Path(__file__).resolve().parents[1]/"app"/"static"/"tiom_despatch.js").read_text(encoding="utf-8")
     assert "api('mail-attachments')" in source
     assert "mail-attachment/" in source
-    assert "NOT converted into individual E-Pass trips" in source
+    assert "Only verified E-Pass rows are imported" in source
