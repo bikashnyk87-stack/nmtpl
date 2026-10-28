@@ -100,18 +100,20 @@ def test_new_permit_requires_matching_amns_image_and_explicit_choice():
         db.commit()
         with pytest.raises(ValueError,match="AMNS image"):
             apply_confirmed_category(db,actor="ADMIN",report_date=today,
-                                     permit_no="NEW",category_index=3,
+                                     permit_no="NEW",category_index=6,
                                      document_id="NONEXISTENT",expected_trips=86)
         with pytest.raises(ValueError,match="trip count"):
             apply_confirmed_category(db,actor="ADMIN",report_date=today,
-                                     permit_no="NEW",category_index=3,
+                                     permit_no="NEW",category_index=6,
                                      document_id="IMAGE-27",expected_trips=85)
         result=apply_confirmed_category(db,actor="ADMIN",report_date=today,
-                                       permit_no="NEW",category_index=3,
+                                       permit_no="NEW",category_index=6,
                                        document_id="IMAGE-27",expected_trips=86)
         assert result["tripsChecked"]==86
         assert result["changedFields"]==3*86
-        assert mapping_status(db,today)["unmappedTrips"]==0
+        status=mapping_status(db,today)
+        assert status["unmappedTrips"]==0
+        assert all(x["index"]!=3 for x in status["categories"])
         assert sum(float(t.net_mt) for t in db.scalars(select(router.DespatchTrip)))==86*30
 
 
@@ -125,7 +127,7 @@ def test_nonempty_conflicting_source_category_blocks_bulk_change():
         db.commit()
         with pytest.raises(ValueError,match="conflicts"):
             apply_confirmed_category(db,actor="ADMIN",report_date=date(2026,10,27),
-                permit_no="NEW",category_index=3,document_id="IMG",expected_trips=1)
+                permit_no="NEW",category_index=6,document_id="IMG",expected_trips=1)
         assert db.get(router.DespatchTrip,"NEW/1").destination==""
 
 
