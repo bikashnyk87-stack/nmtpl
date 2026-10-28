@@ -73,13 +73,22 @@ def patch(current: dict[str, str], upstream: dict[str, str]) -> dict[str, str]:
     return out
 
 
-def install(root: Path) -> None:
+def install(root: Path, *, source_dir: Path | None = None) -> None:
+    """Read staged PowerShell downloads if available; no Python network use."""
     root = root.resolve()
     old = {name: (root / name).read_text(encoding="utf-8-sig") for name in FILES}
     fresh = {}
     for name in (AUTOMATION, DESPATCH, JS):
-        with urlopen(RAW + name, timeout=60) as response:
-            fresh[name] = response.read(256_000).decode("utf-8-sig")
+        if source_dir is not None:
+            candidate = source_dir.resolve() / name
+            if not candidate.is_file() or candidate.stat().st_size > 256_000:
+                raise RuntimeError(f"Invalid/missing staged file: {name}. Nothing changed.")
+            fresh[name] = candidate.read_text(encoding="utf-8-sig")
+        else:
+            with urlopen(RAW + name, timeout=120) as response:
+                fresh[name] = response.read(256_001).decode("utf-8-sig")
+            if len(fresh[name]) > 256_000:
+                raise RuntimeError(f"Upstream file too large: {name}. Nothing changed.")
     changes = patch(old, fresh)
     backup = root / BACKUP_DIR / ("gmail_pc_safe_" + datetime.now().strftime("%Y%m%d_%H%M%S"))
     for name in FILES:
@@ -115,4 +124,9 @@ def install(root: Path) -> None:
 
 
 if __name__ == "__main__":
-    install(Path(os.environ.get("NMTPL_PC_PROJECT_ROOT", str(DEFAULT_ROOT))))
+    import argparse
+    parser = argparse.ArgumentParser(description="Safely install the PC Despatch Gmail connection UI")
+    parser.add_argument("--source-dir", type=Path, help="PowerShell predownloaded files; no Python network calls")
+    parser.add_argument("--project-root", type=Path, default=Path(os.environ.get("NMTPL_PC_PROJECT_ROOT", str(DEFAULT_ROOT))))
+    args = parser.parse_args()
+    install(args.project_root, source_dir=args.source_dir)
