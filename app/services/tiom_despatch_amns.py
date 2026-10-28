@@ -83,15 +83,14 @@ def _category(raw_text, grade):
     if "SCREENED FINES" in up and "DABUNA" in up and re.search(r"\bAM\s*/?\s*NS\b", up):
         return {"buyer": "Self", "destination": "Dabuna",
                 "material_grade": grade_bucket(grade, "SCREENED FINES")}
-    # Exact previously validated permit history is preferred for the
-    # non-captive TUIDUNGRI/SARAIKELA = customer depot categories. The image
-    # records original place name; do not guess that it means another location.
+    # Preserve the destination literally printed in the approved report.
+    # Do not reinterpret Tuidungri as Chandil or another customer location.
     if "5X18" in up and "TUIDUNGRI" in up:
         if "DNA MINERALS" in up:
-            return {"buyer": "DNA MINERALS PVT LTD", "destination": None,
+            return {"buyer": "DNA MINERALS PVT LTD", "destination": "Tuidungri (Saraikela)",
                     "material_grade": grade_bucket(grade, "5X18")}
         if "SNN MINERALS" in up:
-            return {"buyer": "S N N MINERALS PRIVATE LIMITED.", "destination": None,
+            return {"buyer": "S N N MINERALS PRIVATE LIMITED.", "destination": "Tuidungri (Saraikela)",
                     "material_grade": grade_bucket(grade, "5X18")}
     raise AMNSException("Unrecognized buyer/destination/material combination in AMNS image")
 
@@ -279,18 +278,6 @@ def plan_reconciliation(db, report):
             raise AMNSException(f"Permit {permit}: AMNS says {item['trips']} trips/"
                                 f"{item['dispatch_mt']} MT; Gmail E-Passes give "
                                 f"{count} trips/{quantity} MT")
-        if item["destination"] is None:
-            earlier = list(db.scalars(select(DespatchTrip).where(
-                DespatchTrip.permit_no == permit, DespatchTrip.report_date < day,
-                DespatchTrip.status == "ACTIVE"
-            )))
-            from app.services.tiom_despatch_client_layout import destination_bucket_index
-            valid = {x.destination for x in earlier
-                     if destination_bucket_index(x) is not None
-                     and x.buyer.strip().casefold() == item["buyer"].casefold()}
-            if len(valid) != 1:
-                raise AMNSException("No unique historical destination for " + permit)
-            item["destination"] = next(iter(valid))
         for trip in trips:
             for field in ("buyer", "destination", "material_grade"):
                 old = str(getattr(trip, field) or "").strip()
