@@ -12,7 +12,7 @@ from email.utils import parseaddr
 from hashlib import sha256
 from uuid import uuid4
 
-from sqlalchemy import DateTime, Integer, String, Text, LargeBinary, select
+from sqlalchemy import Date, DateTime, Integer, String, Text, LargeBinary, select
 from sqlalchemy.orm import Mapped, Session, mapped_column
 
 from app.db import Base, SessionLocal
@@ -39,7 +39,7 @@ class DespatchMailAttachment(Base):
     id: Mapped[str] = mapped_column(String(40), primary_key=True)
     message_id: Mapped[str] = mapped_column(String(128), index=True)
     sender: Mapped[str] = mapped_column(String(200))
-    report_date: Mapped[date | None] = mapped_column(DateTime, nullable=True)
+    report_date: Mapped[date | None] = mapped_column(Date, nullable=True)
     filename: Mapped[str] = mapped_column(String(255))
     sha256: Mapped[str] = mapped_column(String(64), index=True)
     mime_type: Mapped[str] = mapped_column(String(100))
