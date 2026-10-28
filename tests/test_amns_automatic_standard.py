@@ -107,7 +107,8 @@ def test_report_parsed_from_image_tokens_with_cancellation():
     assert rows["L102604670"]["destination"]=="Dabuna"
     assert rows["L102604670"]["material_grade"]=="S.Fines(60-62)"
     assert rows["L102602644"]["material_grade"]=="5-18mm(60-62)"
-    assert rows["L102602644"]["destination"] is None
+    assert rows["L102602644"]["destination"]=="Tuidungri (Saraikela)"
+    assert rows["L102603256"]["destination"]=="Tuidungri (Saraikela)"
 
 
 def test_cancel_exact_epass_and_reconcile_image_without_changing_oct26():
@@ -135,6 +136,8 @@ def test_cancel_exact_epass_and_reconcile_image_without_changing_oct26():
         assert sum((Decimal(str(x.net_mt)) for x in active),Decimal(0))==Decimal("16338.370")
         assert db.get(router.DespatchTrip,"L102604670/1").buyer=="Self"
         assert db.get(router.DespatchTrip,"L102604670/1").material_grade=="S.Fines(60-62)"
+        assert db.get(router.DespatchTrip,"L102602644/1").destination=="Tuidungri (Saraikela)"
+        assert db.get(router.DespatchTrip,"L102603256/1").destination=="Tuidungri (Saraikela)"
         assert db.get(router.DespatchTrip,"OLD-DNA").buyer=="DNA MINERALS PVT LTD"
         assert db.get(router.DespatchTrip,"OLD-DNA").report_date==date(2026,10,26)
         # Repeat processing must be idempotent.
@@ -181,3 +184,18 @@ def test_mail_worker_has_automatic_amns_integration_and_retains_older_ledger():
     assert "auto_process_pending_images" in src
     from app.services.tiom_despatch_amns import OPEN_DAY
     assert OPEN_DAY==date(2026,10,27)
+
+
+def test_new_tuidungri_permits_need_no_historical_destination():
+    engine=_setup()
+    with Session(engine) as db:
+        _populate_day(db)
+        for old in list(db.scalars(select(router.DespatchTrip).where(
+                router.DespatchTrip.report_date == date(2026,10,26)))):
+            db.delete(old)
+        db.commit()
+        report=read_report(_source_report(),1079,461)
+        preview=plan_reconciliation(db,report)
+        assert preview['verifiedTrips']==531
+        assert preview['verifiedMt']==Decimal('16338.370')
+        assert all(row['destination'] for row in report['permits'])
