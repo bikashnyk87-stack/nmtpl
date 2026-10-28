@@ -5,7 +5,7 @@ from app.services.tiom_despatch_mail import _gmail_query
 def test_filter_query_contains_all_nine_approved_senders():
     from app.routers.tiom_despatch import DEFAULT_SENDERS
     query = _gmail_query({email for email, name in DEFAULT_SENDERS})
-    assert "after:2026/09/30" in query
+    assert "after:2026/10/26" in query
     assert "has:attachment" in query
     assert "-label:NMTPL_DESPATCH_PROCESSED" in query
     assert query.count("from:") == 9

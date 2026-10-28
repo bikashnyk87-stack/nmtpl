@@ -164,6 +164,11 @@ def parse_despatch_sources(data: bytes, filename: str) -> list[dict]:
             epass = _text(row[col]) if col < len(row) else ""
             if not _PASS.fullmatch(epass):
                 continue  # skip subtotal / repeated headings / empty footers
+            # In real Date Wise exports the final subtotal places the number
+            # of trips (e.g. "532") under the Pass# column. That is NOT an
+            # E-Pass: don't reject an otherwise valid daily import for it.
+            if epass.isdecimal() and len(epass) < 8:
+                continue
             fields = {field: _text(row[col]) if col < len(row) else ""
                       for field, col in mapping.items()}
             day = _day(fields.get("report_date")) or sheet_day

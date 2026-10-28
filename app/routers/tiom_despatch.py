@@ -735,12 +735,9 @@ async def gmail_connect_local(request: Request, file: UploadFile = File(...),
 def mail_attachments(request: Request, db: Session = Depends(get_db)):
     """Only current unresolved exceptions—not imported or historical files."""
     _user(request, db)
-    from app.services.tiom_despatch_mail import DespatchMailAttachment
-    records=db.scalars(
-        select(DespatchMailAttachment).where(
-            DespatchMailAttachment.status == "REVIEW_REQUIRED",
-        ).order_by(DespatchMailAttachment.received_at.desc()).limit(16)
-    ).all()
+    from app.services.tiom_despatch_mail import open_despatch_reviews
+    records=sorted(open_despatch_reviews(db),
+                   key=lambda x: x.received_at or datetime.min, reverse=True)[:16]
     return [{
         "id": x.id, "filename": x.filename, "sender": x.sender,
         "reportDate": x.report_date.isoformat() if x.report_date else None,
@@ -777,13 +774,12 @@ def mail_status(request: Request, db: Session = Depends(get_db)):
         token_ready = False
     from app.services.tiom_despatch_mail import DespatchMailPoll, DespatchEmailProcessed
     p=db.get(DespatchMailPoll, "MIS")
-    from app.services.tiom_despatch_mail import DespatchMailAttachment
     imported=db.scalar(select(func.count()).select_from(DespatchEmailProcessed).where(
         DespatchEmailProcessed.status.like("IMPORTED%"))) or 0
-    review_emails=db.scalar(select(func.count()).select_from(DespatchEmailProcessed).where(
-        DespatchEmailProcessed.status=="REVIEW_REQUIRED")) or 0
-    review_files=db.scalar(select(func.count()).select_from(DespatchMailAttachment).where(
-        DespatchMailAttachment.status=="REVIEW_REQUIRED")) or 0
+    from app.services.tiom_despatch_mail import open_despatch_reviews
+    active_issues = open_despatch_reviews(db)
+    review_files = len(active_issues)
+    review_emails = len({item.message_id for item in active_issues})
     rows=db.scalar(select(func.count()).select_from(DespatchEmailProcessed)) or 0
     return {
         "configuredMailbox": "mistiom@nmtpl.com",
@@ -797,6 +793,7 @@ def mail_status(request: Request, db: Session = Depends(get_db)):
         "messagesWithDespatchData":imported,
         "emailsNeedingReview":review_emails,
         "attachmentsNeedingReview":review_files,
+        "activeReviewFrom":"2026-10-27",
         "automaticPolling":"enabled_if_oauth_token_available",
         "imageRule":"Emailed images are collected independently; permit figures require verification before reporting",
     }
