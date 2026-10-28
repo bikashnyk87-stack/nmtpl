@@ -87,7 +87,13 @@ window.tiomDDPanel=async function(which){
       const lastSuccess=mail.lastSuccess?new Date(mail.lastSuccess).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'Not yet confirmed';
       const lastAttempt=mail.lastAttempt?new Date(mail.lastAttempt).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'Not yet recorded';
       $('dd_body').innerHTML='<section class="dd-box"><b>MIS Gmail Automatic Import Status</b>'+
-        '<p>Mailbox: '+h(mail.configuredMailbox)+' · Last successful scan: <strong>'+h(lastSuccess)+'</strong> · Last attempted: '+h(lastAttempt)+'</p>'+
+        '<p>Mailbox: '+h(mail.configuredMailbox)+' · Gmail authorization: <strong>'+h(mail.gmailTokenConfigured?'Configured':'Not configured on this server')+'</strong></p>'+
+        (mail.localSetupAvailable?
+         '<p><strong>Gmail connection (this PC only)</strong> · Choose an authorized OAuth token JSON for mistiom@nmtpl.com. Credentials are accepted only on 127.0.0.1 and never displayed.'+
+         '<div class="dd-tools"><input type="file" id="dd_gmailtoken" accept=".json,application/json">'+
+         '<button class="btn secondary small" onclick="tiomDDGmailConnect()">Connect MIS Gmail</button></div>'+
+         '<small>This requires an authorized OAuth token (with refresh token), not a Google Cloud client-secret JSON file.</small></p>':'')+
+        '<p>Last successful scan: <strong>'+h(lastSuccess)+'</strong> · Last attempted: '+h(lastAttempt)+'</p>'+
         '<p>Processed emails: '+f(mail.messagesProcessed,0)+' · Emails containing Despatch data: '+f(mail.messagesWithDespatchData,0)+
         ' · Most recent scan trips: '+f((mail.lastResult||{}).tripsInserted||0,0)+'</p>'+
         (mail.lastError?'<p class="dd-warning">Gmail error: '+h(mail.lastError)+'</p>':
@@ -139,6 +145,18 @@ window.tiomDDExport=async type=>{
     link.remove();
     say('Download started: '+type+' · '+ready.activeTrips+
         ' MTD E-passes / '+f(ready.activeMt)+' MT. Date '+to+'.');
+  }catch(err){say(err.message,true);}
+};
+window.tiomDDGmailConnect=async()=>{
+  const file=$('dd_gmailtoken')?.files?.[0];
+  if(!file)return say('Select an authorized MIS Gmail OAuth token JSON first.',true);
+  if(file.size>65536)return say('Gmail token file exceeds the 64 KB limit.',true);
+  say('Checking the authorized MIS mailbox with Google…');
+  const fd=new FormData();fd.append('file',file);
+  try{
+    const result=await api('gmail-connect-local',fd);
+    say('MIS Gmail authorized on this PC for '+result.mailbox+'. Verify using Sync Approved Gmail Now.');
+    await window.tiomDDPanel('imports');
   }catch(err){say(err.message,true);}
 };
 window.tiomDDMail=async()=>{

@@ -576,10 +576,87 @@ def export_report(report_type: str, request: Request,
     )
 
 
+def _local_gmail_setup_allowed(request: Request, user) -> bool:
+    """Never accept OAuth secrets through an unencrypted office LAN connection."""
+    from ipaddress import ip_address
+    try:
+        host = request.headers.get("host", "").split(":")[0].lower()
+        return bool(user.admin and request.client
+                    and ip_address(request.client.host).is_loopback
+                    and host in {"127.0.0.1", "localhost", "[::1]"})
+    except ValueError:
+        return False
+
+
+@router.post("/gmail-connect-local")
+async def gmail_connect_local(request: Request, file: UploadFile = File(...),
+                              db: Session = Depends(get_db)):
+    """Connect PC MIS Gmail via admin-only loopback JSON upload, never cloud/LAN."""
+    csrf(request)
+    user = _user(request, db, edit=True)
+    if not _local_gmail_setup_allowed(request, user):
+        raise HTTPException(403, "Gmail OAuth setup is permitted only on the PC at 127.0.0.1.")
+    if not (file.filename or "").lower().endswith(".json"):
+        raise HTTPException(422, "Select an authorized Gmail OAuth token JSON file.")
+    raw = await file.read(65537)
+    if len(raw) > 65536:
+        raise HTTPException(413, "Gmail OAuth token file is too large.")
+    try:
+        payload = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeError, ValueError) as exc:
+        raise HTTPException(422, "Invalid Gmail OAuth JSON file.") from exc
+    if not isinstance(payload, dict) or not all(
+        isinstance(payload.get(k), str) and payload[k].strip()
+        for k in ("refresh_token", "client_id", "client_secret", "token_uri")
+    ):
+        raise HTTPException(422, "This must be an authorized OAuth token JSON, not a Google client-secret file.")
+    # Never save credentials from an unverified account. Checking Google first
+    # prevents an accidental change to the existing WB Gmail authorization.
+    try:
+        from google.oauth2.credentials import Credentials
+        from google.auth.transport.requests import Request as GoogleRequest
+        from googleapiclient.discovery import build
+        creds = Credentials.from_authorized_user_info(
+            payload, scopes=["https://www.googleapis.com/auth/gmail.modify"])
+        if not creds.valid:
+            creds.refresh(GoogleRequest())
+        address = (build("gmail", "v1", credentials=creds, cache_discovery=False)
+                   .users().getProfile(userId="me").execute().get("emailAddress") or "").lower().strip()
+    except Exception as exc:
+        raise HTTPException(422, "Google could not verify this OAuth token. Check authorization and Gmail permissions.") from exc
+    if address != "mistiom@nmtpl.com":
+        raise HTTPException(422, "The token authorizes a different Gmail account, not mistiom@nmtpl.com.")
+    import os
+    import tempfile
+    from pathlib import Path
+    target = Path(__file__).resolve().parents[2] / "config" / "gmail_token.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temp_name = None
+    try:
+        with tempfile.NamedTemporaryFile("w", encoding="utf-8", dir=target.parent,
+                                         prefix=".gmail_token_", suffix=".tmp",
+                                         delete=False) as tmp:
+            temp_name = tmp.name
+            tmp.write(creds.to_json())
+        os.chmod(temp_name, 0o600)
+        os.replace(temp_name, target)
+    finally:
+        if temp_name and os.path.exists(temp_name):
+            os.unlink(temp_name)
+    return {"ok": True, "mailbox": address, "tokenStored": True,
+            "next": "Use Sync Approved Gmail Now to verify the mail importer."}
+
+
 @router.get("/mail-status")
 def mail_status(request: Request, db: Session = Depends(get_db)):
     """Expose verified MIS Gmail importer health, never claim sync from configuration alone."""
-    _user(request, db)
+    user = _user(request, db)
+    from app.routers.automation import _gmail_token_raw
+    try:
+        oauth = json.loads(_gmail_token_raw() or "{}")
+        token_ready = isinstance(oauth, dict) and bool(oauth.get("refresh_token"))
+    except (ValueError, TypeError):
+        token_ready = False
     from app.services.tiom_despatch_mail import DespatchMailPoll, DespatchEmailProcessed
     p=db.get(DespatchMailPoll, "MIS")
     imported=db.scalar(select(func.count()).select_from(DespatchEmailProcessed).where(
@@ -587,6 +664,8 @@ def mail_status(request: Request, db: Session = Depends(get_db)):
     rows=db.scalar(select(func.count()).select_from(DespatchEmailProcessed)) or 0
     return {
         "configuredMailbox": "mistiom@nmtpl.com",
+        "gmailTokenConfigured": token_ready,
+        "localSetupAvailable": _local_gmail_setup_allowed(request, user),
         "lastAttempt": p.last_attempt.isoformat() if p and p.last_attempt else None,
         "lastSuccess": p.last_success.isoformat() if p and p.last_success else None,
         "lastError": p.last_error if p else "",
