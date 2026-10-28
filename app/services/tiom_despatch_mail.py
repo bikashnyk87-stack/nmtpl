@@ -230,7 +230,10 @@ def recheck_archived_despatch(*, limit_messages=8, after="", force=False):
                         attachment.reason = (_ARCHIVE_VERSION + " " + str(exc))[:600]
                         if len(problems) < 12:
                             problems.append({"file": attachment.filename, "reason": str(exc)[:180]})
-                db.commit()
+                    # Commit each file status independently: a later manifest
+                    # conflict can roll back its own upsert without reverting
+                    # the review status of an earlier successful weighment.
+                    db.commit()
                 remaining_message = db.scalar(select(DespatchMailAttachment.id).where(
                     DespatchMailAttachment.message_id == msgid,
                     DespatchMailAttachment.status == "REVIEW_REQUIRED",
