@@ -172,39 +172,70 @@ def _trip(d):
 
 
 def _extract(data, filename):
+    """Read dated E-Pass trip sheets only; never turn summary totals into trips.
+
+    Supports both genuine legacy Excel .xls (BIFF8 via xlrd) and .xlsx. Some
+    legacy MIS exports have a .xls filename but contain OpenXML bytes.
+    """
     if filename.lower().endswith(".csv"):
         text = data.decode("utf-8-sig")
         if not text.startswith("report_date,") and "report_date" not in text.splitlines()[0]:
             raise ValueError("CSV must use TIOM October import column headings")
         return list(csv.DictReader(StringIO(text)))
-    if not filename.lower().endswith(".xlsx"):
-        raise ValueError("Use Trip Summary XLSX or TIOM dispatch CSV")
-    wb = load_workbook(BytesIO(data), read_only=True, data_only=True)
+    if not filename.lower().endswith((".xls", ".xlsx")):
+        raise ValueError("Use Trip Summary XLS/XLSX or TIOM dispatch CSV")
+    zip_format = data.startswith(b"PK\\x03\\x04")
+    legacy_format = data.startswith(bytes.fromhex("D0CF11E0A1B11AE1"))
+    if zip_format:
+        wb = load_workbook(BytesIO(data), read_only=True, data_only=True)
+        try:
+            sheets = [
+                (ws.title, [list(row) for row in ws.iter_rows(values_only=True)])
+                for ws in wb
+            ]
+        finally:
+            wb.close()
+    elif legacy_format:
+        try:
+            import xlrd
+        except ImportError as exc:
+            raise ValueError("Legacy XLS support (xlrd) is not installed") from exc
+        book = xlrd.open_workbook(file_contents=data, on_demand=True)
+        try:
+            sheets = [
+                (ws.name, [ws.row_values(i) for i in range(ws.nrows)])
+                for ws in book.sheets()
+            ]
+        finally:
+            book.release_resources()
+    else:
+        raise ValueError("Unsupported Excel binary format; review this file without importing trips")
     extracted = []
-    try:
-        for ws in wb:
-            try:
-                day = datetime.strptime(ws.title, "%d.%m.%y").date()
-            except ValueError:
-                continue  # Never import cumulative sheet a second time.
-            header = [str(x.value or "").strip().casefold() for x in next(ws.iter_rows(min_row=2, max_row=2))]
-            if not all(x in header for x in ("e-pass no", "net wt.", "permit no.")):
+    for title, rows in sheets:
+        try:
+            day = datetime.strptime(title, "%d.%m.%y").date()
+        except ValueError:
+            continue  # Aggregate/cumulative/undated reports are not E-Pass trip ledgers.
+        if len(rows) < 2:
+            continue
+        header = [str(v or "").strip().casefold() for v in rows[1]]
+        if not all(x in header for x in ("e-pass no", "net wt.", "permit no.")):
+            continue
+        for row in rows[2:]:
+            if len(row) < 16 or not str(row[4] or "").strip():
                 continue
-            for row in ws.iter_rows(min_row=3, values_only=True):
-                if len(row) < 16 or not str(row[4] or "").strip():
-                    continue
-                extracted.append(dict(zip(
-                    ("serial", "permit_no", "permit_qty", "buyer", "epass_no",
-                     "vehicle_no", "transporter", "destination", "material_grade",
-                     "stack_no", "consignee", "tare_mt", "gross_mt", "net_mt",
-                     "dispatch_date", "dispatch_time"), row[:16]
-                ), report_date=day.isoformat(), source=filename + " / " + ws.title))
-    finally:
-        wb.close()
+            extracted.append(dict(zip(
+                ("serial", "permit_no", "permit_qty", "buyer", "epass_no",
+                 "vehicle_no", "transporter", "destination", "material_grade",
+                 "stack_no", "consignee", "tare_mt", "gross_mt", "net_mt",
+                 "dispatch_date", "dispatch_time"), row[:16]
+            ), report_date=day.isoformat(), source=filename + " / " + title))
     if not extracted:
-        raise ValueError("No dated Trip Summary sheets with E-Pass rows found")
+        raise ValueError(
+            "No dated E-Pass Trip Summary sheets found; a Date-wise or "
+            "Transporter-wise aggregate cannot populate individual E-Pass trips"
+        )
     return extracted
-
 
 def _import_data(db, data, filename, actor):
     if len(data) > 12_000_000:
