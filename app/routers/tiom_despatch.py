@@ -733,11 +733,13 @@ async def gmail_connect_local(request: Request, file: UploadFile = File(...),
 
 @router.get("/mail-attachments")
 def mail_attachments(request: Request, db: Session = Depends(get_db)):
-    """Review skipped aggregate spreadsheets without falsely posting E-Pass trips."""
+    """Only current unresolved exceptions—not imported or historical files."""
     _user(request, db)
     from app.services.tiom_despatch_mail import DespatchMailAttachment
     records=db.scalars(
-        select(DespatchMailAttachment).order_by(DespatchMailAttachment.received_at.desc()).limit(100)
+        select(DespatchMailAttachment).where(
+            DespatchMailAttachment.status == "REVIEW_REQUIRED",
+        ).order_by(DespatchMailAttachment.received_at.desc()).limit(16)
     ).all()
     return [{
         "id": x.id, "filename": x.filename, "sender": x.sender,
@@ -798,6 +800,25 @@ def mail_status(request: Request, db: Session = Depends(get_db)):
         "automaticPolling":"enabled_if_oauth_token_available",
         "imageRule":"Emailed images are collected independently; permit figures require verification before reporting",
     }
+
+
+class DespatchReviewReconcileIn(BaseModel):
+    after: str = Field(default="", max_length=128)
+    force: bool = False
+
+
+@router.post("/mail-review-reconcile")
+def mail_review_reconcile(p: DespatchReviewReconcileIn, request: Request,
+                          db: Session = Depends(get_db)):
+    """Re-check archived approved-sender Excel sources against the live ledger.
+
+    Only an authenticated editor may initiate; the source files and current
+    E-Pass records are never erased or overwritten.
+    """
+    csrf(request)
+    _user(request, db, edit=True)
+    from app.services.tiom_despatch_mail import recheck_archived_despatch
+    return recheck_archived_despatch(limit_messages=8, after=p.after, force=p.force)
 
 
 @router.post("/mail-sync")

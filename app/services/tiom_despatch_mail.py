@@ -8,6 +8,7 @@ import base64
 import logging
 import re
 from datetime import date, datetime
+from threading import Lock
 from email.utils import parseaddr
 from hashlib import sha256
 from uuid import uuid4
@@ -22,6 +23,8 @@ from app.routers.tiom_despatch import (
 )
 
 log = logging.getLogger("nmtpl.despatch.gmail")
+_ARCHIVE_VERSION = "[schema-recheck-20261028-v4]"
+_ARCHIVE_LOCK = Lock()
 
 
 class DespatchEmailProcessed(Base):
@@ -118,7 +121,9 @@ def _gmail_query(senders, *, recovery=False):
     safe = sorted(e.lower() for e in senders if re.fullmatch(r"[a-z0-9_.+%-]+@[a-z0-9.-]+", e.lower()))
     if not safe:
         return ""
-    label_filter = ("{label:NMTPL_DESPATCH_PROCESSED label:NMTPL_DESPATCH_REVIEW_REQUIRED}" if recovery else
+    # REVIEW_REQUIRED attachments are rechecked from their stored original bytes.
+    # Do not repeatedly re-download the same 25 Gmail review messages every poll.
+    label_filter = ("label:NMTPL_DESPATCH_PROCESSED" if recovery else
                     "-label:NMTPL_DESPATCH_PROCESSED -label:NMTPL_DESPATCH_REVIEW_REQUIRED")
     return "after:2026/09/30 has:attachment " + label_filter + " {" + (
         " ".join("from:" + e for e in safe)
@@ -128,11 +133,16 @@ def _gmail_query(senders, *, recovery=False):
 def _archive_for_review(db, msgid, sender, filename, binary, reason, report_date=None):
     """Retain the exact Excel bytes, never derive E-Pass trips from aggregates."""
     digest = sha256(binary).hexdigest()
-    existing = db.scalar(select(DespatchMailAttachment.id).where(
+    existing = db.scalar(select(DespatchMailAttachment).where(
         DespatchMailAttachment.message_id == msgid,
         DespatchMailAttachment.sha256 == digest
     ))
     if existing:
+        if existing.status == "REVIEW_REQUIRED":
+            existing.reason = str(reason)[:600]
+            if report_date and not existing.report_date:
+                existing.report_date = report_date
+            return True
         return False
     mime = ("application/vnd.ms-excel" if filename.lower().endswith(".xls") else
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -146,6 +156,122 @@ def _archive_for_review(db, msgid, sender, filename, binary, reason, report_date
     return True
 
 
+def recheck_archived_despatch(*, limit_messages=8, after="", force=False):
+    """Reconcile stored Gmail XLS/XLSX/CSV without downloading/relabeling mail.
+
+    Runs in bounded batches, keeps original attachments and verifies each file
+    by the current parser against the canonical E-Pass ledger. Detailed sheets
+    are ingested before complementary Transporter-wise sheets within an email.
+    Only genuinely unresolved files remain in the review list. Rechecks each
+    schema-version once; use force for operator-initiated recheck after changes.
+    """
+    from app.services.tiom_despatch_source_adapters import detect_source_type
+    from sqlalchemy import func
+    if not _ARCHIVE_LOCK.acquire(blocking=False):
+        return {"ok": False, "busy": True, "processedMessages": 0,
+                "resolvedFiles": 0, "remainingFiles": None, "nextCursor": None}
+    try:
+        limit_messages = max(1, min(int(limit_messages), 15))
+        cursor = str(after or "")[:128]
+        resolved_ids = []
+        processed = resolved = outside = 0
+        new_trips = enriched = 0
+        problems = []
+        with SessionLocal() as db:
+            condition = [
+                DespatchMailAttachment.status == "REVIEW_REQUIRED",
+                DespatchMailAttachment.message_id > cursor,
+            ]
+            if not force:
+                condition.append(~DespatchMailAttachment.reason.startswith(_ARCHIVE_VERSION))
+            message_ids = list(db.scalars(
+                select(DespatchMailAttachment.message_id).where(*condition)
+                .distinct().order_by(DespatchMailAttachment.message_id)
+                .limit(limit_messages + 1)
+            ))
+            targets = message_ids[:limit_messages]
+            for msgid in targets:
+                stored = list(db.scalars(select(DespatchMailAttachment).where(
+                    DespatchMailAttachment.message_id == msgid,
+                    DespatchMailAttachment.status == "REVIEW_REQUIRED",
+                ).order_by(DespatchMailAttachment.received_at)))
+                prepared = []
+                for attachment in stored:
+                    try:
+                        role = detect_source_type(attachment.file_data, attachment.filename)
+                        priority = 0 if role == "detailed" else 1
+                        preliminary_error = None
+                    except (ValueError, UnicodeError) as exc:
+                        priority = 2
+                        preliminary_error = str(exc)
+                    prepared.append((priority, attachment, preliminary_error))
+                # Foreign/obsolete September files are retained, not shown as
+                # active October failures; October remains the configured ledger.
+                for _, attachment, preliminary_error in sorted(prepared, key=lambda x: x[0]):
+                    filename_date = attachment.report_date or _message_date(attachment.filename)
+                    if filename_date and filename_date < date(2026, 10, 1):
+                        attachment.status = "OUT_OF_SCOPE"
+                        attachment.reason = "Archived historical source; existing October ledger unchanged"
+                        outside += 1
+                        db.commit()
+                        continue
+                    try:
+                        if preliminary_error:
+                            raise ValueError(preliminary_error)
+                        info = _import_data(db, attachment.file_data, attachment.filename,
+                                            "DESPATCH_ARCHIVE_RECHECK")
+                        if not info.get("ok"):
+                            errors = info.get("errors") or []
+                            reason = "; ".join(str(x.get("error", "")) for x in errors[:2])
+                            raise ValueError(reason or "Cannot reconcile source E-Passes")
+                        attachment.status = "IMPORTED"
+                        attachment.reason = "Verified against E-Pass ledger using current source adapter"
+                        resolved += 1
+                        new_trips += int(info.get("inserted", 0))
+                        enriched += int(info.get("enriched", 0))
+                    except (ValueError, UnicodeError) as exc:
+                        attachment.reason = (_ARCHIVE_VERSION + " " + str(exc))[:600]
+                        if len(problems) < 12:
+                            problems.append({"file": attachment.filename, "reason": str(exc)[:180]})
+                    # Commit each file status independently: a later manifest
+                    # conflict can roll back its own upsert without reverting
+                    # the review status of an earlier successful weighment.
+                    db.commit()
+                remaining_message = db.scalar(select(DespatchMailAttachment.id).where(
+                    DespatchMailAttachment.message_id == msgid,
+                    DespatchMailAttachment.status == "REVIEW_REQUIRED",
+                ).limit(1))
+                if not remaining_message:
+                    audited = db.get(DespatchEmailProcessed, msgid)
+                    if audited and audited.status in {"REVIEW_REQUIRED", "NO_MATCHING_DATA", "IMPORTED_WITH_REVIEW"}:
+                        audited.status = "IMPORTED"
+                        audited.details = "All archived approved-sender spreadsheets reconciled or archived outside date scope"
+                        audited.checked_at = datetime.utcnow()
+                        db.commit()
+                    resolved_ids.append(msgid)
+                processed += 1
+            remaining_files = db.scalar(select(func.count()).select_from(
+                DespatchMailAttachment).where(
+                DespatchMailAttachment.status == "REVIEW_REQUIRED",
+                DespatchMailAttachment.report_date >= date(2026, 10, 1),
+            )) or 0
+            # Count all review files even when date was absent in old metadata.
+            missing_dates = db.scalar(select(func.count()).select_from(
+                DespatchMailAttachment).where(
+                DespatchMailAttachment.status == "REVIEW_REQUIRED",
+                DespatchMailAttachment.report_date.is_(None),
+            )) or 0
+            remaining_files += missing_dates
+        return {"ok": True, "processedMessages": processed,
+                "resolvedFiles": resolved, "historicalFilesArchived": outside,
+                "tripsInserted": new_trips, "transporterEntriesEnriched": enriched,
+                "remainingFiles": remaining_files,
+                "nextCursor": targets[-1] if targets and len(message_ids) > len(targets) else None,
+                "resolvedMessageIds": resolved_ids, "errors": problems}
+    finally:
+        _ARCHIVE_LOCK.release()
+
+
 def _scan_message(service, db, msgid, senders, result, *, recovery=False):
     """A single Gmail message can supply complementary weighment/manifests.
 
@@ -154,7 +280,7 @@ def _scan_message(service, db, msgid, senders, result, *, recovery=False):
     """
     from app.services.tiom_despatch_source_adapters import detect_source_type
     existing = db.get(DespatchEmailProcessed, msgid)
-    if existing and not (recovery and existing.status in {"NO_MATCHING_DATA", "REVIEW_REQUIRED"}):
+    if existing and not (recovery and existing.status == "NO_MATCHING_DATA"):
         return None
     msg = service.users().messages().get(userId="me", id=msgid, format="full").execute()
     headers = {x["name"].lower(): x.get("value", "") for x in msg.get("payload", {}).get("headers", [])}
@@ -264,6 +390,15 @@ def _gmail_scan_actual(max_messages=25):
     result = {"mailbox": address, "messagesScanned": 0, "messagesImported": 0,
               "tripsInserted": 0, "tripsEnriched": 0, "imagesSaved": 0, "skipped": 0,
               "attachmentsForReview": 0, "recoveredEmails": 0, "errors": []}
+    # Process a bounded number of already-downloaded reviews on every regular
+    # automatic Gmail poll. This does not need fresh Gmail attachment downloads,
+    # and each item is attempted once per source-adapter version.
+    archive_result = recheck_archived_despatch(limit_messages=5)
+    result["archivedFilesReconciled"] = archive_result.get("resolvedFiles", 0)
+    result["archivedTripsInserted"] = archive_result.get("tripsInserted", 0)
+    result["archivedTransportersEnriched"] = archive_result.get("transporterEntriesEnriched", 0)
+    result["tripsInserted"] += archive_result.get("tripsInserted", 0)
+    result["tripsEnriched"] += archive_result.get("transporterEntriesEnriched", 0)
     with SessionLocal() as db:
         _seed_senders(db)
         senders = set(db.scalars(select(DespatchSender.email).where(
@@ -277,9 +412,20 @@ def _gmail_scan_actual(max_messages=25):
                 label_ids[label] = service.users().labels().create(
                     userId="me", body={"name": label}
                 ).execute()["id"]
+        if archive_result.get("resolvedMessageIds"):
+            try:
+                service.users().messages().batchModify(
+                    userId="me", body={
+                        "ids": archive_result["resolvedMessageIds"],
+                        "addLabelIds": [label_ids["NMTPL_DESPATCH_PROCESSED"]],
+                        "removeLabelIds": [label_ids["NMTPL_DESPATCH_REVIEW_REQUIRED"]],
+                    }
+                ).execute()
+            except Exception:
+                log.warning("Archived E-Pass records reconciled; Gmail review label could not be updated", exc_info=True)
         for recovery in (False, True):
             if recovery and not db.scalar(select(DespatchEmailProcessed.message_id).where(
-                DespatchEmailProcessed.status.in_(("NO_MATCHING_DATA", "REVIEW_REQUIRED"))).limit(1)):
+                DespatchEmailProcessed.status == "NO_MATCHING_DATA").limit(1)):
                 break
             remaining = min(max(1, max_messages), 50)
             query = _gmail_query(senders, recovery=recovery)

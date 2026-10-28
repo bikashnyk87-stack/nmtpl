@@ -133,8 +133,8 @@ def test_transport_name_html_entities_are_normalized():
     assert parse_despatch_sources(x.getvalue(),"other supplier.xlsx")[0]["transporter"]=="M/S MAA KUANRI LOADING & TRANSPORT"
 
 
-def test_gmail_recovery_query_includes_previously_reviewed_messages():
+def test_gmail_recovery_rechecks_unprocessed_labels_only_to_avoid_review_loop():
     from app.services.tiom_despatch_mail import _gmail_query
     query=_gmail_query({"rajugupta97093@gmail.com"},recovery=True)
-    assert "label:NMTPL_DESPATCH_REVIEW_REQUIRED" in query
+    assert "label:NMTPL_DESPATCH_REVIEW_REQUIRED" not in query
     assert "label:NMTPL_DESPATCH_PROCESSED" in query
