@@ -23,7 +23,11 @@ from app.routers.tiom_despatch import (
 )
 
 log = logging.getLogger("nmtpl.despatch.gmail")
-_ARCHIVE_VERSION = "[schema-recheck-20261028-v4]"
+_ARCHIVE_VERSION = "[scope-20261027-v5]"
+# Data through 26 Oct 2026 is already accepted by the site. Do not rescan
+# or modify historical Despatch records unless a separate explicit correction
+# workflow is requested.
+DESPATCH_OPEN_FROM = date(2026, 10, 27)
 _ARCHIVE_LOCK = Lock()
 
 
@@ -95,6 +99,26 @@ def _message_date(text):
     return None
 
 
+def is_open_despatch_source(attachment):
+    """Use report date, then the archived attachment's filename date.
+
+    Review files without a verified report date are retained in storage, but
+    not represented as new daily exceptions until a date is confirmed.
+    """
+    source_day = attachment.report_date or _message_date(attachment.filename)
+    return source_day is not None and source_day >= DESPATCH_OPEN_FROM
+
+
+def open_despatch_reviews(db):
+    """Current reporting window only. Read-only, does not delete history."""
+    return [
+        item for item in db.scalars(select(DespatchMailAttachment).where(
+            DespatchMailAttachment.status == "REVIEW_REQUIRED"
+        ).order_by(DespatchMailAttachment.message_id, DespatchMailAttachment.received_at))
+        if is_open_despatch_source(item)
+    ]
+
+
 def _parts(part):
     if part.get("filename") or part.get("body", {}).get("attachmentId"):
         yield part
@@ -125,7 +149,7 @@ def _gmail_query(senders, *, recovery=False):
     # Do not repeatedly re-download the same 25 Gmail review messages every poll.
     label_filter = ("label:NMTPL_DESPATCH_PROCESSED" if recovery else
                     "-label:NMTPL_DESPATCH_PROCESSED -label:NMTPL_DESPATCH_REVIEW_REQUIRED")
-    return "after:2026/09/30 has:attachment " + label_filter + " {" + (
+    return "after:2026/10/26 has:attachment " + label_filter + " {" + (
         " ".join("from:" + e for e in safe)
     ) + "}"
 
@@ -178,23 +202,21 @@ def recheck_archived_despatch(*, limit_messages=8, after="", force=False):
         new_trips = enriched = 0
         problems = []
         with SessionLocal() as db:
-            condition = [
-                DespatchMailAttachment.status == "REVIEW_REQUIRED",
-                DespatchMailAttachment.message_id > cursor,
+            # Site-accepted records through 26-Oct are not a pending workload.
+            # Filter using either metadata or the source filename. Never touch
+            # old review rows or the canonical old trip ledger.
+            eligible = [
+                item for item in open_despatch_reviews(db)
+                if item.message_id > cursor
+                and (force or not item.reason.startswith(_ARCHIVE_VERSION))
             ]
-            if not force:
-                condition.append(~DespatchMailAttachment.reason.startswith(_ARCHIVE_VERSION))
-            message_ids = list(db.scalars(
-                select(DespatchMailAttachment.message_id).where(*condition)
-                .distinct().order_by(DespatchMailAttachment.message_id)
-                .limit(limit_messages + 1)
-            ))
+            message_ids = sorted({item.message_id for item in eligible})
             targets = message_ids[:limit_messages]
             for msgid in targets:
-                stored = list(db.scalars(select(DespatchMailAttachment).where(
+                stored = [item for item in db.scalars(select(DespatchMailAttachment).where(
                     DespatchMailAttachment.message_id == msgid,
                     DespatchMailAttachment.status == "REVIEW_REQUIRED",
-                ).order_by(DespatchMailAttachment.received_at)))
+                ).order_by(DespatchMailAttachment.received_at)) if is_open_despatch_source(item)]
                 prepared = []
                 for attachment in stored:
                     try:
@@ -250,18 +272,7 @@ def recheck_archived_despatch(*, limit_messages=8, after="", force=False):
                         db.commit()
                     resolved_ids.append(msgid)
                 processed += 1
-            remaining_files = db.scalar(select(func.count()).select_from(
-                DespatchMailAttachment).where(
-                DespatchMailAttachment.status == "REVIEW_REQUIRED",
-                DespatchMailAttachment.report_date >= date(2026, 10, 1),
-            )) or 0
-            # Count all review files even when date was absent in old metadata.
-            missing_dates = db.scalar(select(func.count()).select_from(
-                DespatchMailAttachment).where(
-                DespatchMailAttachment.status == "REVIEW_REQUIRED",
-                DespatchMailAttachment.report_date.is_(None),
-            )) or 0
-            remaining_files += missing_dates
+            remaining_files = len(open_despatch_reviews(db))
         return {"ok": True, "processedMessages": processed,
                 "resolvedFiles": resolved, "historicalFilesArchived": outside,
                 "tripsInserted": new_trips, "transporterEntriesEnriched": enriched,
