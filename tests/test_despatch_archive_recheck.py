@@ -82,17 +82,23 @@ def test_incomplete_source_keeps_fresh_actionable_reason_and_is_not_retried_fore
     assert mail.recheck_archived_despatch(force=True)["processedMessages"] == 1
 
 
-def test_september_sources_are_archived_not_shown_as_new_october_issues(monkeypatch):
+def test_closed_period_sources_are_preserved_without_reimport(monkeypatch):
     maker = _isolated_db(monkeypatch)
     with maker() as db:
-        db.add(_review("msg-sep", "Date Wise 29-09-2026.xls", sample_datewise(), date(2026,9,29)))
+        db.add_all([
+            _review("msg-sep", "Date Wise 29-09-2026.xls", sample_datewise(), date(2026,9,29)),
+            _review("msg-26", "Date Wise 26-10-2026.xls", sample_datewise(), date(2026,10,26)),
+        ])
         db.commit()
-    result = mail.recheck_archived_despatch()
-    assert result["historicalFilesArchived"] == 1
-    assert result["tripsInserted"] == 0 and result["remainingFiles"] == 0
+    result = mail.recheck_archived_despatch(force=True)
+    assert result["processedMessages"] == 0
+    assert result["tripsInserted"] == 0
+    assert result["remainingFiles"] == 0
     with maker() as db:
-        item = db.scalar(select(mail.DespatchMailAttachment))
-        assert item.status == "OUT_OF_SCOPE"
+        attachments = list(db.scalars(select(mail.DespatchMailAttachment)))
+        assert all(item.status == "REVIEW_REQUIRED" for item in attachments)
+        assert list(db.scalars(select(router.DespatchTrip))) == []
+
 
 
 def test_review_api_filters_already_imported_and_limits_results(monkeypatch):
