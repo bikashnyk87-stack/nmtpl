@@ -387,6 +387,15 @@ def _gmail_scan_actual(max_messages=25):
     result = {"mailbox": address, "messagesScanned": 0, "messagesImported": 0,
               "tripsInserted": 0, "tripsEnriched": 0, "imagesSaved": 0, "skipped": 0,
               "attachmentsForReview": 0, "recoveredEmails": 0, "errors": []}
+    # Process a bounded number of already-downloaded reviews on every regular
+    # automatic Gmail poll. This does not need fresh Gmail attachment downloads,
+    # and each item is attempted once per source-adapter version.
+    archive_result = recheck_archived_despatch(limit_messages=5)
+    result["archivedFilesReconciled"] = archive_result.get("resolvedFiles", 0)
+    result["archivedTripsInserted"] = archive_result.get("tripsInserted", 0)
+    result["archivedTransportersEnriched"] = archive_result.get("transporterEntriesEnriched", 0)
+    result["tripsInserted"] += archive_result.get("tripsInserted", 0)
+    result["tripsEnriched"] += archive_result.get("transporterEntriesEnriched", 0)
     with SessionLocal() as db:
         _seed_senders(db)
         senders = set(db.scalars(select(DespatchSender.email).where(
@@ -400,6 +409,17 @@ def _gmail_scan_actual(max_messages=25):
                 label_ids[label] = service.users().labels().create(
                     userId="me", body={"name": label}
                 ).execute()["id"]
+        if archive_result.get("resolvedMessageIds"):
+            try:
+                service.users().messages().batchModify(
+                    userId="me", body={
+                        "ids": archive_result["resolvedMessageIds"],
+                        "addLabelIds": [label_ids["NMTPL_DESPATCH_PROCESSED"]],
+                        "removeLabelIds": [label_ids["NMTPL_DESPATCH_REVIEW_REQUIRED"]],
+                    }
+                ).execute()
+            except Exception:
+                log.warning("Archived E-Pass records reconciled; Gmail review label could not be updated", exc_info=True)
         for recovery in (False, True):
             if recovery and not db.scalar(select(DespatchEmailProcessed.message_id).where(
                 DespatchEmailProcessed.status.in_(("NO_MATCHING_DATA", "REVIEW_REQUIRED"))).limit(1)):
