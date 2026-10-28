@@ -14,7 +14,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.db import Base
 from app.routers import tiom_despatch as mod
-from app.services.tiom_despatch_mail import DespatchEmailProcessed, DespatchMailPoll
+from app.services.tiom_despatch_mail import DespatchEmailProcessed, DespatchMailPoll, DespatchMailAttachment
 
 
 def client():
@@ -23,6 +23,7 @@ def client():
         mod.DespatchAudit.__table__, mod.DespatchDocument.__table__,
         mod.DespatchPermitDay.__table__, mod.DespatchSender.__table__,
         mod.DespatchTrip.__table__, DespatchEmailProcessed.__table__, DespatchMailPoll.__table__,
+        DespatchMailAttachment.__table__,
     ])
     app = FastAPI()
     app.include_router(mod.router)

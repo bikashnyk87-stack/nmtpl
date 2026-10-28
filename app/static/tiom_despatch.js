@@ -83,7 +83,7 @@ window.tiomDDPanel=async function(which){
        '<div class="dd-scroll"><table><thead><tr>'+['Date','E-Pass','Permit','Vehicle','Transporter','Destination','Grade','Net MT','Status','Edit'].map(x=>'<th>'+x+'</th>').join('')+'</tr></thead><tbody>'+
        data.rows.map((x,i)=>'<tr><td>'+h(x.report_date)+'</td><td>'+h(x.epass_no)+'</td><td>'+h(x.permit_no)+'</td><td>'+h(x.vehicle_no)+'</td><td>'+h(x.transporter)+'</td><td>'+h(x.destination)+'</td><td>'+h(x.material_grade)+'</td><td>'+f(x.net_mt)+'</td><td>'+h(x.status)+'</td><td><button class="btn secondary tiny" onclick="tiomDDEdit('+i+')">Edit</button></td></tr>').join('')+'</tbody></table></div><div id="dd_editor"></div>';
     } else if(tab==='imports'){
-      const [imgs,mail]=await Promise.all([api('images'),api('mail-status')]);
+      const [imgs,mail,attachments]=await Promise.all([api('images'),api('mail-status'),api('mail-attachments')]);
       const lastSuccess=mail.lastSuccess?new Date(mail.lastSuccess).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'Not yet confirmed';
       const lastAttempt=mail.lastAttempt?new Date(mail.lastAttempt).toLocaleString('en-IN',{timeZone:'Asia/Kolkata'}):'Not yet recorded';
       $('dd_body').innerHTML='<section class="dd-box"><b>MIS Gmail Automatic Import Status</b>'+
@@ -94,8 +94,10 @@ window.tiomDDPanel=async function(which){
          '<button class="btn secondary small" onclick="tiomDDGmailConnect()">Connect MIS Gmail</button></div>'+
          '<small>This requires an authorized OAuth token (with refresh token), not a Google Cloud client-secret JSON file.</small></p>':'')+
         '<p>Last successful scan: <strong>'+h(lastSuccess)+'</strong> · Last attempted: '+h(lastAttempt)+'</p>'+
-        '<p>Processed emails: '+f(mail.messagesProcessed,0)+' · Emails containing Despatch data: '+f(mail.messagesWithDespatchData,0)+
-        ' · Most recent scan trips: '+f((mail.lastResult||{}).tripsInserted||0,0)+'</p>'+
+        '<p>Checked emails: '+f(mail.messagesProcessed,0)+' · Mail messages imported: '+f(mail.messagesWithDespatchData,0)+
+        ' · Most recent scan trips: '+f((mail.lastResult||{}).tripsInserted||0,0)+
+        ' · Emails needing review: '+f(mail.emailsNeedingReview||0,0)+
+        ' · Excel attachments for review: '+f(mail.attachmentsNeedingReview||0,0)+'</p>'+
         (mail.lastError?'<p class="dd-warning">Gmail error: '+h(mail.lastError)+'</p>':
          (!mail.lastSuccess?'<p class="dd-warning">Automatic sync has not yet been verified. Use Sync Approved Gmail Now to check the connection.</p>':''))+
         '<p>Daily image upload is OPTIONAL if an approved sender emailed it. AMNS images need verification; uploading an image does not start Gmail sync.</p></section>'+
@@ -105,7 +107,12 @@ window.tiomDDPanel=async function(which){
        '<input id="dd_imgfile" type="file" accept="image/jpeg,image/png,image/webp">'+
        '<button class="btn secondary small" onclick="tiomDDImage()">Upload for review</button><p>Images are retained; their figures require confirmation before use in reports.</p></section>'+
        '<section class="dd-box"><b>Images pending verification</b>'+
-       (imgs.map(x=>'<div class="dd-image"><a target="_blank" href="/api/tiom/despatch/image/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a><small>'+h(x.report_date||'Date pending')+' · '+h(x.review_status)+'</small><button class="btn secondary tiny" onclick="tiomDDReview(\''+h(x.id)+'\')">Verify permit</button></div>').join('')||'No images uploaded yet')+'</section></div><div id="dd_editor"></div>';
+       (imgs.map(x=>'<div class="dd-image"><a target="_blank" href="/api/tiom/despatch/image/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a><small>'+h(x.report_date||'Date pending')+' · '+h(x.review_status)+'</small><button class="btn secondary tiny" onclick="tiomDDReview(\''+h(x.id)+'\')">Verify permit</button></div>').join('')||'No images uploaded yet')+'</section></div>'+
+       '<section class="dd-box"><b>Gmail Excel attachments requiring review</b>'+
+       '<p>Original Date-wise / Transporter-wise XLS summary files are retained here. Their totals are NOT converted into individual E-Pass trips without E-Pass numbers, so the Despatch ledger stays accurate.</p>'+
+       (attachments.map(x=>'<div class="dd-image"><a download href="/api/tiom/despatch/mail-attachment/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a>'+
+        '<small>'+h(x.reportDate||'Date unverified')+' · '+h(x.status)+' · '+h(x.reason)+'</small></div>').join('')||'<p>No unrecognized Excel attachments.</p>')+
+       '</section><div id="dd_editor"></div>';
     } else if(tab==='reports'){
       $('dd_body').innerHTML='<section class="dd-box"><b>Five Client-Format Reports</b>'+
        '<p>Original Excel headings and layouts. All FTM / cumulative figures are calculated from the first day of the month, excluding cancelled trips.</p>'+
