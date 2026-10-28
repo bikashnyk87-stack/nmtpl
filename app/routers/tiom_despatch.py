@@ -184,7 +184,7 @@ def _extract(data, filename):
         return list(csv.DictReader(StringIO(text)))
     if not filename.lower().endswith((".xls", ".xlsx")):
         raise ValueError("Use Trip Summary XLS/XLSX or TIOM dispatch CSV")
-    zip_format = data.startswith(b"PK\\x03\\x04")
+    zip_format = data.startswith(bytes.fromhex("504B0304"))
     legacy_format = data.startswith(bytes.fromhex("D0CF11E0A1B11AE1"))
     if zip_format:
         wb = load_workbook(BytesIO(data), read_only=True, data_only=True)
