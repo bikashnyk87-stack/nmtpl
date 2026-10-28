@@ -335,6 +335,63 @@ async def upload_trips(request: Request, file: UploadFile = File(...),
         raise HTTPException(422, str(exc))
 
 
+@router.post("/upload-batch")
+async def upload_multi_sources(request: Request, files: list[UploadFile] = File(...),
+                               db: Session = Depends(get_db)):
+    """Handle multiple source files with schema detection, never by filename."""
+    csrf(request)
+    user = _user(request, db, edit=True)
+    if not files or len(files) > 8:
+        raise HTTPException(422, "Choose 1-8 XLS, XLSX or CSV sources")
+    from app.services.tiom_despatch_source_adapters import parse_despatch_sources
+    staged = []
+    seen_detailed, seen_aux = {}, {}
+    for upload in files:
+        filename = upload.filename or "source.xlsx"
+        binary = await upload.read(12_000_001)
+        if len(binary) > 12_000_000:
+            raise HTTPException(422, filename + ": file exceeds 12 MB")
+        try:
+            records = parse_despatch_sources(binary, filename)
+        except ValueError as exc:
+            raise HTTPException(422, filename + ": " + str(exc)) from exc
+        role = records[0]["_role"]
+        for row in records:
+            epass = row["epass_no"].upper()
+            target = seen_detailed if role == "detailed" else seen_aux
+            if epass in target:
+                raise HTTPException(422, filename + ": duplicate E-Pass " + epass +
+                                    " across uploaded " + role + " sources")
+            target[epass] = row
+        staged.append((0 if role == "detailed" else 1, filename, binary, role))
+    # Validate complementing source values before the first database write.
+    for epass, aux in seen_aux.items():
+        primary = seen_detailed.get(epass)
+        if primary and (
+            primary["report_date"] != aux["report_date"] or
+            _amount(primary["net_mt"]) != _amount(aux["net_mt"]) or
+            primary["vehicle_no"].strip().upper() != aux["vehicle_no"].strip().upper()
+        ):
+            raise HTTPException(422, "Source reconciliation failed for E-Pass " + epass +
+                                ": report date, MT or vehicle differ")
+    results = []
+    for _, filename, binary, role in sorted(staged, key=lambda item: item[0]):
+        info = _import_data(db, binary, filename, user.login_id)
+        results.append({"file": filename, "type": role, **info})
+        if not info.get("ok"):
+            # Existing validated imports are retained; report partial completion
+            # explicitly instead of silently claiming all-or-nothing success.
+            return {"ok": False, "partial": True, "results": results,
+                    "inserted": sum(x.get("inserted", 0) for x in results),
+                    "enriched": sum(x.get("enriched", 0) for x in results),
+                    "errors": info.get("errors", []), "errorCount": info.get("errorCount", 0)}
+    return {"ok": True, "files": len(results), "results": results,
+            "inserted": sum(x.get("inserted", 0) for x in results),
+            "enriched": sum(x.get("enriched", 0) for x in results),
+            "skippedExisting": sum(x.get("skippedExisting", 0) for x in results),
+            "conflictCount": 0}
+
+
 class TripEdit(BaseModel):
     status: str | None = None
     net_mt: Decimal | None = None
