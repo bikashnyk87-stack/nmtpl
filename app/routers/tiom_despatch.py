@@ -678,6 +678,38 @@ async def gmail_connect_local(request: Request, file: UploadFile = File(...),
             "next": "Use Sync Approved Gmail Now to verify the mail importer."}
 
 
+@router.get("/mail-attachments")
+def mail_attachments(request: Request, db: Session = Depends(get_db)):
+    """Review skipped aggregate spreadsheets without falsely posting E-Pass trips."""
+    _user(request, db)
+    from app.services.tiom_despatch_mail import DespatchMailAttachment
+    records=db.scalars(
+        select(DespatchMailAttachment).order_by(DespatchMailAttachment.received_at.desc()).limit(100)
+    ).all()
+    return [{
+        "id": x.id, "filename": x.filename, "sender": x.sender,
+        "reportDate": x.report_date.isoformat() if x.report_date else None,
+        "status": x.status, "reason": x.reason,
+        "sizeBytes": len(x.file_data), "receivedAt": x.received_at.isoformat(),
+    } for x in records]
+
+
+@router.get("/mail-attachment/{attachment_id}")
+def download_mail_attachment(attachment_id: str, request: Request, db: Session = Depends(get_db)):
+    """Download an approved-sender original safely, never execute it on server."""
+    _user(request, db)
+    from app.services.tiom_despatch_mail import DespatchMailAttachment
+    item=db.get(DespatchMailAttachment, attachment_id)
+    if not item:
+        raise HTTPException(404, "Despatch mail attachment not found")
+    name=re.sub(r"[^a-zA-Z0-9._-]", "_", item.filename)[:150] or "despatch-attachment.xls"
+    return Response(content=item.file_data, media_type="application/octet-stream", headers={
+        "Content-Disposition": f'attachment; filename="{name}"',
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+    })
+
+
 @router.get("/mail-status")
 def mail_status(request: Request, db: Session = Depends(get_db)):
     """Expose verified MIS Gmail importer health, never claim sync from configuration alone."""
@@ -690,8 +722,13 @@ def mail_status(request: Request, db: Session = Depends(get_db)):
         token_ready = False
     from app.services.tiom_despatch_mail import DespatchMailPoll, DespatchEmailProcessed
     p=db.get(DespatchMailPoll, "MIS")
+    from app.services.tiom_despatch_mail import DespatchMailAttachment
     imported=db.scalar(select(func.count()).select_from(DespatchEmailProcessed).where(
-        DespatchEmailProcessed.status=="IMPORTED")) or 0
+        DespatchEmailProcessed.status.like("IMPORTED%"))) or 0
+    review_emails=db.scalar(select(func.count()).select_from(DespatchEmailProcessed).where(
+        DespatchEmailProcessed.status=="REVIEW_REQUIRED")) or 0
+    review_files=db.scalar(select(func.count()).select_from(DespatchMailAttachment).where(
+        DespatchMailAttachment.status=="REVIEW_REQUIRED")) or 0
     rows=db.scalar(select(func.count()).select_from(DespatchEmailProcessed)) or 0
     return {
         "configuredMailbox": "mistiom@nmtpl.com",
@@ -703,6 +740,8 @@ def mail_status(request: Request, db: Session = Depends(get_db)):
         "lastResult": json.loads(p.last_result or "{}") if p else {},
         "messagesProcessed":rows,
         "messagesWithDespatchData":imported,
+        "emailsNeedingReview":review_emails,
+        "attachmentsNeedingReview":review_files,
         "automaticPolling":"enabled_if_oauth_token_available",
         "imageRule":"Emailed images are collected independently; permit figures require verification before reporting",
     }
