@@ -246,3 +246,98 @@ def test_28_oct_approved_image_prefills_all_four_correctly_without_mutating_ledg
     finally:
         mod.get_user, mod.require, mod.csrf = old
         engine.dispose()
+
+
+def test_broken_legacy_permit_has_one_click_repair_and_other_permits_unchanged():
+    """A report failure should provide a link to correct exactly one permit."""
+    api, engine, old = client()
+    try:
+        with Session(engine) as db:
+            for num, material in [("L102604460", "S.Fines(60-62)"),
+                                  ("OTHER-27", "C.Fines(60-62)")]:
+                db.add(mod.DespatchTrip(
+                    epass_no=num + "/1", permit_no=num,
+                    report_date=date(2026, 10, 27), status="ACTIVE",
+                    buyer="Self", destination="Dabuna", material_grade=material,
+                    transporter="TEST TRANSPORT", net_mt=Decimal("31.250"),
+                ))
+                db.add(mod.DespatchPermitDay(
+                    report_date=date(2026, 10, 27), permit_no=num,
+                    buyer="Self", destination="Dabuna",
+                    material="UNKNOWN" if num=="L102604460" else material,
+                    grade_percent="", reported_trips=1, reported_mt=Decimal("31.250"),
+                    review_status="CONFIRMED",
+                ))
+            db.commit()
+        check = api.get(
+            "/api/tiom/despatch/export-check/transporter"
+            "?from_date=2026-10-27&to_date=2026-10-27"
+        )
+        assert check.status_code == 200, check.text
+        assert check.json()["ready"] is False
+        assert check.json()["fixPermit"] == "L102604460"
+        assert check.json()["fixDate"] == "2026-10-27"
+        source = api.get(
+            "/api/tiom/despatch/permit-entry-prefill?report_date=2026-10-27"
+        )
+        assert source.status_code == 200, source.text
+        assert "S.Fines(60-62)" in source.json()["materialOptions"]
+        corrected = api.post("/api/tiom/despatch/permit-entry-one", json={
+            "report_date": "2026-10-27", "permit": {
+                "permit_no": "L102604460", "buyer": "Self",
+                "destination": "Dabuna", "material": "S.Fines(60-62)",
+                "grade_percent": "", "amns_trips": 1, "amns_mt": "31.250",
+            },
+        })
+        assert corrected.status_code == 200, corrected.text
+        assert corrected.json()["tripsVerified"] == 1
+        with Session(engine) as db:
+            repaired = db.scalar(select(mod.DespatchPermitDay).where(
+                mod.DespatchPermitDay.permit_no == "L102604460"
+            ))
+            other = db.scalar(select(mod.DespatchPermitDay).where(
+                mod.DespatchPermitDay.permit_no == "OTHER-27"
+            ))
+            assert repaired.material == "S.Fines(60-62)"
+            assert repaired.grade_percent == ""
+            assert other.material == "C.Fines(60-62)"
+            assert db.get(mod.DespatchTrip, "L102604460/1").material_grade == "S.Fines(60-62)"
+            audit = db.scalars(select(mod.DespatchAudit).where(
+                mod.DespatchAudit.action == "MIS_PERMIT_CORRECTION")).all()
+            assert len(audit) == 1
+        valid = api.get(
+            "/api/tiom/despatch/export-check/transporter"
+            "?from_date=2026-10-27&to_date=2026-10-27"
+        )
+        assert valid.status_code == 200 and valid.json()["ready"], valid.text
+    finally:
+        mod.get_user, mod.require, mod.csrf = old
+        engine.dispose()
+
+
+def test_single_permit_correction_checks_original_trip_quantity():
+    api, engine, old = client()
+    try:
+        with Session(engine) as db:
+            db.add(mod.DespatchTrip(
+                epass_no="L102604460/1", permit_no="L102604460",
+                report_date=date(2026, 10, 27), status="ACTIVE",
+                buyer="Self", destination="Dabuna",
+                material_grade="S.Fines(60-62)", transporter="T",
+                net_mt=Decimal("31.250"),
+            ))
+            db.commit()
+        incorrect = api.post("/api/tiom/despatch/permit-entry-one", json={
+            "report_date": "2026-10-27", "permit": {
+                "permit_no": "L102604460", "buyer": "Self",
+                "destination": "Dabuna", "material": "S.Fines(60-62)",
+                "amns_trips": 1, "amns_mt": "30.000",
+            }
+        })
+        assert incorrect.status_code == 422
+        with Session(engine) as db:
+            assert db.scalars(select(mod.DespatchPermitDay)).all() == []
+            assert db.scalars(select(mod.DespatchAudit)).all() == []
+    finally:
+        mod.get_user, mod.require, mod.csrf = old
+        engine.dispose()
