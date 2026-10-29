@@ -129,6 +129,7 @@ window.tiomDDPanel=async function(which){
         '<p>Enter AMNS buyer, actual destination, material and grade as printed. Trip and MT totals are verified against Gmail E-Passes. Image evidence is optional.</p>'+
         '<div class="dd-tools"><b>Date: '+h(reportDate)+'</b><span>'+data.totalTrips+' active E-Passes · '+f(data.totalMt)+' MT</span>'+
         '<button class="btn secondary small" onclick="tiomDDPanel(\'permits\')">Refresh Gmail permits</button></div>'+
+        (data.permits.some(p=>p.sourceCorrection)?'<p style="color:#995000;font-weight:600">Approved AMNS 28-Oct source prefilled '+data.permits.filter(p=>p.sourceCorrection).length+' legacy permits. Review and click Save All & Reconcile once. Original Gmail E-Passes are unchanged.</p>':'')+
         '<datalist id="dd_pe_buyers"><option value="AMNS"><option value="DNA MINERALS"><option value="SNN MINERALS"></datalist>'+
         '<datalist id="dd_pe_destinations"><option value="DABUNA"><option value="TUIDUNGRI (SARAIKELA)"></datalist>'+
         '<datalist id="dd_pe_materials"><option value="SCREENED FINES"><option value="5X18"></datalist>'+
@@ -151,7 +152,8 @@ window.tiomDDPanel=async function(which){
         '<td>'+field('dd_pe_trips_'+i,p.amns_trips,'Trips',72,'type="number" step="1" min="0"')+'</td>'+
         '<td>'+field('dd_pe_mt_'+i,p.amns_mt,'MT',105,'type="number" step="0.001" min="0"')+'</td>'+
         '<td>'+field('dd_pe_bal_'+i,p.balance_mt,'Balance',95,'type="number" step="0.001" min="0"')+'</td>'+
-        '<td><small>'+f(p.reported_trips||0,0)+' trips / '+f(p.reported_mt||0)+' MT</small><br><small>'+h(p.entry_status||'PENDING')+'</small></td></tr>';
+        '<td><small>'+f(p.reported_trips||0,0)+' trips / '+f(p.reported_mt||0)+' MT</small><br><small>'+h(p.entry_status||'PENDING')+'</small>'+
+        (p.sourceCorrection?'<br><small>Approved AMNS report</small>':'')+'</td></tr>';
       data.permits.forEach((p,i)=>body.insertAdjacentHTML('beforeend',rowHtml(p,i)));
       window.tiomDDAddPermitRow=()=>{
         const i=data.permits.length;
@@ -196,8 +198,8 @@ window.tiomDDPanel=async function(which){
            mapping.images.map(img=>'<option value="'+h(img.id)+'">'+h(img.name)+'</option>').join('')+
            '</select><button class="btn secondary small" onclick="tiomDDConfirmCategory('+i+')">Confirm one permit</button></div>')+
           '</div>').join('')+'</section>':
-        '<section class="dd-box"><b>Source mappings verified for '+h(mapping.reportDate)+'</b> · '+
-        f(mapping.totalTrips,0)+' E-Passes classified</section>';
+        '<section class="dd-box"><b>E-Pass categories present for '+h(mapping.reportDate)+'</b> · '+
+        f(mapping.totalTrips,0)+' E-Passes classified. <small>AMNS permit verification is separate: use MIS Permit Entry.</small></section>';
       $('dd_body').innerHTML=mapPanel+'<section class="dd-box"><b>Five Client-Format Reports</b>'+
        '<p>Branded Excel reports with consistent colours and borders; the transporter report includes the monthly cumulative table directly below the daily table. FTM totals exclude cancelled trips.</p>'+
        '<div class="dd-tools"><label>Export basis <select id="dd_reportbasis"><option value="daily">Daily submission (To date + MTD)</option><option value="month">Month-to-date workbook (all daily sheets)</option></select></label>'+

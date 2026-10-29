@@ -144,3 +144,105 @@ def test_source_saraikela_not_rejected_or_overwritten_as_old_chandil():
     finally:
         mod.get_user, mod.require, mod.csrf = old
         engine.dispose()
+
+
+def test_legacy_confirmed_material_band_without_numeric_grade_can_export():
+    """Legacy historical MIS confirmation did not store a separate Grade %."""
+    api, engine, old = client()
+    try:
+        with Session(engine) as db:
+            db.add(mod.DespatchTrip(
+                epass_no="HIST-1", permit_no="OLD-LEGACY", report_date=date(2026, 10, 27),
+                net_mt=Decimal("31.850"), status="ACTIVE",
+                buyer="Self", destination="Dabuna",
+                material_grade="S.Fines(60-62)", transporter="TEST TRANSPORT",
+            ))
+            db.add(mod.DespatchPermitDay(
+                permit_no="OLD-LEGACY", report_date=date(2026, 10, 27),
+                buyer="Self", destination="Dabuna", material="S.Fines(60-62)",
+                grade_percent="", reported_trips=1, reported_mt=Decimal("31.850"),
+                review_status="CONFIRMED",
+            ))
+            db.commit()
+        response = api.get(
+            "/api/tiom/despatch/export-check/transporter"
+            "?from_date=2026-10-27&to_date=2026-10-27"
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["ready"] is True
+    finally:
+        mod.get_user, mod.require, mod.csrf = old
+        engine.dispose()
+
+
+def test_28_oct_approved_image_prefills_all_four_correctly_without_mutating_ledger():
+    """Previously confirmed Chandil aliases must not displace the supplied AMNS image."""
+    api, engine, old = client()
+    approved = mod._APPROVED_AMNS_OCT28
+    try:
+        with Session(engine) as db:
+            for permit, (buyer, destination, material, grade, qty, trips, mt, balance) in approved.items():
+                # Split exact source MT over the E-Pass count, never round away a trip.
+                per = (mt / Decimal(trips)).quantize(Decimal(".001"))
+                for i in range(trips):
+                    weight = per if i < trips-1 else mt - per * (trips-1)
+                    db.add(mod.DespatchTrip(
+                        epass_no=f"{permit}/{i+1}", permit_no=permit,
+                        report_date=date(2026, 10, 28), net_mt=weight,
+                        status="ACTIVE", buyer="Self" if buyer=="AMNS" else
+                        ("DNA MINERALS PVT LTD" if buyer=="DNA MINERALS" else "S N N MINERALS PRIVATE LIMITED"),
+                        destination="Dabuna" if buyer=="AMNS" else "Chandil",
+                        material_grade="S.Fines(60-62)" if buyer=="AMNS" else "5-18mm(60-62)",
+                        transporter="TEST TRANSPORT",
+                    ))
+                db.add(mod.DespatchPermitDay(
+                    permit_no=permit, report_date=date(2026, 10, 28),
+                    buyer="Self" if buyer=="AMNS" else buyer,
+                    destination="Dabuna" if buyer=="AMNS" else "Chandil",
+                    material="S.Fines(60-62)" if buyer=="AMNS" else "5-18mm(60-62)",
+                    grade_percent=grade, reported_trips=trips, reported_mt=mt,
+                    review_status="CONFIRMED",
+                ))
+            db.commit()
+        before = api.get("/api/tiom/despatch/permit-entry-prefill?report_date=2026-10-28")
+        assert before.status_code == 200, before.text
+        payload = before.json()
+        assert payload["totalTrips"] == 400
+        assert payload["totalMt"] == 12290.210
+        by_permit = {p["permit_no"]: p for p in payload["permits"]}
+        assert set(by_permit) == set(approved)
+        assert by_permit["L102602644"]["destination"] == "TUIDUNGRI (SARAIKELA)"
+        assert by_permit["L102603256"]["destination"] == "TUIDUNGRI (SARAIKELA)"
+        assert by_permit["L102604670"]["material"] == "SCREENED FINES"
+        assert all(p["sourceCorrection"] for p in by_permit.values())
+        # GET never mutates already stored MIS or Gmail source records.
+        with Session(engine) as db:
+            previous = db.scalar(select(mod.DespatchPermitDay).where(
+                mod.DespatchPermitDay.permit_no == "L102603256"
+            ))
+            assert previous.destination == "Chandil"
+        rows = [
+            {"permit_no": permit, "buyer": p["buyer"],
+             "destination": p["destination"], "material": p["material"],
+             "grade_percent": p["grade_percent"], "permit_qty": p["permit_qty"],
+             "amns_trips": p["amns_trips"], "amns_mt": p["amns_mt"],
+             "balance_mt": p["balance_mt"]}
+            for permit, p in by_permit.items()
+        ]
+        saved = api.post(
+            "/api/tiom/despatch/permit-entry-batch",
+            json={"report_date": "2026-10-28", "permits": rows},
+        )
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["verifiedTrips"] == 400
+        assert saved.json()["verifiedMt"] == 12290.210
+        with Session(engine) as db:
+            corrected = db.scalar(select(mod.DespatchPermitDay).where(
+                mod.DespatchPermitDay.permit_no == "L102603256"
+            ))
+            assert corrected.destination == "TUIDUNGRI (SARAIKELA)"
+            source = db.get(mod.DespatchTrip, "L102603256/1")
+            assert source.destination == "Chandil"
+    finally:
+        mod.get_user, mod.require, mod.csrf = old
+        engine.dispose()
