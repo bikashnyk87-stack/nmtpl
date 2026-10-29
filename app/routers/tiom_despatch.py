@@ -1044,8 +1044,8 @@ def export_check(report_type: str, request: Request,
     begin=from_date.replace(day=1)
     # Read only the fields needed to validate report availability. A full
     # E-Pass row contains many strings and is fetched again for the export.
-    source_fields = [DespatchTrip.epass_no, DespatchTrip.report_date,
-                     DespatchTrip.net_mt]
+    source_fields = [DespatchTrip.epass_no, DespatchTrip.permit_no,
+                     DespatchTrip.report_date, DespatchTrip.net_mt]
     if report_type in {"destination", "transporter"}:
         source_fields.extend((DespatchTrip.buyer, DespatchTrip.destination,
                               DespatchTrip.material_grade))
