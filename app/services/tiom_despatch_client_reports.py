@@ -18,6 +18,7 @@ from decimal import Decimal
 from html import unescape
 from io import BytesIO
 from calendar import monthrange
+from functools import lru_cache
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -57,11 +58,15 @@ DATE = 'DD-MM-YYYY'
 
 
 
-def _client_logo(ws, anchor):
-    """Use the actual ArcelorMittal logo supplied inside the reference workbook."""
+@lru_cache(maxsize=1)
+def _client_logo_bytes():
     asset = Path(__file__).resolve().parents[1] / "static" / "amns_reference_logo.b64"
-    stream = BytesIO(b64decode(asset.read_text(encoding="ascii").strip()))
-    logo = ExcelImage(stream)
+    return b64decode(asset.read_text(encoding="ascii").strip())
+
+
+def _client_logo(ws, anchor):
+    """Embed the original logo with a shared, cached image payload."""
+    logo = ExcelImage(BytesIO(_client_logo_bytes()))
     logo.width, logo.height = 105, 63
     ws.add_image(logo, anchor)
 
@@ -85,20 +90,32 @@ def _fmt(ws, last_col=16, landscape=True):
     ws.oddFooter.right.text = "Page &P of &N"
 
 
+# Reusing immutable style objects prevents allocations for every cell of the
+# 90-column daily transporter workbook while keeping the exact visual layout.
+_HEADER_FONT = Font(name="Calibri", size=9, bold=True, color=WHITE)
+_TOTAL_FONT = Font(name="Calibri", size=9, bold=True, color=DARK)
+_BODY_FONT = Font(name="Calibri", size=9, color=DARK)
+_HEADER_FILL = PatternFill("solid", fgColor=BLUE)
+_TOTAL_FILL = PatternFill("solid", fgColor=YELLOW)
+_HEADER_BORDER = Border(left=LINE, right=LINE, top=LINE, bottom=LINE)
+_ALIGN_HEADER = Alignment(vertical="center", horizontal="left", wrap_text=True)
+_ALIGN_TEXT = Alignment(vertical="center", horizontal="left", wrap_text=False)
+_ALIGN_NUM = Alignment(vertical="center", horizontal="right", wrap_text=False)
+
+
 def _style(ws, r, c, value=None, header=False, total=False, fmt=None):
     x = ws.cell(r, c)
     if value is not None:
         x.value = value
-    if header or total:
-        x.font = Font(name="Calibri", size=9, bold=True, color=WHITE if header else DARK)
-        x.fill = PatternFill("solid", fgColor=BLUE if header else YELLOW)
-        x.border = Border(left=LINE, right=LINE, top=LINE, bottom=LINE)
+    if header:
+        x.font, x.fill, x.border = _HEADER_FONT, _HEADER_FILL, _HEADER_BORDER
+    elif total:
+        x.font, x.fill, x.border = _TOTAL_FONT, _TOTAL_FILL, _HEADER_BORDER
     else:
-        x.font = Font(name="Calibri", size=9, color=DARK)
-        x.border = DATA_BORDER
+        x.font, x.border = _BODY_FONT, DATA_BORDER
         if r % 2 == 0:
             x.fill = STRIPE
-    x.alignment = Alignment(vertical="center", horizontal="right" if fmt else "left", wrap_text=header)
+    x.alignment = _ALIGN_HEADER if header else (_ALIGN_NUM if fmt else _ALIGN_TEXT)
     if fmt:
         x.number_format = fmt
     return x
@@ -412,11 +429,53 @@ def _transporter_names(trips):
 
 
 def _build_transporter(wb,trips,from_date,to_date,matrix):
-    day_groups=_groups(trips)
-    # Source labels such as '&amp;' versus '&' represent ONE transporter.
-    # Use the canonical key for a single row, even when multiple spellings exist.
-    traders=_transporter_names(trips)
-    days=list(_days(from_date,to_date))
+    # Pre-aggregate E-Passes once. Previously every day recalculated its
+    # month-to-date totals and each of 13 material grades by rescanning all
+    # E-Passes, yielding O(days * grades * trips) work.
+    traders = _transporter_names(trips)
+    days = list(_days(from_date, to_date))
+    daily_totals = defaultdict(lambda: [0, Decimal("0")])
+    daily_captive = defaultdict(lambda: [0, Decimal("0")])
+    daily_material = defaultdict(lambda: [0, Decimal("0")])
+    daily_transporter = defaultdict(lambda: [0, Decimal("0")])
+    for trip in trips:
+        d = trip.report_date
+        weight = Decimal(str(trip.net_mt))
+        daily_totals[d][0] += 1
+        daily_totals[d][1] += weight
+        if is_captive(trip):
+            daily_captive[d][0] += 1
+            daily_captive[d][1] += weight
+        grade = classified_material(trip)
+        daily_material[(d, grade)][0] += 1
+        daily_material[(d, grade)][1] += weight
+        idx = destination_bucket_index(trip)
+        if idx is not None:
+            key = (d, normalized(trip.transporter), idx)
+            daily_transporter[key][0] += 1
+            daily_transporter[key][1] += weight
+
+    # Include the first of the month even for a one-day export: FTM remains
+    # month-to-date, never limited to the currently selected daily sheet.
+    rolling_total = [0, Decimal("0")]
+    rolling_captive = [0, Decimal("0")]
+    rolling_material = defaultdict(lambda: [0, Decimal("0")])
+    totals_to_day = {}
+    for d in _days(to_date.replace(day=1), to_date):
+        for running, daily in ((rolling_total, daily_totals[d]),
+                               (rolling_captive, daily_captive[d])):
+            running[0] += daily[0]
+            running[1] += daily[1]
+        for grade in MATERIAL_COLUMNS:
+            key = normalized(grade)
+            current = daily_material[(d, key)]
+            running = rolling_material[key]
+            running[0] += current[0]
+            running[1] += current[1]
+        totals_to_day[d] = (
+            tuple(rolling_total), tuple(rolling_captive),
+            {key: tuple(value) for key, value in rolling_material.items()},
+        )
     for day in days:
         ws=wb.create_sheet(day.strftime("%d.%m.%y"))
         _fmt(ws,90);ws.sheet_view.zoomScale=55;ws.freeze_panes="C28"
@@ -440,37 +499,36 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
         for c,t in [(7,"Trips"),(8,"Quantity"),(9,"Trips"),(10,"Quantity"),
                     (13,"Trips"),(14,"Quantity"),(15,"Trips"),(16,"Quantity")]:
             _style(ws,6,c,t,header=True)
-        today=day_groups.get(day,[])
-        mtd=[x for x in trips if x.report_date<=day and x.report_date.month==day.month and x.report_date.year==day.year]
-        ex_today=[x for x in today if not is_captive(x)]
-        ex_mtd=[x for x in mtd if not is_captive(x)]
-        self_today=[x for x in today if is_captive(x)]
-        self_mtd=[x for x in mtd if is_captive(x)]
+        today_total = daily_totals[day]
+        today_self = daily_captive[day]
+        mtd_total, mtd_self, mtd_grades = totals_to_day[day]
+        today_other = (today_total[0]-today_self[0], today_total[1]-today_self[1])
+        mtd_other = (mtd_total[0]-mtd_self[0], mtd_total[1]-mtd_self[1])
         for r,name,ftd,ftm in [
-            (7,"Dabuna",self_today,self_mtd),(8,"Ex-mines",ex_today,ex_mtd),
-            (9,"Total",today,mtd)]:
+            (7,"Dabuna",today_self,mtd_self),(8,"Ex-mines",today_other,mtd_other),
+            (9,"Total",today_total,mtd_total)]:
             _style(ws,r,6,name,total=(r==9))
-            for c,val,fmt in [(7,len(ftd),INT),(8,float(_sum(ftd)),NUM),
-                              (9,len(ftm),INT),(10,float(_sum(ftm)),NUM)]:
+            for c,val,fmt in [(7,ftd[0],INT),(8,float(round(ftd[1],3)),NUM),
+                              (9,ftm[0],INT),(10,float(round(ftm[1],3)),NUM)]:
                 _style(ws,r,c,val,total=(r==9),fmt=fmt)
         _style(ws,9,2,"DISPATCH FOR THE DAY :",total=True)
-        _style(ws,9,3,len(today),total=True,fmt=INT)
-        _style(ws,9,4,float(_sum(today)),total=True,fmt=NUM)
+        _style(ws,9,3,today_total[0],total=True,fmt=INT)
+        _style(ws,9,4,float(round(today_total[1],3)),total=True,fmt=NUM)
         _style(ws,10,2,"CUMULATIVE FTM            :",total=True)
-        _style(ws,10,3,len(mtd),total=True,fmt=INT)
-        _style(ws,10,4,float(_sum(mtd)),total=True,fmt=NUM)
-        grades=MATERIAL_COLUMNS
-        for i,name in enumerate(grades):
+        _style(ws,10,3,mtd_total[0],total=True,fmt=INT)
+        _style(ws,10,4,float(round(mtd_total[1],3)),total=True,fmt=NUM)
+        for i,name in enumerate(MATERIAL_COLUMNS):
             r=i+7
             _style(ws,r,12,name,header=(r==7))
-            now=[x for x in today if classified_material(x)==normalized(name)]
-            cum=[x for x in mtd if classified_material(x)==normalized(name)]
-            for c,v,fmt in [(13,len(now),INT),(14,float(_sum(now)),NUM),
-                            (15,len(cum),INT),(16,float(_sum(cum)),NUM)]:
+            key = normalized(name)
+            now = daily_material[(day,key)]
+            cum = mtd_grades[key]
+            for c,v,fmt in [(13,now[0],INT),(14,float(round(now[1],3)),NUM),
+                            (15,cum[0],INT),(16,float(round(cum[1],3)),NUM)]:
                 _style(ws,r,c,v,fmt=fmt)
         _style(ws,20,12,"Total",total=True)
-        for c,v,fmt in [(13,len(today),INT),(14,float(_sum(today)),NUM),
-                        (15,len(mtd),INT),(16,float(_sum(mtd)),NUM)]:
+        for c,v,fmt in [(13,today_total[0],INT),(14,float(round(today_total[1],3)),NUM),
+                        (15,mtd_total[0],INT),(16,float(round(mtd_total[1],3)),NUM)]:
             _style(ws,20,c,v,total=True,fmt=fmt)
         _style(ws,23,2,"DISPATCH FOR THE DAY",header=True)
         _style(ws,24,2,"TRANSPORTER NAME",header=True)
@@ -505,18 +563,12 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
         ws.column_dimensions["D"].width=16
         for c in range(5,17):ws.column_dimensions[col(c)].width=18
         row_total=28+len(traders)
-        per_name=defaultdict(lambda: [0,Decimal("0")])
-        for trip in today:
-            idx=destination_bucket_index(trip)
-            if idx is not None:
-                per_name[(normalized(trip.transporter),idx)][0]+=1
-                per_name[(normalized(trip.transporter),idx)][1]+=Decimal(str(trip.net_mt))
         for pos,(transport_key, display_name) in enumerate(traders):
             r=28+pos
             _style(ws,r,2,display_name)
             for idx in range(len(DESTINATION_BUCKETS)):
                 c=3+2*idx
-                count,mt=per_name[(transport_key,idx)]
+                count,mt=daily_transporter[(day,transport_key,idx)]
                 _style(ws,r,c,count,fmt=INT)
                 _style(ws,r,c+1,float(mt),fmt=NUM)
             _style(ws,r,89,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})",fmt=INT)
@@ -639,8 +691,12 @@ def build_client_workbook(report_type, all_records, from_date, to_date):
     cancelled=[x for x in in_month if x.status=="CANCELLED"]
     if not active:
         raise ValueError("No active E-Pass despatch data exists for this month; import source data first")
-    matrix,unmapped=_keymap(active)
-    _,material_unmapped=_material_counts(active)
+    # Trip and material-only exports must not pay to classify every destination.
+    matrix,unmapped=(_keymap(active) if report_type in {"destination","transporter"}
+                      else ({}, []))
+    _,material_unmapped=(_material_counts(active)
+                         if report_type in {"material","despatch","transporter"}
+                         else ({}, []))
     if report_type in {"destination","transporter"} and unmapped:
         sample=", ".join(x.epass_no for x in unmapped[:5])
         raise ValueError(f"{len(unmapped)} E-Pass movements have unmapped buyer/destination/material buckets: {sample}. Correct aliases before client export.")
