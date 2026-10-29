@@ -364,7 +364,7 @@ def _scan_message(service, db, msgid, senders, result, *, recovery=False):
                     report_date=_message_date(headers.get("subject", "") + " " + filename),
                     filename=(filename or ("gmail-" + msgid + ".jpg"))[:255],
                     media_type=mime, sha256=digest, image_data=binary,
-                    review_status="NEEDS_REVIEW"))
+                    review_status="EVIDENCE_ONLY"))
                 images += 1
             matched = True
     status = ("IMPORTED_WITH_REVIEW" if matched and pending else
