@@ -492,18 +492,11 @@ def _gmail_scan_actual(max_messages=25):
     except Exception:
         log.exception("Automatic Despatch permit source reconciliation failed")
         result["sourceCategoriesAutofilled"] = 0
-    # Reconcile newly received and previously stored AMNS images as part of
-    # the existing scheduled Gmail scan. No new task or manual nightly steps.
-    try:
-        from app.services.tiom_despatch_amns import auto_process_pending_images
-        amns = auto_process_pending_images(limit=3)
-        result["amnsVerifiedImages"] = amns["verifiedImages"]
-        result["amnsExceptions"] = amns["imagesNeedingReview"]
-        result["amnsReconciled"] = amns["results"]
-    except Exception:
-        log.exception("AMNS automatic reconciliation failed; unchanged Despatch ledger")
-        result["amnsVerifiedImages"] = 0
-        result["amnsExceptions"] = 1
+    # MIS enters AMNS figures date-wise; never load RapidOCR in Render's 512MiB
+    # web process. Source images remain optional evidence in Despatch.
+    result["amnsVerifiedImages"] = 0
+    result["amnsExceptions"] = 0
+    result["amnsReconciled"] = []
     return result
 
 
