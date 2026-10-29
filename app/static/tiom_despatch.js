@@ -109,9 +109,10 @@ window.tiomDDPanel=async function(which){
        '<section class="dd-box"><b>AMNS source evidence</b>'+
        '<p>Use the MIS Permit Entry tab for date-wise manual AMNS details. Images here are optional originals, not a processing requirement.</p>'+
        (imgs.filter(x=>!x.report_date||x.report_date>='2026-10-27').map(x=>'<div class="dd-image"><a target="_blank" href="/api/tiom/despatch/image/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a><small>'+h(x.report_date||'Date pending')+' · '+h(x.review_status)+'</small>'+
-       (x.review_status==='NEEDS_REVIEW'?'<small>Awaiting automatic source check</small>':
-         x.review_status==='VERIFIED'?'<small>Verified against E-Passes</small>':
-         '<button class="btn secondary tiny" onclick="tiomDDAmnsIssue(\''+h(x.id)+'\')">Show reconciliation issue</button>')+'</div>').join('')||'No active AMNS images to verify (older images remain archived)')+'</section></div>'+
+       (x.review_status==='EVIDENCE_ONLY'?'<small>Archived as supporting evidence (no OCR)</small>':
+         x.review_status==='NEEDS_REVIEW'?'<small>Legacy pending image — use MIS Permit Entry</small>':
+         x.review_status==='VERIFIED'?'<small>Previously verified against E-Passes</small>':
+         '<small>Previously failed automated OCR — use MIS Permit Entry</small>')+'</div>').join('')||'No active AMNS images to verify (older images remain archived)')+'</section></div>'+
        '<section class="dd-box"><b>New Despatch exceptions · 27 Oct onward</b> · '+f(mail.attachmentsNeedingReview||0,0)+' pending'+
        '<p>Records through 26 Oct are already accepted and excluded from this list. Only verified E-Pass rows are imported; old files and trips are preserved.</p>'+
        '<button class="btn secondary small" onclick="tiomDDReconcileArchives()">Retry new exceptions</button>'+
