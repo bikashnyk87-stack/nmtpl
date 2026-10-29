@@ -660,9 +660,17 @@ def _amns_material(material: str, grade: str, report_date: date) -> str:
     from app.services.tiom_despatch_client_layout import (
         MATERIAL_COLUMNS, normalized, material_normalized,
     )
-    cleaned = grade.strip().rstrip("%")
+    cleaned = str(grade or "").strip().rstrip("%")
+    # Historical confirmed rows predate the MIS numerical-grade field.
+    # Their *explicit* approved reporting material code already contains
+    # the grade band; accept it without inventing a numerical percentage.
+    if not cleaned:
+        for candidate in MATERIAL_COLUMNS:
+            if material_normalized(candidate, report_date) == material_normalized(material, report_date):
+                return candidate
+        raise ValueError("Historical permit has no grade % and no approved material-grade code; MIS must verify it")
     if not re.fullmatch(r"\d{1,2}(?:\.\d{1,3})?", cleaned):
-        raise ValueError("Grade % must be a number such as 60.50")
+        raise ValueError("Grade % must be numeric (e.g. 60.50)")
     percent = Decimal(cleaned)
     if not Decimal("0") < percent < Decimal("100"):
         raise ValueError("Invalid grade percentage")
@@ -723,9 +731,16 @@ def _report_verified_amns(db: Session, rows):
         if not saved:
             result.append(row)
             continue
+        try:
+            classified = _amns_material(
+                saved.material, saved.grade_percent, saved.report_date
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"Permit {saved.permit_no} ({saved.report_date}): {exc}"
+            ) from exc
         projected = _ReportTripView(
-            row, _amns_buyer(saved.buyer), saved.destination.strip(),
-            _amns_material(saved.material, saved.grade_percent, saved.report_date),
+            row, _amns_buyer(saved.buyer), saved.destination.strip(), classified
         )
         if destination_bucket_index(projected) is None:
             raise ValueError(
@@ -734,6 +749,29 @@ def _report_verified_amns(db: Session, rows):
             )
         result.append(projected)
     return result
+
+
+
+# Transcribed once from the approved AMNS WhatsApp report dated 28 October 2026.
+# Strict per-permit trip/MT matching prevents the reference overriding changed
+# or unrelated E-Passes. This corrects the legacy Chandil field, without
+# changing any original E-Pass source records or future-day entries.
+_APPROVED_AMNS_OCT28 = {
+    "L102604670": ("AMNS", "DABUNA", "SCREENED FINES", "60.79",
+                   Decimal("13878.090"), 368, Decimal("11283.320"), Decimal("3.630")),
+    "L102604801": ("AMNS", "DABUNA", "SCREENED FINES", "60.50",
+                   Decimal("10026.840"), 22, Decimal("693.730"), Decimal("9333.110")),
+    "L102602644": ("DNA MINERALS", "TUIDUNGRI (SARAIKELA)", "5X18", "60.50",
+                   Decimal("4000.000"), 7, Decimal("215.110"), Decimal("267.430")),
+    "L102603256": ("SNN MINERALS", "TUIDUNGRI (SARAIKELA)", "5X18", "60.50",
+                   Decimal("1015.030"), 3, Decimal("98.050"), Decimal("18.770")),
+}
+
+
+def _approved_amns_reference(report_date, permit):
+    if report_date == date(2026, 10, 28):
+        return _APPROVED_AMNS_OCT28.get(permit.upper())
+    return None
 
 
 @router.get("/permit-entry-prefill")
@@ -765,6 +803,32 @@ def permit_entry_prefill(report_date: date, request: Request,
             "balance_mt": float(old.balance_mt) if old and old.balance_mt is not None else None,
             "entry_status": old.review_status if old else "PENDING",
         })
+        original = _approved_amns_reference(report_date, item["permit_no"])
+        if original is not None:
+            buyer, dest, material, grade, qty, trips, mt, balance = original
+            actual_trips = item["reported_trips"]
+            actual_mt = Decimal(str(item["reported_mt"]))
+            if actual_trips == trips and abs(actual_mt-mt) <= Decimal(".025"):
+                corrected = any((
+                    str(item["buyer"]).strip().casefold() != buyer.casefold(),
+                    str(item["destination"]).strip().casefold() != dest.casefold(),
+                    str(item["material"]).strip().casefold() != material.casefold(),
+                    str(item["grade_percent"] or "").strip().rstrip("%") != grade,
+                ))
+                item.update({
+                    "buyer": buyer, "destination": dest, "material": material,
+                    "grade_percent": grade, "permit_qty": float(qty),
+                    "amns_trips": trips, "amns_mt": float(mt),
+                    "balance_mt": float(balance),
+                    "source": "Approved AMNS WhatsApp report · 28 October 2026",
+                    "sourceCorrection": corrected,
+                    "entry_status": "SOURCE_CORRECTION_REQUIRED" if corrected else item["entry_status"],
+                })
+            else:
+                item["issues"].append(
+                    "Company AMNS 28-Oct reference differs from current Gmail trips/MT; "
+                    "do not auto-correct source values"
+                )
     return {**source, "categories": master["categories"],
             "verifiedPermits": sum(x["entry_status"] == "CONFIRMED" for x in source["permits"]),
             "closed": False}
@@ -869,7 +933,8 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
     db.add(DespatchAudit(
         actor=user.login_id, action="MIS_PERMIT_BATCH",
         entity_key=p.report_date.isoformat(),
-        reason="MIS entered AMNS date-wise multiple permits; all checked against original active E-Passes",
+        reason="MIS entered or reconciled AMNS fields against source report; "
+               "original Gmail E-Pass weights and existing nonblank fields unchanged",
         before_json=None, after_json=json.dumps({
             "reportDate": p.report_date.isoformat(), "permits": incoming,
             "trips": len(all_trips), "netMt": str(totals),
