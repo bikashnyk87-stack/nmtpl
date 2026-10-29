@@ -21,6 +21,9 @@ from calendar import monthrange
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.drawing.image import Image as ExcelImage
+from pathlib import Path
+from base64 import b64decode
 from openpyxl.utils import get_column_letter as col
 from openpyxl.workbook.properties import CalcProperties
 from openpyxl.worksheet.page import PageMargins
@@ -51,6 +54,17 @@ STRIPE = PatternFill("solid", fgColor="F2F8FB")
 NUM = '#,##0.000;-#,##0.000;"";@'  # Blank DISPLAY for zero, numeric value remains 0
 INT = '#,##0;-#,##0;"";@'
 DATE = 'DD-MM-YYYY'
+
+
+
+def _client_logo(ws, anchor):
+    """Use the actual ArcelorMittal logo supplied inside the reference workbook."""
+    asset = Path(__file__).resolve().parents[1] / "static" / "amns_reference_logo.b64"
+    stream = BytesIO(b64decode(asset.read_text(encoding="ascii").strip()))
+    logo = ExcelImage(stream)
+    logo.width, logo.height = 105, 63
+    ws.add_image(logo, anchor)
+
 
 
 def _fmt(ws, last_col=16, landscape=True):
@@ -413,6 +427,7 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
         mark.fill=PatternFill("solid",fgColor=BLUE)
         mark.alignment=Alignment(horizontal="center",vertical="center")
         ws.row_dimensions[1].height=23
+        _client_logo(ws, "Q1")
         ws.merge_cells("B2:P2")
         x=ws["B2"]
         x.value="AMIPL DISPATCH DETAILS ON DT-"+day.strftime("%d/%m/%Y")
@@ -527,6 +542,7 @@ def _build_transporter_cumulative(wb, trips, as_of):
     mark.fill = PatternFill("solid", fgColor=BLUE)
     mark.alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 23
+    _client_logo(ws, "Q1")
     ws.merge_cells("B2:CL2")
     heading = ws["B2"]
     heading.value = "CUMULATIVE DISPATCH FOR THE MONTH OF " + as_of.strftime("%B-%Y").upper()
