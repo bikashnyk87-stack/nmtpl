@@ -829,9 +829,107 @@ def permit_entry_prefill(report_date: date, request: Request,
                     "Company AMNS 28-Oct reference differs from current Gmail trips/MT; "
                     "do not auto-correct source values"
                 )
+    from app.services.tiom_despatch_client_layout import MATERIAL_COLUMNS
     return {**source, "categories": master["categories"],
+            "materialOptions": MATERIAL_COLUMNS,
             "verifiedPermits": sum(x["entry_status"] == "CONFIRMED" for x in source["permits"]),
             "closed": False}
+
+
+
+class PermitEntryOne(BaseModel):
+    """Correct one permit; the remaining permits for the day remain untouched."""
+    report_date: date
+    permit: PermitEntryRow
+
+
+@router.post("/permit-entry-one")
+def save_permit_entry_one(p: PermitEntryOne, request: Request,
+                          db: Session = Depends(get_db)):
+    """One-click MIS correction with exact E-Pass reconciliation and audit."""
+    csrf(request)
+    user = _user(request, db)
+    from app.services.tiom_despatch_mapping import OPEN_DAY
+    from app.services.tiom_despatch_client_layout import destination_bucket_index
+    if p.report_date < OPEN_DAY:
+        raise HTTPException(422, "Approved records through 26 October are read-only")
+    item = p.permit
+    permit = item.permit_no.strip().upper()
+    if not permit or len(permit) > 80:
+        raise HTTPException(422, "Enter a valid permit number")
+    trips = list(db.scalars(select(DespatchTrip).where(
+        DespatchTrip.report_date == p.report_date,
+        DespatchTrip.status == "ACTIVE",
+        func.upper(DespatchTrip.permit_no) == permit,
+    )))
+    if not trips:
+        raise HTTPException(422, "Permit not found in verified Gmail E-Passes for this date")
+    actual_mt = sum((Decimal(str(x.net_mt)) for x in trips), Decimal("0"))
+    if item.amns_trips != len(trips) or abs(item.amns_mt - actual_mt) > Decimal(".025"):
+        raise HTTPException(422, "AMNS figures do not match E-Passes for this permit. "
+                            f"Gmail shows {len(trips)} trips and {actual_mt} MT. "
+                            "Check cancelled E-Passes before saving.")
+    buyer, dest, material = (item.buyer.strip(), item.destination.strip(), item.material.strip())
+    if not all((buyer, dest, material)):
+        raise HTTPException(422, "Enter buyer and destination, then choose the approved material / grade")
+    try:
+        classified = _amns_material(material, item.grade_percent, p.report_date)
+    except ValueError as exc:
+        raise HTTPException(422, f"{permit}: {exc}") from exc
+    projection = SimpleNamespace(
+        buyer=_amns_buyer(buyer), destination=dest,
+        material_grade=classified, report_date=p.report_date
+    )
+    if destination_bucket_index(projection) is None:
+        raise HTTPException(422,
+            "The buyer, destination and material/grade do not match an approved report column. "
+            "Please check the company permit report; original E-Passes have not changed.")
+    if item.permit_qty is not None and item.permit_qty < 0:
+        raise HTTPException(422, "Permit quantity cannot be negative")
+    if item.balance_mt is not None and item.balance_mt < 0:
+        raise HTTPException(422, "Balance quantity cannot be negative")
+    record = db.scalar(select(DespatchPermitDay).where(
+        DespatchPermitDay.report_date == p.report_date,
+        func.upper(DespatchPermitDay.permit_no) == permit,
+    ))
+    old = ({
+        "buyer": record.buyer, "destination": record.destination,
+        "material": record.material, "grade_percent": record.grade_percent,
+        "permit_qty": str(record.permit_qty), "reported_trips": record.reported_trips,
+        "reported_mt": str(record.reported_mt), "balance_mt": str(record.balance_mt),
+        "review_status": record.review_status,
+    } if record else None)
+    if record is None:
+        record = DespatchPermitDay(report_date=p.report_date,
+                                   permit_no=trips[0].permit_no)
+        db.add(record)
+    record.buyer = buyer
+    record.destination = dest
+    record.material = material
+    record.grade_percent = item.grade_percent.strip()
+    record.permit_qty = item.permit_qty
+    record.reported_trips = item.amns_trips
+    record.reported_mt = item.amns_mt
+    record.balance_mt = item.balance_mt
+    record.review_status = "CONFIRMED"
+    # Never overwrite the E-Pass ledger: source corrections are projected
+    # into reports from this separate MIS permit record.
+    db.add(DespatchAudit(
+        actor=user.login_id, action="MIS_PERMIT_CORRECTION",
+        entity_key=f"{p.report_date.isoformat()}:{permit}",
+        reason="MIS corrected one permit from approved company report and verified original E-Pass totals",
+        before_json=json.dumps(old),
+        after_json=json.dumps({
+            "buyer": buyer, "destination": dest,
+            "material": material, "classifiedMaterial": classified,
+            "gradePercent": record.grade_percent, "tripCount": len(trips),
+            "netMt": str(actual_mt),
+        }),
+    ))
+    db.commit()
+    return {"ok": True, "reportDate": p.report_date.isoformat(),
+            "permit": permit, "tripsVerified": len(trips),
+            "mtVerified": float(actual_mt)}
 
 
 @router.post("/permit-entry-batch")
@@ -871,8 +969,9 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
     for item, permit in zip(p.permits, incoming):
         buyer, dest, material = (item.buyer.strip(), item.destination.strip(),
                                  item.material.strip())
-        if not all((buyer, dest, material, item.grade_percent.strip())):
-            raise HTTPException(422, f"{permit}: buyer, destination, material and grade are required")
+        if not all((buyer, dest, material)):
+            raise HTTPException(422, f"{permit}: buyer, destination and material required. "
+                                "If Grade % is not provided, choose Material / Grade from the approved list.")
         try:
             category_material = _amns_material(material, item.grade_percent, p.report_date)
         except ValueError as exc:
@@ -1138,8 +1237,12 @@ def export_check(report_type: str, request: Request,
     try:
         rows = _report_verified_amns(db, rows)
     except ValueError as exc:
+        detail = str(exc)
+        match = re.match(r"Permit ([A-Za-z0-9_-]+) \((\d{4}-\d{2}-\d{2})\):", detail)
         return {"ready": False, "activeTrips": len(rows), "activeMt": float(total_mt),
-                "reportDate": to_date.isoformat(), "message": str(exc)}
+                "reportDate": to_date.isoformat(), "message": detail,
+                "fixPermit": match.group(1) if match else None,
+                "fixDate": match.group(2) if match else None}
     from app.services.tiom_despatch_client_reports import _keymap, _material_counts
     errors=[]
     if report_type in {"destination","transporter"}:
