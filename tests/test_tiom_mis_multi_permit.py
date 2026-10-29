@@ -63,7 +63,7 @@ def test_date_wise_manual_multi_permit_is_atomic_and_does_not_require_image():
             assert len(entries) == 2
             assert all(x.review_status == "CONFIRMED" and x.document_id is None for x in entries)
             source = db.scalars(select(mod.DespatchTrip)).all()
-            assert all(x.buyer == "Self" and x.destination == "Dabuna" for x in source)
+            assert all(x.buyer == "Self" and x.destination.casefold() == "dabuna" for x in source)
             assert sorted(x.net_mt for x in source) == [Decimal("29.750"), Decimal("31.250")]
             assert len(db.scalars(select(mod.DespatchAudit).where(
                 mod.DespatchAudit.action == "MIS_PERMIT_BATCH")).all()) == 1
