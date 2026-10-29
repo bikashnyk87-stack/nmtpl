@@ -41,10 +41,10 @@ def test_date_wise_manual_multi_permit_is_atomic_and_does_not_require_image():
                       if x["buyer"] == "Self" and x["destination"] == "Dabuna"
                       and x["material"] == "S.Fines(60-62)")
         data = {"report_date": "2026-10-28", "permits": [
-            {"permit_no": "L102604670", "category_index": bucket,
+            {"permit_no": "L102604670", "buyer": "AMNS", "destination": "DABUNA", "material": "SCREENED FINES",
              "grade_percent": "60.79", "permit_qty": "100",
              "amns_trips": 1, "amns_mt": "31.251", "balance_mt": "68.749"},
-            {"permit_no": "L102604671", "category_index": bucket,
+            {"permit_no": "L102604671", "buyer": "AMNS", "destination": "DABUNA", "material": "SCREENED FINES",
              "grade_percent": "60.79", "permit_qty": "100",
              "amns_trips": 1, "amns_mt": "22.750", "balance_mt": "77.250"},
         ]}
@@ -86,14 +86,13 @@ def test_cumulative_monthly_transporter_sheet_has_requested_heading_and_totals()
     out, totals = build_client_workbook("transporter", records, date(2026, 10, 27),
                                         date(2026, 10, 28))
     wb = load_workbook(BytesIO(out.getvalue()))
-    assert "CUMULATIVE" in wb.sheetnames
-    assert wb["CUMULATIVE"]["B2"].value == (
-        "CUMULATIVE DISPATCH FOR THE MONTH OF OCTOBER-2026"
-    )
-    assert wb["CUMULATIVE"]["O9"].value == 2
-    assert wb["CUMULATIVE"]["P9"].value == 61.0
-    assert wb["CUMULATIVE"]["CL9"].value.startswith("=SUM(")
-    assert wb["27.10.26"]["B2"].value.startswith("AMIPL DISPATCH DETAILS")
-    assert wb["CUMULATIVE"].oddHeader.left.text == "&BNMTPL | TIOM&B"
+    assert "CUMULATIVE" not in wb.sheetnames
+    ws = wb["28.10.26"]
+    assert ws["B2"].value.startswith("AMIPL DISPATCH DETAILS")
+    assert ws["B31"].value == "CUMULATIVE DISPATCH FOR THE MONTH OF OCTOBER-2026"
+    assert ws["O37"].value == 2
+    assert ws["P37"].value == 61.0
+    assert ws["CP37"].value.startswith("=SUM(")
+    assert ws.oddHeader.left.text == "&BNMTPL | TIOM&B"
     assert totals["trips"] == 2 and totals["quantityMt"] == 61.0
     wb.close()
