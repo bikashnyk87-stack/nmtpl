@@ -132,12 +132,13 @@ window.tiomDDPanel=async function(which){
         (data.permits.some(p=>p.sourceCorrection)?'<p style="color:#995000;font-weight:600">Approved AMNS 28-Oct source prefilled '+data.permits.filter(p=>p.sourceCorrection).length+' legacy permits. Review and click Save All & Reconcile once. Original Gmail E-Passes are unchanged.</p>':'')+
         '<datalist id="dd_pe_buyers"><option value="AMNS"><option value="DNA MINERALS"><option value="SNN MINERALS"></datalist>'+
         '<datalist id="dd_pe_destinations"><option value="DABUNA"><option value="TUIDUNGRI (SARAIKELA)"></datalist>'+
-        '<datalist id="dd_pe_materials"><option value="SCREENED FINES"><option value="5X18"></datalist>'+
-        '<div class="dd-scroll"><table><thead><tr><th>Permit No.</th><th>Buyer (AMNS)</th><th>Destination (AMNS)</th><th>Material (AMNS)</th><th>Grade %</th><th>Permit MT</th><th>AMNS Trips</th><th>Dispatch MT</th><th>Balance MT</th><th>Gmail E-Pass Reference</th></tr></thead>'+
+        '<datalist id="dd_pe_materials"><option value="SCREENED FINES"><option value="5X18">'+(data.materialOptions||[]).map(x=>'<option value="'+h(x)+'">').join('')+'</datalist>'+
+        (last.repairTarget?.date===reportDate?'<div id="dd_repair_panel"></div>':'')+
+        '<div class="dd-scroll"><table><thead><tr><th>Permit No.</th><th>Buyer (AMNS)</th><th>Destination (AMNS)</th><th>Material / Grade</th><th>Grade % (optional if band selected)</th><th>Permit MT</th><th>AMNS Trips</th><th>Dispatch MT</th><th>Balance MT</th><th>Gmail E-Pass Reference</th><th>Action</th></tr></thead>'+
         '<tbody id="dd_pe_rows"></tbody></table></div>'+
         '<div class="dd-tools"><button class="btn secondary small" onclick="tiomDDAddPermitRow()">+ Add permit</button>'+
         '<button class="btn primary small" onclick="tiomDDSavePermitBatch()">Save All & Reconcile</button></div>'+
-        '<p class="dd-note">Use the actual AMNS location (e.g. TUIDUNGRI (SARAIKELA)), not the older client sheet label. Differences are kept in the audit; Gmail source records are not overwritten.</p>'+
+        '<p class="dd-note">For old permits, select the approved material/grade code (e.g. S.Fines(60-62)) and save only that permit. Numerical Grade % is optional when the material code already has the verified band. Original E-Passes remain unchanged.</p>'+
         '</section>';
       const body=$('dd_pe_rows');
       const field=(id,value,placeholder,width,other='')=>
@@ -153,12 +154,66 @@ window.tiomDDPanel=async function(which){
         '<td>'+field('dd_pe_mt_'+i,p.amns_mt,'MT',105,'type="number" step="0.001" min="0"')+'</td>'+
         '<td>'+field('dd_pe_bal_'+i,p.balance_mt,'Balance',95,'type="number" step="0.001" min="0"')+'</td>'+
         '<td><small>'+f(p.reported_trips||0,0)+' trips / '+f(p.reported_mt||0)+' MT</small><br><small>'+h(p.entry_status||'PENDING')+'</small>'+
-        (p.sourceCorrection?'<br><small>Approved AMNS report</small>':'')+'</td></tr>';
+        (p.sourceCorrection?'<br><small>Approved AMNS report</small>':'')+'</td>'+
+        '<td><button class="btn secondary tiny" onclick="tiomDDSavePermitOne('+i+')">Save permit</button></td></tr>';
       data.permits.forEach((p,i)=>body.insertAdjacentHTML('beforeend',rowHtml(p,i)));
       window.tiomDDAddPermitRow=()=>{
         const i=data.permits.length;
         data.permits.push({permit_no:'',reported_trips:0,reported_mt:0,entry_status:'NEW'});
         body.insertAdjacentHTML('beforeend',rowHtml(data.permits[i],i));
+      };
+      const entry=(p,i)=>({
+        permit_no:v('dd_pe_no_'+i).trim(),buyer:v('dd_pe_buyer_'+i).trim(),
+        destination:v('dd_pe_dest_'+i).trim(),material:v('dd_pe_mat_'+i).trim(),
+        grade_percent:v('dd_pe_grade_'+i).trim(),
+        permit_qty:v('dd_pe_qty_'+i)===''?null:v('dd_pe_qty_'+i),
+        amns_trips:v('dd_pe_trips_'+i)===''?Number(p.reported_trips):Number(v('dd_pe_trips_'+i)),
+        amns_mt:v('dd_pe_mt_'+i)===''?String(p.reported_mt):v('dd_pe_mt_'+i),
+        balance_mt:v('dd_pe_bal_'+i)===''?null:v('dd_pe_bal_'+i)
+      });
+      const target=last.repairTarget;
+      const ix=target&&target.date===reportDate?
+        data.permits.findIndex(x=>x.permit_no.toUpperCase()===target.permit.toUpperCase()):-1;
+      if(ix>=0){
+        const p=data.permits[ix];
+        const options=(data.materialOptions||[]).map(x=>
+          '<option value="'+h(x)+'"'+(x===p.material?' selected':'')+'>'+h(x)+'</option>').join('');
+        $('dd_repair_panel').innerHTML='<section class="dd-box" style="border:2px solid #b26d1c;margin:12px 0;padding:14px">'+
+          '<h3>Fix permit '+h(p.permit_no)+' · '+h(reportDate)+'</h3>'+
+          '<p>Only this permit needs attention. Choose its correct grade from the company AMNS report. Gmail trips and MT appear below for checking.</p>'+
+          '<div class="dd-tools"><label>Buyer <input id="dd_fix_buyer" value="'+h(p.buyer)+'"></label>'+
+          '<label>Destination <input id="dd_fix_dest" value="'+h(p.destination)+'"></label>'+
+          '<label>Material / Grade <select id="dd_fix_material">'+
+          '<option value="">Choose material and grade</option>'+options+'</select></label>'+
+          '<label>Grade % (optional when band selected) <input id="dd_fix_grade" value="'+h(p.grade_percent||'')+'" placeholder="Optional"></label></div>'+
+          '<p><b>Gmail:</b> '+f(p.reported_trips,0)+' trips · '+f(p.reported_mt)+' MT. Other permits will not change.</p>'+
+          '<button class="btn primary small" onclick="tiomDDSavePermitOne('+ix+',true)">Save this permit</button></section>';
+      }
+      window.tiomDDSavePermitOne=async(i,fromRepair=false)=>{
+        const p=data.permits[i];
+        if(!p)return say('Permit row not found. Refresh.',true);
+        const row=entry(p,i);
+        if(fromRepair){
+          row.buyer=v('dd_fix_buyer').trim();
+          row.destination=v('dd_fix_dest').trim();
+          row.material=v('dd_fix_material').trim();
+          row.grade_percent=v('dd_fix_grade').trim();
+        }
+        if(!row.permit_no||!row.buyer||!row.destination||!row.material)
+          return say('Enter buyer and destination and choose the approved material / grade.',true);
+        if(!Number.isInteger(row.amns_trips)||!Number.isFinite(Number(row.amns_mt)))
+          return say('Check trips and MT against the company report.',true);
+        try{
+          const saved=await api('permit-entry-one',JSON.stringify({report_date:reportDate,permit:row}));
+          if(fromRepair&&last.repairTarget){
+            const returnTo=last.repairTarget.returnTo;
+            last.repairTarget=null;
+            if(returnTo)$('dd_to').value=returnTo;
+            await window.tiomDDPanel('reports');
+          }else await window.tiomDDPanel('permits');
+          say('Saved '+saved.permit+' · '+saved.tripsVerified+' trips / '+f(saved.mtVerified)+
+              ' MT. No other permit changed.');
+        }catch(e){say('Not saved — '+e.message,true);}
       };
       window.tiomDDSavePermitBatch=async()=>{
         const rows=data.permits.map((p,i)=>({
@@ -172,8 +227,8 @@ window.tiomDDPanel=async function(which){
           amns_mt:v('dd_pe_mt_'+i)===''?null:v('dd_pe_mt_'+i),
           balance_mt:v('dd_pe_bal_'+i)===''?null:v('dd_pe_bal_'+i)
         }));
-        if(!rows.length||rows.some(x=>!x.permit_no||!x.buyer||!x.destination||!x.material||!x.grade_percent||x.amns_trips===null||x.amns_mt===null))
-          return say('Every permit needs buyer, destination, material, grade %, AMNS trips and dispatch MT.',true);
+        if(!rows.length||rows.some(x=>!x.permit_no||!x.buyer||!x.destination||!x.material||x.amns_trips===null||x.amns_mt===null))
+          return say('Each permit needs buyer, destination, material, trips and MT; Grade % can be blank if the material includes an approved grade band.',true);
         try{
           const result=await api('permit-entry-batch',JSON.stringify({report_date:reportDate,permits:rows}));
           await window.tiomDDPanel('permits');
@@ -249,6 +304,14 @@ window.tiomDDConfirmCategory=async i=>{
     say('Confirmed '+r.tripsChecked+' trips for '+r.permit+'. Existing quantities were not changed.');
   }catch(e){say(e.message,true);}
 };
+window.tiomDDOpenPermitFix=async(date,permit)=>{
+  const returnTo=v('dd_to');
+  last.repairTarget={date,permit,returnTo};
+  $('dd_to').value=date;
+  await window.tiomDDPanel('permits');
+  $('dd_fix_material')?.focus();
+  $('dd_repair_panel')?.scrollIntoView({block:'start',behavior:'smooth'});
+};
 window.tiomDDExport=async type=>{
   const to=v('dd_to');
   if(!to)return say('Select a reporting date first',true);
@@ -258,7 +321,19 @@ window.tiomDDExport=async type=>{
   say('Checking despatch data for '+to+'…');
   try{
     const ready=await api('export-check/'+encodeURIComponent(type)+'?'+p.toString());
-    if(!ready.ready)throw Error(ready.message||'Source data not ready');
+    if(!ready.ready){
+      if(ready.fixPermit&&ready.fixDate){
+        say('Permit '+ready.fixPermit+' needs a material/grade correction.',true);
+        const fix=document.createElement('button');
+        fix.className='btn primary small';
+        fix.textContent='Fix permit '+ready.fixPermit;
+        fix.style.marginLeft='12px';
+        fix.onclick=()=>window.tiomDDOpenPermitFix(ready.fixDate,ready.fixPermit);
+        $('dd_notice')?.appendChild(fix);
+        return;
+      }
+      throw Error(ready.message||'Source data not ready');
+    }
     // Let Chrome handle the Excel download directly. Buffering a large
     // workbook in fetch(blob) caused a long apparently frozen spinner.
     const link=document.createElement('a');
