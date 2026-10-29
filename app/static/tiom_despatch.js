@@ -48,7 +48,7 @@ window.tiomProdTab=function(name){
    '<label>From <input type="date" id="dd_from" value="'+h(today.slice(0,7)+'-01')+'"></label>'+
    '<label>To <input type="date" id="dd_to" value="'+h(today)+'"></label><button class="btn primary small" onclick="tiomDDPanel()">Apply</button></div>'+
    '<div id="dd_notice" role="status"></div><nav class="dd-tabs">'+
-   [['dashboard','Dashboard'],['trips','Trips & Cancellations'],['imports','Mail & Image Imports'],['reports','Five Reports'],['senders','Sender Settings']].map(p=>
+   [['dashboard','Dashboard'],['trips','Trips & Cancellations'],['permits','MIS Permit Entry'],['imports','Gmail & Evidence'],['reports','Five Reports'],['senders','Sender Settings']].map(p=>
    '<button data-tab="'+p[0]+'" onclick="tiomDDPanel(\''+p[0]+'\')">'+p[1]+'</button>').join('')+
    '</nav><div id="dd_body">Loading…</div></div>';
   window.tiomDDPanel('dashboard');
@@ -100,14 +100,14 @@ window.tiomDDPanel=async function(which){
         ' · Excel attachments for review: '+f(mail.attachmentsNeedingReview||0,0)+'</p>'+
         (mail.lastError?'<p class="dd-warning">Gmail error: '+h(mail.lastError)+'</p>':
          (!mail.lastSuccess?'<p class="dd-warning">Automatic sync has not yet been verified. Use Sync Approved Gmail Now to check the connection.</p>':''))+
-        '<p>Daily image upload is OPTIONAL if an approved sender emailed it. AMNS images need verification; uploading an image does not start Gmail sync.</p></section>'+
+        '<p>AMNS image is optional supporting evidence. MIS permit entry works without an image.</p></section>'+
         '<div class="dd-grid"><section class="dd-box"><b>Upload E-Pass data</b><p>Auto-detects E-Pass weighment and transporter report layouts from XLS, XLSX or CSV. Select both Date Wise and Transporter Wise together for verified merging. Existing trips are never overwritten.</p>'+
        '<input id="dd_importfile" type="file" accept=".xls,.xlsx,.csv" multiple><button class="btn primary small" onclick="tiomDDImport()">Import</button><button class="btn secondary small" onclick="tiomDDMail()">Sync Approved Gmail Now</button>'+
        '<hr><b>AMNS image (optional, if not received by Gmail)</b><label>Report date <input type="date" id="dd_imgdate" value="'+h(v('dd_to'))+'"></label>'+
        '<input id="dd_imgfile" type="file" accept="image/jpeg,image/png,image/webp">'+
-       '<button class="btn secondary small" onclick="tiomDDImage()">Upload AMNS image</button><p>Images are processed automatically in the next Gmail scan; original image and reconciliation audit are retained.</p></section>'+
-       '<section class="dd-box"><b>AMNS reports — automatic E-Pass reconciliation</b>'+
-       '<p>AMNS image is read automatically on the MIS Gmail schedule. Permit details, cancellations and totals are checked against original E-Passes; only mismatches need review.</p>'+
+       '<button class="btn secondary small" onclick="tiomDDImage()">Attach evidence (optional)</button><p>Original image is archived for audit; no image recognition runs on the TIOM server.</p></section>'+
+       '<section class="dd-box"><b>AMNS source evidence</b>'+
+       '<p>Use the MIS Permit Entry tab for date-wise manual AMNS details. Images here are optional originals, not a processing requirement.</p>'+
        (imgs.filter(x=>!x.report_date||x.report_date>='2026-10-27').map(x=>'<div class="dd-image"><a target="_blank" href="/api/tiom/despatch/image/'+encodeURIComponent(x.id)+'">'+h(x.filename)+'</a><small>'+h(x.report_date||'Date pending')+' · '+h(x.review_status)+'</small>'+
        (x.review_status==='NEEDS_REVIEW'?'<small>Awaiting automatic source check</small>':
          x.review_status==='VERIFIED'?'<small>Verified against E-Passes</small>':
@@ -120,6 +120,61 @@ window.tiomDDPanel=async function(which){
         '<small>'+h(x.reportDate||'Date unverified')+' · '+h(x.reason)+'</small></div>').join('')||'<p>No pending Excel exceptions. Existing imported records are preserved.</p>')+
        ((mail.attachmentsNeedingReview||0)>attachments.length?'<p><small>Showing the latest '+attachments.length+' unresolved files; the total appears above.</small></p>':'')+
        '</section><div id="dd_editor"></div>';
+    } else if(tab==='permits'){
+      const reportDate=v('dd_to');
+      const data=await api('permit-entry-prefill?report_date='+encodeURIComponent(reportDate));
+      last.permitEntry=data;
+      const catOptions='<option value="">Select buyer / destination / material</option>'+
+        data.categories.map(c=>'<option value="'+c.index+'">'+h(c.buyer)+' · '+h(c.destination)+' · '+h(c.material)+'</option>').join('');
+      $('dd_body').innerHTML='<section class="dd-box"><h3>MIS · Date-wise AMNS permit entry</h3>'+
+        '<p>One report date · multiple permits · one Save All & Reconcile. No image upload or OCR required. E-Pass counts and MT are read-only reference figures.</p>'+
+        '<div class="dd-tools"><b>Date: '+h(reportDate)+'</b><span>'+data.totalTrips+' active E-Passes · '+f(data.totalMt)+' MT</span>'+
+        '<button class="btn secondary small" onclick="tiomDDPanel(\'permits\')">Refresh Gmail permits</button></div>'+
+        '<div class="dd-scroll"><table><thead><tr><th>Permit No.</th><th>Approved Buyer / Destination / Material</th><th>Grade %</th><th>Permit MT</th><th>AMNS Trips</th><th>AMNS MT</th><th>Balance MT</th><th>E-Pass Reference</th></tr></thead>'+
+        '<tbody id="dd_pe_rows"></tbody></table></div>'+
+        '<div class="dd-tools"><button class="btn secondary small" onclick="tiomDDAddPermitRow()">+ Add permit</button>'+
+        '<button class="btn primary small" onclick="tiomDDSavePermitBatch()">Save All & Reconcile</button></div>'+
+        '<p id="dd_pe_note" class="dd-note">MIS copies permit-wise AMNS figures from the WhatsApp report. A row cannot be verified unless it matches authenticated Gmail E-Passes; cancellation is handled in Trips & Cancellations.</p>'+
+        '</section>';
+      const body=$('dd_pe_rows');
+      const rowHtml=(p,i)=>'<tr>'+
+        '<td><input style="min-width:128px" id="dd_pe_no_'+i+'" value="'+h(p.permit_no||'')+'" placeholder="Permit number" '+(p.permit_no?'readonly':'')+'></td>'+
+        '<td><select style="min-width:240px" id="dd_pe_cat_'+i+'">'+catOptions+'</select></td>'+
+        '<td><input style="width:75px" id="dd_pe_grade_'+i+'" value="'+h(p.grade_percent||'')+'" placeholder="60.79"></td>'+
+        '<td><input style="width:110px" id="dd_pe_qty_'+i+'" type="number" step="0.001" min="0" value="'+h(p.permit_qty??'')+'"></td>'+
+        '<td><input style="width:78px" id="dd_pe_trips_'+i+'" type="number" step="1" min="0" value="'+h(p.amns_trips??'')+'"></td>'+
+        '<td><input style="width:110px" id="dd_pe_mt_'+i+'" type="number" step="0.001" min="0" value="'+h(p.amns_mt??'')+'"></td>'+
+        '<td><input style="width:110px" id="dd_pe_bal_'+i+'" type="number" step="0.001" min="0" value="'+h(p.balance_mt??'')+'"></td>'+
+        '<td><small>'+f(p.reported_trips||0,0)+' trips / '+f(p.reported_mt||0)+' MT</small><br><small>'+h(p.entry_status||'PENDING')+'</small></td></tr>';
+      data.permits.forEach((p,i)=>{
+        body.insertAdjacentHTML('beforeend',rowHtml(p,i));
+        if(p.category_index!==null && p.category_index!==undefined)
+          $('dd_pe_cat_'+i).value=String(p.category_index);
+      });
+      window.tiomDDAddPermitRow=()=>{
+        const i=data.permits.length;
+        data.permits.push({permit_no:'',reported_trips:0,reported_mt:0,entry_status:'NEW'});
+        body.insertAdjacentHTML('beforeend',rowHtml(data.permits[i],i));
+      };
+      window.tiomDDSavePermitBatch=async()=>{
+        const rows=data.permits.map((p,i)=>({
+          permit_no:v('dd_pe_no_'+i).trim(),
+          category_index:v('dd_pe_cat_'+i)===''?null:Number(v('dd_pe_cat_'+i)),
+          grade_percent:v('dd_pe_grade_'+i).trim(),
+          permit_qty:v('dd_pe_qty_'+i)===''?null:v('dd_pe_qty_'+i),
+          amns_trips:v('dd_pe_trips_'+i)===''?null:Number(v('dd_pe_trips_'+i)),
+          amns_mt:v('dd_pe_mt_'+i)===''?null:v('dd_pe_mt_'+i),
+          balance_mt:v('dd_pe_bal_'+i)===''?null:v('dd_pe_bal_'+i)
+        }));
+        if(!rows.length||rows.some(x=>!x.permit_no||x.category_index===null||x.amns_trips===null||x.amns_mt===null))
+          return say('Every permit needs an approved category, AMNS trip count and AMNS MT.',true);
+        try{
+          const result=await api('permit-entry-batch',JSON.stringify({report_date:reportDate,permits:rows}));
+          await window.tiomDDPanel('permits');
+          say('Saved '+result.verifiedPermits+' permits; reconciled '+result.verifiedTrips+
+              ' E-Passes / '+f(result.verifiedMt)+' MT. All entries audited.');
+        }catch(e){say('Not saved — '+e.message,true);}
+      };
     } else if(tab==='reports'){
       const mapping=await api('mapping-status?report_date='+encodeURIComponent(v('dd_to')));
       last.sourceMapping=mapping;
@@ -140,7 +195,7 @@ window.tiomDDPanel=async function(which){
         '<section class="dd-box"><b>Source mappings verified for '+h(mapping.reportDate)+'</b> · '+
         f(mapping.totalTrips,0)+' E-Passes classified</section>';
       $('dd_body').innerHTML=mapPanel+'<section class="dd-box"><b>Five Client-Format Reports</b>'+
-       '<p>Original Excel headings and layouts. All FTM / cumulative figures are calculated from the first day of the month, excluding cancelled trips.</p>'+
+       '<p>Branded Excel reports with consistent colours and borders; the transporter report includes a monthly cumulative sheet. FTM totals exclude cancelled trips.</p>'+
        '<div class="dd-tools"><label>Export basis <select id="dd_reportbasis"><option value="daily">Daily submission (To date + MTD)</option><option value="month">Month-to-date workbook (all daily sheets)</option></select></label>'+
        '<span>Reporting date: '+h(v('dd_to'))+' · Client submission next day</span></div>'+
        [['trip','Trip Summary · Daily, Cummulative, Cancellation'],['transporter','Transporter-wise Dispatch · FTD / FTM'],['material','Material-wise Dispatch · Date & Total'],['destination','Destination-wise · Buyers, Trips, Quantity'],['despatch','Captive / Non-captive · Date & Cumulative']].map(x=>
