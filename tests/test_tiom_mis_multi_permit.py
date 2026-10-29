@@ -90,9 +90,57 @@ def test_cumulative_monthly_transporter_sheet_has_requested_heading_and_totals()
     ws = wb["28.10.26"]
     assert ws["B2"].value.startswith("AMIPL DISPATCH DETAILS")
     assert ws["B31"].value == "CUMULATIVE DISPATCH FOR THE MONTH OF OCTOBER-2026"
-    assert ws["O37"].value == 2
-    assert ws["P37"].value == 61.0
+    assert ws["O36"].value == 2
+    assert ws["P36"].value == 61.0
     assert ws["CP37"].value.startswith("=SUM(")
     assert ws.oddHeader.left.text == "&BNMTPL | TIOM&B"
     assert totals["trips"] == 2 and totals["quantityMt"] == 61.0
     wb.close()
+
+
+def test_source_saraikela_not_rejected_or_overwritten_as_old_chandil():
+    """An AMNS-approved source label may differ from the old client matrix."""
+    api, engine, old = client()
+    try:
+        _seed(engine)
+        with Session(engine) as db:
+            dna = db.get(mod.DespatchTrip, "L102604671/1")
+            dna.buyer = "DNA MINERALS PVT LTD"
+            dna.destination = "Chandil"
+            dna.material_grade = "5-18mm(60-62)"
+            db.commit()
+        entry = {"report_date": "2026-10-28", "permits": [
+            {"permit_no": "L102604670", "buyer": "AMNS",
+             "destination": "DABUNA", "material": "SCREENED FINES",
+             "grade_percent": "60.79", "amns_trips": 1, "amns_mt": "31.250"},
+            {"permit_no": "L102604671", "buyer": "DNA MINERALS",
+             "destination": "TUIDUNGRI (SARAIKELA)", "material": "5X18",
+             "grade_percent": "60.50", "amns_trips": 1, "amns_mt": "29.750"},
+        ]}
+        response = api.post("/api/tiom/despatch/permit-entry-batch", json=entry)
+        assert response.status_code == 200, response.text
+        with Session(engine) as db:
+            epass = db.get(mod.DespatchTrip, "L102604671/1")
+            assert epass.destination == "Chandil"  # original Gmail truth
+            saved = db.scalar(select(mod.DespatchPermitDay).where(
+                mod.DespatchPermitDay.permit_no == "L102604671"
+            ))
+            assert saved.destination == "TUIDUNGRI (SARAIKELA)"
+            projected = mod._report_verified_amns(db, [epass])
+            assert projected[0].destination == "TUIDUNGRI (SARAIKELA)"
+            from app.services.tiom_despatch_client_layout import destination_bucket_index
+            assert destination_bucket_index(projected[0]) == 44
+        # Confirm expected report source for the exact date, not the legacy alias.
+        exported = api.get(
+            "/api/tiom/despatch/export/transporter?from_date=2026-10-28&to_date=2026-10-28"
+        )
+        assert exported.status_code == 200, exported.text
+        wb = load_workbook(BytesIO(exported.content))
+        ws = wb["28.10.26"]
+        assert ws["CO29"].value.startswith("=SUM(")
+        assert ws["CN28"].value == 29.750  # approved DNA Saraikela bucket
+        assert ws["B31"].value == "CUMULATIVE DISPATCH FOR THE MONTH OF OCTOBER-2026"
+        wb.close()
+    finally:
+        mod.get_user, mod.require, mod.csrf = old
+        engine.dispose()
