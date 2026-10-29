@@ -178,10 +178,11 @@ def test_unreadable_row_and_short_or_ambiguous_grade_fail_closed():
         grade_bucket("69.20","SCREENED FINES")
 
 
-def test_mail_worker_has_automatic_amns_integration_and_retains_older_ledger():
+def test_mis_manual_amns_entry_disables_memory_heavy_mail_ocr_and_retains_older_ledger():
     from pathlib import Path
     src=(Path(__file__).parents[1]/"app/services/tiom_despatch_mail.py").read_text("utf8")
-    assert "auto_process_pending_images" in src
+    assert "auto_process_pending_images" not in src
+    assert 'result["amnsVerifiedImages"] = 0' in src
     from app.services.tiom_despatch_amns import OPEN_DAY
     assert OPEN_DAY==date(2026,10,27)
 

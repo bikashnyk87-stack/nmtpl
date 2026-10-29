@@ -508,14 +508,15 @@ async def upload_image(request: Request, file: UploadFile = File(...),
         return {"ok": True, "id": old.id, "duplicate": True}
     doc = DespatchDocument(id=uuid4().hex, report_date=report_date,
                            filename=(file.filename or "AMNS image")[:255],
-                           media_type=ctype, sha256=digest, image_data=contents)
+                           media_type=ctype, sha256=digest, image_data=contents,
+                           review_status="EVIDENCE_ONLY")
     db.add(doc)
     db.add(DespatchAudit(actor=user.login_id, action="IMAGE_UPLOAD", entity_key=doc.id,
-                         reason="AMNS image retained; scheduled automatic E-Pass and cancellation reconciliation",
+                         reason="Optional original AMNS report retained for MIS manual permit audit",
                          before_json=None, after_json=json.dumps({"filename": doc.filename, "date": str(report_date)})))
     db.commit()
-    return {"ok": True, "id": doc.id, "reviewStatus": "NEEDS_REVIEW",
-            "automaticReconciliation": "Scheduled with next MIS Gmail check"}
+    return {"ok": True, "id": doc.id, "reviewStatus": "EVIDENCE_ONLY",
+            "automaticReconciliation": "Disabled; use MIS Permit Entry"}
 
 
 @router.get("/images")
@@ -616,6 +617,175 @@ def _prefill_permits_for_date(db, report_date: date):
         "permits": sorted(permits, key=lambda p: (-p["reported_trips"], p["permit_no"])),
         "unlinkedTrips": len(rows) - sum(len(group) for group in grouped.values()),
     }
+
+
+
+class PermitEntryRow(BaseModel):
+    """One AMNS row; the category is selected from approved report masters."""
+    permit_no: str
+    category_index: int
+    grade_percent: str = ""
+    permit_qty: Decimal | None = None
+    amns_trips: int = Field(ge=0)
+    amns_mt: Decimal = Field(ge=0)
+    balance_mt: Decimal | None = None
+
+
+class PermitEntryBatch(BaseModel):
+    report_date: date
+    permits: list[PermitEntryRow] = Field(min_length=1)
+
+
+@router.get("/permit-entry-prefill")
+def permit_entry_prefill(report_date: date, request: Request,
+                         db: Session = Depends(get_db)):
+    """One date, all E-Pass permits, with saved MIS fields; no image/OCR needed."""
+    _user(request, db)
+    from app.services.tiom_despatch_mapping import mapping_status, OPEN_DAY
+    if report_date < OPEN_DAY:
+        raise HTTPException(422, "Approved historical Despatch dates are read-only")
+    source = _prefill_permits_for_date(db, report_date)
+    master = mapping_status(db, report_date)
+    saved = {x.permit_no: x for x in db.scalars(
+        select(DespatchPermitDay).where(DespatchPermitDay.report_date == report_date)
+    )}
+    from app.services.tiom_despatch_client_layout import normalized, material_normalized
+    for item in source["permits"]:
+        old = saved.get(item["permit_no"])
+        if old:
+            for key, field in (("buyer", "buyer"), ("destination", "destination"),
+                               ("material", "material")):
+                if not item[key]:
+                    item[key] = str(getattr(old, field) or "")
+        category = next((
+            c["index"] for c in master["categories"]
+            if normalized(c["buyer"]) == normalized(item["buyer"])
+            and normalized(c["destination"]) == normalized(item["destination"])
+            and material_normalized(c["material"], report_date)
+                == material_normalized(item["material"], report_date)
+        ), None)
+        item.update({
+            "category_index": category,
+            "grade_percent": old.grade_percent if old else "",
+            "permit_qty": float(old.permit_qty) if old and old.permit_qty is not None
+                          else item["permit_qty"],
+            "amns_trips": old.reported_trips if old else None,
+            "amns_mt": float(old.reported_mt) if old and old.reported_mt is not None else None,
+            "balance_mt": float(old.balance_mt) if old and old.balance_mt is not None else None,
+            "entry_status": old.review_status if old else "PENDING",
+        })
+    return {**source, "categories": master["categories"],
+            "verifiedPermits": sum(x["entry_status"] == "CONFIRMED" for x in source["permits"]),
+            "closed": False}
+
+
+@router.post("/permit-entry-batch")
+def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
+                            db: Session = Depends(get_db)):
+    """Atomic date-wise MIS verification; E-Pass weight/status never altered."""
+    csrf(request)
+    user = _user(request, db)
+    from app.services.tiom_despatch_mapping import OPEN_DAY, VALID_MATERIALS
+    from app.services.tiom_despatch_client_layout import (
+        DESTINATION_BUCKETS, material_normalized, normalized,
+    )
+    if p.report_date < OPEN_DAY:
+        raise HTTPException(422, "Approved 1–26 October Despatch records are protected")
+    if len(p.permits) > 200:
+        raise HTTPException(422, "Too many permits for one report day")
+    incoming = [x.permit_no.strip().upper() for x in p.permits]
+    if len(set(incoming)) != len(incoming):
+        raise HTTPException(422, "Duplicate permit number in the same submission")
+    all_trips = list(db.scalars(select(DespatchTrip).where(
+        DespatchTrip.report_date == p.report_date,
+        DespatchTrip.status == "ACTIVE",
+    )))
+    grouped = {}
+    for trip in all_trips:
+        if not trip.permit_no.strip():
+            raise HTTPException(422, "Some E-Passes have no permit number")
+        grouped.setdefault(trip.permit_no.strip().upper(), []).append(trip)
+    if not grouped:
+        raise HTTPException(422, "No verified E-Passes found for this report date")
+    if set(incoming) != set(grouped):
+        missing = sorted(set(grouped) - set(incoming))
+        extra = sorted(set(incoming) - set(grouped))
+        raise HTTPException(422, "Date permit list differs from Gmail E-Passes. "
+                            f"Missing: {', '.join(missing[:4]) or 'none'}; "
+                            f"unexpected: {', '.join(extra[:4]) or 'none'}. Refresh the form.")
+    totals = Decimal("0")
+    amended = 0
+    for item, permit in zip(p.permits, incoming):
+        if not 0 <= item.category_index < len(DESTINATION_BUCKETS):
+            raise HTTPException(422, f"{permit}: choose an approved buyer/destination/material")
+        buyer, dest, material = DESTINATION_BUCKETS[item.category_index]
+        if material_normalized(material, p.report_date) not in VALID_MATERIALS:
+            raise HTTPException(422, f"{permit}: material does not match the client report master")
+        if item.grade_percent and (
+            not re.fullmatch(r"\d{1,2}(?:\.\d{1,3})?%?", item.grade_percent)
+            or float(item.grade_percent.rstrip("%")) > 100
+        ):
+            raise HTTPException(422, f"{permit}: invalid grade percentage")
+        if item.permit_qty is not None and item.permit_qty < 0:
+            raise HTTPException(422, f"{permit}: negative permit quantity")
+        if item.balance_mt is not None and item.balance_mt < 0:
+            raise HTTPException(422, f"{permit}: negative balance MT")
+        epasses = grouped[permit]
+        expected = sum((Decimal(str(t.net_mt)) for t in epasses), Decimal("0"))
+        if len(epasses) != item.amns_trips or abs(expected-item.amns_mt) > Decimal(".025"):
+            raise HTTPException(422,
+                f"{permit}: MIS AMNS {item.amns_trips} trips / {item.amns_mt} MT; "
+                f"Gmail E-Pass {len(epasses)} trips / {expected} MT. "
+                "Check cancellations or correct the entry.")
+        choice = (buyer, dest, material)
+        for trip in epasses:
+            for field, new_value in zip(("buyer", "destination", "material_grade"), choice):
+                prior = str(getattr(trip, field) or "").strip()
+                comparator = (material_normalized if field == "material_grade" else normalized)
+                same = (comparator(prior, p.report_date) == comparator(new_value, p.report_date)
+                        if field == "material_grade" else comparator(prior) == comparator(new_value))
+                if prior and not same:
+                    raise HTTPException(422, f"{permit}: {field} conflicts with existing E-Pass data")
+                if not prior:
+                    setattr(trip, field, new_value)
+                    amended += 1
+        record = db.scalar(select(DespatchPermitDay).where(
+            DespatchPermitDay.report_date == p.report_date,
+            DespatchPermitDay.permit_no == epasses[0].permit_no,
+        ))
+        if record is None:
+            record = DespatchPermitDay(report_date=p.report_date,
+                                       permit_no=epasses[0].permit_no)
+            db.add(record)
+        record.buyer, record.destination, record.material = choice
+        record.grade_percent = item.grade_percent
+        record.permit_qty = item.permit_qty
+        record.reported_trips = item.amns_trips
+        record.reported_mt = item.amns_mt
+        record.balance_mt = item.balance_mt
+        record.review_status = "CONFIRMED"
+        totals += expected
+    # AMNS image is supporting evidence, not an OCR verification requirement.
+    # Clear legacy pending flags only after the whole date has reconciled.
+    for image in db.scalars(select(DespatchDocument).where(
+        DespatchDocument.report_date == p.report_date,
+        DespatchDocument.review_status.in_(("NEEDS_REVIEW", "OCR_EXCEPTION")),
+    )):
+        image.review_status = "EVIDENCE_ONLY"
+    db.add(DespatchAudit(
+        actor=user.login_id, action="MIS_PERMIT_BATCH",
+        entity_key=p.report_date.isoformat(),
+        reason="MIS entered AMNS date-wise multiple permits; all checked against original active E-Passes",
+        before_json=None, after_json=json.dumps({
+            "reportDate": p.report_date.isoformat(), "permits": incoming,
+            "trips": len(all_trips), "netMt": str(totals),
+            "mappedFields": amended,
+        }),
+    ))
+    db.commit()
+    return {"ok": True, "reportDate": p.report_date.isoformat(),
+            "verifiedPermits": len(incoming), "verifiedTrips": len(all_trips),
+            "verifiedMt": float(totals), "mappedFields": amended}
 
 
 @router.get("/permit-prefill/{document_id}")

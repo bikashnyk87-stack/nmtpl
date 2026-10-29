@@ -21,6 +21,9 @@ from calendar import monthrange
 
 from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.drawing.image import Image as ExcelImage
+from pathlib import Path
+from base64 import b64decode
 from openpyxl.utils import get_column_letter as col
 from openpyxl.workbook.properties import CalcProperties
 from openpyxl.worksheet.page import PageMargins
@@ -45,9 +48,23 @@ DARK = "152936"
 WHITE = "FFFFFF"
 YELLOW = "FFF1C7"
 LINE = Side(style="thin", color="8096A3")
+DATA_BORDER = Border(left=Side(style="hair", color="CBD7DF"), right=Side(style="hair", color="CBD7DF"),
+                     top=Side(style="hair", color="E5EDF2"), bottom=Side(style="hair", color="CBD7DF"))
+STRIPE = PatternFill("solid", fgColor="F2F8FB")
 NUM = '#,##0.000;-#,##0.000;"";@'  # Blank DISPLAY for zero, numeric value remains 0
 INT = '#,##0;-#,##0;"";@'
 DATE = 'DD-MM-YYYY'
+
+
+
+def _client_logo(ws, anchor):
+    """Use the actual ArcelorMittal logo supplied inside the reference workbook."""
+    asset = Path(__file__).resolve().parents[1] / "static" / "amns_reference_logo.b64"
+    stream = BytesIO(b64decode(asset.read_text(encoding="ascii").strip()))
+    logo = ExcelImage(stream)
+    logo.width, logo.height = 105, 63
+    ws.add_image(logo, anchor)
+
 
 
 def _fmt(ws, last_col=16, landscape=True):
@@ -61,6 +78,11 @@ def _fmt(ws, last_col=16, landscape=True):
                                   header=.13, footer=.13)
     ws.freeze_panes = "B3"
     ws.print_options.horizontalCentered = True
+    # Printed company wordmark and consistent footer on all client reports.
+    ws.oddHeader.left.text = "&BNMTPL | TIOM&B"
+    ws.oddHeader.right.text = "DESPATCH REPORT"
+    ws.oddFooter.left.text = "Source: Verified E-Pass register"
+    ws.oddFooter.right.text = "Page &P of &N"
 
 
 def _style(ws, r, c, value=None, header=False, total=False, fmt=None):
@@ -73,7 +95,9 @@ def _style(ws, r, c, value=None, header=False, total=False, fmt=None):
         x.border = Border(left=LINE, right=LINE, top=LINE, bottom=LINE)
     else:
         x.font = Font(name="Calibri", size=9, color=DARK)
-        x.border = Border(bottom=Side(style="hair", color="C9D3D9"))
+        x.border = DATA_BORDER
+        if r % 2 == 0:
+            x.fill = STRIPE
     x.alignment = Alignment(vertical="center", horizontal="right" if fmt else "left", wrap_text=header)
     if fmt:
         x.number_format = fmt
@@ -156,6 +180,10 @@ def _detail_page(ws, trips, cancellation=False):
     ws["P1"]=float(_sum(trips))
     ws["N1"].number_format=INT
     ws["P1"].number_format=NUM
+    for a in ("M1","N1","O1","P1"):
+        ws[a].fill = PatternFill("solid", fgColor=PALE)
+        ws[a].font = Font(name="Calibri",size=10,bold=True,color=BLUE)
+        ws[a].border = DATA_BORDER
     for j,head in enumerate(HEADERS,1):
         _style(ws,2,j,head,header=True)
     ws.row_dimensions[2].height=30
@@ -168,8 +196,11 @@ def _detail_page(ws, trips, cancellation=False):
     for i, trip in enumerate(trips, 1):
         ws.append(_trip_row(trip, i))
     for row in ws.iter_rows(min_row=3, max_row=len(trips)+2,
-                            min_col=3, max_col=14):
+                            min_col=1, max_col=16):
         for c in row:
+            c.border = DATA_BORDER
+            if c.row % 2 == 0:
+                c.fill = STRIPE
             if c.column in (3, 12, 13, 14):
                 c.number_format=NUM
     ws.print_title_rows="1:2"
@@ -389,6 +420,14 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
     for day in days:
         ws=wb.create_sheet(day.strftime("%d.%m.%y"))
         _fmt(ws,90);ws.sheet_view.zoomScale=55;ws.freeze_panes="C28"
+        ws.merge_cells("B1:E1")
+        mark=ws["B1"]
+        mark.value="NMTPL  |  TIOM DESPATCH"
+        mark.font=Font(name="Calibri",size=12,bold=True,color=WHITE)
+        mark.fill=PatternFill("solid",fgColor=BLUE)
+        mark.alignment=Alignment(horizontal="center",vertical="center")
+        ws.row_dimensions[1].height=23
+        _client_logo(ws, "Q1")
         ws.merge_cells("B2:P2")
         x=ws["B2"]
         x.value="AMIPL DISPATCH DETAILS ON DT-"+day.strftime("%d/%m/%Y")
@@ -490,6 +529,100 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
         ws.print_area=f"B2:CL{row_total}"
 
 
+def _build_transporter_cumulative(wb, trips, as_of):
+    """Month-to-date transporter matrix accompanying the client's daily sheets."""
+    ws = wb.create_sheet("CUMULATIVE", 0)
+    _fmt(ws, 90)
+    ws.sheet_view.zoomScale = 60
+    ws.freeze_panes = "C9"
+    ws.merge_cells("B1:E1")
+    mark = ws["B1"]
+    mark.value = "NMTPL  |  TIOM DESPATCH"
+    mark.font = Font(name="Calibri", size=12, bold=True, color=WHITE)
+    mark.fill = PatternFill("solid", fgColor=BLUE)
+    mark.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 23
+    _client_logo(ws, "Q1")
+    ws.merge_cells("B2:CL2")
+    heading = ws["B2"]
+    heading.value = "CUMULATIVE DISPATCH FOR THE MONTH OF " + as_of.strftime("%B-%Y").upper()
+    heading.font = Font(name="Calibri", size=16, bold=True, color=WHITE)
+    heading.fill = PatternFill("solid", fgColor=BLUE)
+    heading.alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[2].height = 34
+    ws.merge_cells("B3:P3")
+    sub = ws["B3"]
+    sub.value = ("MONTH TO DATE  |  01-" + as_of.strftime("%m-%Y")
+                 + " TO " + as_of.strftime("%d-%m-%Y")
+                 + "  |  CANCELLED E-PASSES EXCLUDED")
+    sub.font = Font(name="Calibri", size=10, italic=True, color=BLUE)
+    ws.row_dimensions[3].height = 23
+    ws.column_dimensions["B"].width = 44
+    _style(ws, 5, 2, "TRANSPORTER NAME", header=True)
+    previous_buyer = previous_dest = None
+    buyer_start = dest_start = 3
+    for j, (buyer, dest, material) in enumerate(DESTINATION_BUCKETS):
+        c = 3 + j * 2
+        if buyer != previous_buyer:
+            if previous_buyer is not None and c - 1 > buyer_start:
+                ws.merge_cells(start_row=5, start_column=buyer_start,
+                               end_row=5, end_column=c-1)
+            buyer_start = c
+            _style(ws, 5, c, buyer, header=True)
+            previous_buyer, previous_dest = buyer, None
+        if dest != previous_dest:
+            if previous_dest is not None and c - 1 > dest_start:
+                ws.merge_cells(start_row=6, start_column=dest_start,
+                               end_row=6, end_column=c-1)
+            dest_start = c
+            _style(ws, 6, c, dest, header=True)
+            previous_dest = dest
+        ws.merge_cells(start_row=7, start_column=c, end_row=7, end_column=c+1)
+        _style(ws, 7, c, _transporter_grade(j, material), header=True)
+        _style(ws, 8, c, "Trips", header=True)
+        _style(ws, 8, c+1, "Quantity (MT)", header=True)
+        ws.column_dimensions[col(c)].width = 11
+        ws.column_dimensions[col(c+1)].width = 16
+    last_category = 3 + 2 * len(DESTINATION_BUCKETS)
+    if last_category - 1 > buyer_start:
+        ws.merge_cells(start_row=5, start_column=buyer_start,
+                       end_row=5, end_column=last_category-1)
+    if last_category - 1 > dest_start:
+        ws.merge_cells(start_row=6, start_column=dest_start,
+                       end_row=6, end_column=last_category-1)
+    _style(ws, 5, 89, "TOTAL TRIPS", header=True)
+    _style(ws, 5, 90, "TOTAL MT", header=True)
+    ws.column_dimensions["CK"].width = 15
+    ws.column_dimensions["CL"].width = 18
+    accumulated = defaultdict(lambda: [0, Decimal("0")])
+    for trip in trips:
+        index = destination_bucket_index(trip)
+        if index is None:
+            raise ValueError("Unclassified E-Pass on cumulative transporter report")
+        entry = accumulated[(normalized(trip.transporter), index)]
+        entry[0] += 1
+        entry[1] += Decimal(str(trip.net_mt))
+    transporters = _transporter_names(trips)
+    for i, (transporter_key, display_name) in enumerate(transporters):
+        r = 9 + i
+        _style(ws, r, 2, display_name)
+        for j in range(len(DESTINATION_BUCKETS)):
+            c = 3 + j * 2
+            count, quantity = accumulated[(transporter_key, j)]
+            _style(ws, r, c, count, fmt=INT)
+            _style(ws, r, c+1, float(quantity), fmt=NUM)
+        _style(ws, r, 89, f"=SUM({','.join(col(3+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})", fmt=INT)
+        _style(ws, r, 90, f"=SUM({','.join(col(4+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})", fmt=NUM)
+    total_row = 9 + len(transporters)
+    _style(ws, total_row, 2, "GRAND TOTAL", total=True)
+    for c in range(3, 91):
+        letter = col(c)
+        _style(ws, total_row, c, f"=SUM({letter}9:{letter}{total_row-1})",
+               total=True, fmt=INT if c % 2 else NUM)
+    ws.print_title_rows = "1:8"
+    ws.print_area = f"B1:CL{total_row}"
+
+
 def build_client_workbook(report_type, all_records, from_date, to_date):
     """Return (xlsx buffer, counts).
 
@@ -521,6 +654,7 @@ def build_client_workbook(report_type, all_records, from_date, to_date):
         _build_trip(wb,active,cancelled,from_date,to_date)
     elif report_type=="transporter":
         _build_transporter(wb,active,from_date,to_date,matrix)
+        _build_transporter_cumulative(wb,active,to_date)
     elif report_type=="material":
         _build_material(wb,active,to_date)
     elif report_type=="destination":
