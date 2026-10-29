@@ -125,33 +125,34 @@ window.tiomDDPanel=async function(which){
       const reportDate=v('dd_to');
       const data=await api('permit-entry-prefill?report_date='+encodeURIComponent(reportDate));
       last.permitEntry=data;
-      const catOptions='<option value="">Select buyer / destination / material</option>'+
-        data.categories.map(c=>'<option value="'+c.index+'">'+h(c.buyer)+' · '+h(c.destination)+' · '+h(c.material)+'</option>').join('');
       $('dd_body').innerHTML='<section class="dd-box"><h3>MIS · Date-wise AMNS permit entry</h3>'+
-        '<p>One report date · multiple permits · one Save All & Reconcile. No image upload or OCR required. E-Pass counts and MT are read-only reference figures.</p>'+
+        '<p>Enter AMNS buyer, actual destination, material and grade as printed. Trip and MT totals are verified against Gmail E-Passes. Image evidence is optional.</p>'+
         '<div class="dd-tools"><b>Date: '+h(reportDate)+'</b><span>'+data.totalTrips+' active E-Passes · '+f(data.totalMt)+' MT</span>'+
         '<button class="btn secondary small" onclick="tiomDDPanel(\'permits\')">Refresh Gmail permits</button></div>'+
-        '<div class="dd-scroll"><table><thead><tr><th>Permit No.</th><th>Approved Buyer / Destination / Material</th><th>Grade %</th><th>Permit MT</th><th>AMNS Trips</th><th>AMNS MT</th><th>Balance MT</th><th>E-Pass Reference</th></tr></thead>'+
+        '<datalist id="dd_pe_buyers"><option value="AMNS"><option value="DNA MINERALS"><option value="SNN MINERALS"></datalist>'+
+        '<datalist id="dd_pe_destinations"><option value="DABUNA"><option value="TUIDUNGRI (SARAIKELA)"></datalist>'+
+        '<datalist id="dd_pe_materials"><option value="SCREENED FINES"><option value="5X18"></datalist>'+
+        '<div class="dd-scroll"><table><thead><tr><th>Permit No.</th><th>Buyer (AMNS)</th><th>Destination (AMNS)</th><th>Material (AMNS)</th><th>Grade %</th><th>Permit MT</th><th>AMNS Trips</th><th>Dispatch MT</th><th>Balance MT</th><th>Gmail E-Pass Reference</th></tr></thead>'+
         '<tbody id="dd_pe_rows"></tbody></table></div>'+
         '<div class="dd-tools"><button class="btn secondary small" onclick="tiomDDAddPermitRow()">+ Add permit</button>'+
         '<button class="btn primary small" onclick="tiomDDSavePermitBatch()">Save All & Reconcile</button></div>'+
-        '<p id="dd_pe_note" class="dd-note">MIS copies permit-wise AMNS figures from the WhatsApp report. A row cannot be verified unless it matches authenticated Gmail E-Passes; cancellation is handled in Trips & Cancellations.</p>'+
+        '<p class="dd-note">Use the actual AMNS location (e.g. TUIDUNGRI (SARAIKELA)), not the older client sheet label. Differences are kept in the audit; Gmail source records are not overwritten.</p>'+
         '</section>';
       const body=$('dd_pe_rows');
+      const field=(id,value,placeholder,width,other='')=>
+        '<input style="min-width:'+width+'px;width:'+width+'px" id="'+id+'" value="'+h(value??'')+'" placeholder="'+placeholder+'" '+other+'>';
       const rowHtml=(p,i)=>'<tr>'+
-        '<td><input style="min-width:128px" id="dd_pe_no_'+i+'" value="'+h(p.permit_no||'')+'" placeholder="Permit number" '+(p.permit_no?'readonly':'')+'></td>'+
-        '<td><select style="min-width:240px" id="dd_pe_cat_'+i+'">'+catOptions+'</select></td>'+
-        '<td><input style="width:75px" id="dd_pe_grade_'+i+'" value="'+h(p.grade_percent||'')+'" placeholder="60.79"></td>'+
-        '<td><input style="width:110px" id="dd_pe_qty_'+i+'" type="number" step="0.001" min="0" value="'+h(p.permit_qty??'')+'"></td>'+
-        '<td><input style="width:78px" id="dd_pe_trips_'+i+'" type="number" step="1" min="0" value="'+h(p.amns_trips??'')+'"></td>'+
-        '<td><input style="width:110px" id="dd_pe_mt_'+i+'" type="number" step="0.001" min="0" value="'+h(p.amns_mt??'')+'"></td>'+
-        '<td><input style="width:110px" id="dd_pe_bal_'+i+'" type="number" step="0.001" min="0" value="'+h(p.balance_mt??'')+'"></td>'+
+        '<td>'+field('dd_pe_no_'+i,p.permit_no,'Permit no.',125,p.permit_no?'readonly':'')+'</td>'+
+        '<td>'+field('dd_pe_buyer_'+i,p.buyer,'AMNS buyer',140,'list="dd_pe_buyers"')+'</td>'+
+        '<td>'+field('dd_pe_dest_'+i,p.destination,'Actual destination',200,'list="dd_pe_destinations"')+'</td>'+
+        '<td>'+field('dd_pe_mat_'+i,p.material,'Material',125,'list="dd_pe_materials"')+'</td>'+
+        '<td>'+field('dd_pe_grade_'+i,p.grade_percent,'60.79',70)+'</td>'+
+        '<td>'+field('dd_pe_qty_'+i,p.permit_qty,'0.000',100,'type="number" step="0.001" min="0"')+'</td>'+
+        '<td>'+field('dd_pe_trips_'+i,p.amns_trips,'Trips',72,'type="number" step="1" min="0"')+'</td>'+
+        '<td>'+field('dd_pe_mt_'+i,p.amns_mt,'MT',105,'type="number" step="0.001" min="0"')+'</td>'+
+        '<td>'+field('dd_pe_bal_'+i,p.balance_mt,'Balance',95,'type="number" step="0.001" min="0"')+'</td>'+
         '<td><small>'+f(p.reported_trips||0,0)+' trips / '+f(p.reported_mt||0)+' MT</small><br><small>'+h(p.entry_status||'PENDING')+'</small></td></tr>';
-      data.permits.forEach((p,i)=>{
-        body.insertAdjacentHTML('beforeend',rowHtml(p,i));
-        if(p.category_index!==null && p.category_index!==undefined)
-          $('dd_pe_cat_'+i).value=String(p.category_index);
-      });
+      data.permits.forEach((p,i)=>body.insertAdjacentHTML('beforeend',rowHtml(p,i)));
       window.tiomDDAddPermitRow=()=>{
         const i=data.permits.length;
         data.permits.push({permit_no:'',reported_trips:0,reported_mt:0,entry_status:'NEW'});
@@ -160,15 +161,17 @@ window.tiomDDPanel=async function(which){
       window.tiomDDSavePermitBatch=async()=>{
         const rows=data.permits.map((p,i)=>({
           permit_no:v('dd_pe_no_'+i).trim(),
-          category_index:v('dd_pe_cat_'+i)===''?null:Number(v('dd_pe_cat_'+i)),
+          buyer:v('dd_pe_buyer_'+i).trim(),
+          destination:v('dd_pe_dest_'+i).trim(),
+          material:v('dd_pe_mat_'+i).trim(),
           grade_percent:v('dd_pe_grade_'+i).trim(),
           permit_qty:v('dd_pe_qty_'+i)===''?null:v('dd_pe_qty_'+i),
           amns_trips:v('dd_pe_trips_'+i)===''?null:Number(v('dd_pe_trips_'+i)),
           amns_mt:v('dd_pe_mt_'+i)===''?null:v('dd_pe_mt_'+i),
           balance_mt:v('dd_pe_bal_'+i)===''?null:v('dd_pe_bal_'+i)
         }));
-        if(!rows.length||rows.some(x=>!x.permit_no||x.category_index===null||x.amns_trips===null||x.amns_mt===null))
-          return say('Every permit needs an approved category, AMNS trip count and AMNS MT.',true);
+        if(!rows.length||rows.some(x=>!x.permit_no||!x.buyer||!x.destination||!x.material||!x.grade_percent||x.amns_trips===null||x.amns_mt===null))
+          return say('Every permit needs buyer, destination, material, grade %, AMNS trips and dispatch MT.',true);
         try{
           const result=await api('permit-entry-batch',JSON.stringify({report_date:reportDate,permits:rows}));
           await window.tiomDDPanel('permits');
@@ -196,7 +199,7 @@ window.tiomDDPanel=async function(which){
         '<section class="dd-box"><b>Source mappings verified for '+h(mapping.reportDate)+'</b> · '+
         f(mapping.totalTrips,0)+' E-Passes classified</section>';
       $('dd_body').innerHTML=mapPanel+'<section class="dd-box"><b>Five Client-Format Reports</b>'+
-       '<p>Branded Excel reports with consistent colours and borders; the transporter report includes a monthly cumulative sheet. FTM totals exclude cancelled trips.</p>'+
+       '<p>Branded Excel reports with consistent colours and borders; the transporter report includes the monthly cumulative table directly below the daily table. FTM totals exclude cancelled trips.</p>'+
        '<div class="dd-tools"><label>Export basis <select id="dd_reportbasis"><option value="daily">Daily submission (To date + MTD)</option><option value="month">Month-to-date workbook (all daily sheets)</option></select></label>'+
        '<span>Reporting date: '+h(v('dd_to'))+' · Client submission next day</span></div>'+
        [['trip','Trip Summary · Daily, Cummulative, Cancellation'],['transporter','Transporter-wise Dispatch · FTD / FTM'],['material','Material-wise Dispatch · Date & Total'],['destination','Destination-wise · Buyers, Trips, Quantity'],['despatch','Captive / Non-captive · Date & Cumulative']].map(x=>

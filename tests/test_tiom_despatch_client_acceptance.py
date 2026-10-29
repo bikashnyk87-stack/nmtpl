@@ -65,7 +65,7 @@ def test_client_report_against_26_oct_reference(amns_day,type):
         assert ws["D9"].value==6869.27
         assert ws["C10"].value==224
         assert ws["D10"].value==6869.27
-        assert ws["O35"].value is None or ws["O35"].value>=0
+        assert ws["O35"].value == "Trips"  # same-sheet cumulative header
     elif type=="material":
         ws=wb["Oct-26"]
         assert ws["H28"].value==5791.46

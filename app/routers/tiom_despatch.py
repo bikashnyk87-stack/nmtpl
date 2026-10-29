@@ -10,6 +10,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from email.utils import parseaddr
 from io import BytesIO, StringIO
+from types import SimpleNamespace
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
@@ -624,7 +625,9 @@ def _prefill_permits_for_date(db, report_date: date):
 class PermitEntryRow(BaseModel):
     """One AMNS row; the category is selected from approved report masters."""
     permit_no: str
-    category_index: int
+    buyer: str
+    destination: str
+    material: str
     grade_percent: str = ""
     permit_qty: Decimal | None = None
     amns_trips: int = Field(ge=0)
@@ -635,6 +638,102 @@ class PermitEntryRow(BaseModel):
 class PermitEntryBatch(BaseModel):
     report_date: date
     permits: list[PermitEntryRow] = Field(min_length=1)
+
+
+
+def _amns_buyer(value: str) -> str:
+    """Explicit buyer aliases from approved AMNS reports; MIS text is retained."""
+    from app.services.tiom_despatch_client_layout import normalized
+    aliases = {
+        normalized("AMNS"): "Self",
+        normalized("Self"): "Self",
+        normalized("DNA MINERALS"): "DNA MINERALS PVT LTD",
+        normalized("DNA MINERALS PVT LTD"): "DNA MINERALS PVT LTD",
+        normalized("SNN MINERALS"): "S N N MINERALS PRIVATE LIMITED",
+        normalized("S N N MINERALS PRIVATE LIMITED"): "S N N MINERALS PRIVATE LIMITED",
+    }
+    return aliases.get(normalized(value), value.strip())
+
+
+def _amns_material(material: str, grade: str, report_date: date) -> str:
+    """Convert AMNS source labels + percentage to an existing verified grade band."""
+    from app.services.tiom_despatch_client_layout import (
+        MATERIAL_COLUMNS, normalized, material_normalized,
+    )
+    cleaned = grade.strip().rstrip("%")
+    if not re.fullmatch(r"\d{1,2}(?:\.\d{1,3})?", cleaned):
+        raise ValueError("Grade % must be a number such as 60.50")
+    percent = Decimal(cleaned)
+    if not Decimal("0") < percent < Decimal("100"):
+        raise ValueError("Invalid grade percentage")
+    name = normalized(material)
+    families = {
+        "screenedfines": "S.Fines", "screenedfine": "S.Fines",
+        "sfines": "S.Fines", "5x18": "5-18mm",
+        "518": "5-18mm", "518mm": "5-18mm",
+        "crushedfines": "C.Fines", "cfines": "C.Fines",
+    }
+    family = families.get(name)
+    if family:
+        for low, high in ((51,55), (55,58), (58,60), (60,62), (62,65), (65,68)):
+            value = f"{family}({low}-{high})"
+            if Decimal(low) <= percent < Decimal(high) and any(
+                material_normalized(value, report_date) == material_normalized(x, report_date)
+                for x in MATERIAL_COLUMNS
+            ):
+                return value
+        raise ValueError("Material and grade do not match an approved reporting band")
+    for candidate in MATERIAL_COLUMNS:
+        if material_normalized(candidate, report_date) == material_normalized(material, report_date):
+            match = re.search(r"\((\d+)-(\d+)\)", candidate)
+            if match and Decimal(match[1]) <= percent < Decimal(match[2]):
+                return candidate
+    raise ValueError("Material / grade does not match approved reporting masters")
+
+
+class _ReportTripView:
+    """Read-only report field overlay; doesn't mutate or reload the E-Pass row."""
+    def __init__(self, source, buyer, destination, material_grade):
+        self._source = source
+        self.buyer = buyer
+        self.destination = destination
+        self.material_grade = material_grade
+
+    def __getattr__(self, name):
+        return getattr(self._source, name)
+
+
+def _report_verified_amns(db: Session, rows):
+    """Report on confirmed MIS source fields, preserving original E-Pass records."""
+    if not rows:
+        return rows
+    from app.services.tiom_despatch_client_layout import destination_bucket_index
+    days = {x.report_date for x in rows if x.report_date >= date(2026, 10, 27)}
+    if not days:
+        return rows
+    confirmed = {(x.report_date, x.permit_no.strip().upper()): x for x in db.scalars(
+        select(DespatchPermitDay).where(
+            DespatchPermitDay.report_date.in_(days),
+            DespatchPermitDay.review_status == "CONFIRMED",
+        )
+    )}
+    result = []
+    for row in rows:
+        saved = confirmed.get((row.report_date, row.permit_no.strip().upper()))
+        if not saved:
+            result.append(row)
+            continue
+        projected = _ReportTripView(
+            row, _amns_buyer(saved.buyer), saved.destination.strip(),
+            _amns_material(saved.material, saved.grade_percent, saved.report_date),
+        )
+        if destination_bucket_index(projected) is None:
+            raise ValueError(
+                f"Permit {saved.permit_no}: approved AMNS destination has no "
+                "corresponding client report column. Original E-Passes unchanged."
+            )
+        result.append(projected)
+    return result
 
 
 @router.get("/permit-entry-prefill")
@@ -656,17 +755,8 @@ def permit_entry_prefill(report_date: date, request: Request,
         if old:
             for key, field in (("buyer", "buyer"), ("destination", "destination"),
                                ("material", "material")):
-                if not item[key]:
-                    item[key] = str(getattr(old, field) or "")
-        category = next((
-            c["index"] for c in master["categories"]
-            if normalized(c["buyer"]) == normalized(item["buyer"])
-            and normalized(c["destination"]) == normalized(item["destination"])
-            and material_normalized(c["material"], report_date)
-                == material_normalized(item["material"], report_date)
-        ), None)
+                item[key] = str(getattr(old, field) or item[key])
         item.update({
-            "category_index": category,
             "grade_percent": old.grade_percent if old else "",
             "permit_qty": float(old.permit_qty) if old and old.permit_qty is not None
                           else item["permit_qty"],
@@ -686,10 +776,8 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
     """Atomic date-wise MIS verification; E-Pass weight/status never altered."""
     csrf(request)
     user = _user(request, db)
-    from app.services.tiom_despatch_mapping import OPEN_DAY, VALID_MATERIALS
-    from app.services.tiom_despatch_client_layout import (
-        DESTINATION_BUCKETS, material_normalized, normalized,
-    )
+    from app.services.tiom_despatch_mapping import OPEN_DAY
+    from app.services.tiom_despatch_client_layout import destination_bucket_index
     if p.report_date < OPEN_DAY:
         raise HTTPException(422, "Approved 1–26 October Despatch records are protected")
     if len(p.permits) > 200:
@@ -717,16 +805,22 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
     totals = Decimal("0")
     amended = 0
     for item, permit in zip(p.permits, incoming):
-        if not 0 <= item.category_index < len(DESTINATION_BUCKETS):
-            raise HTTPException(422, f"{permit}: choose an approved buyer/destination/material")
-        buyer, dest, material = DESTINATION_BUCKETS[item.category_index]
-        if material_normalized(material, p.report_date) not in VALID_MATERIALS:
-            raise HTTPException(422, f"{permit}: material does not match the client report master")
-        if item.grade_percent and (
-            not re.fullmatch(r"\d{1,2}(?:\.\d{1,3})?%?", item.grade_percent)
-            or float(item.grade_percent.rstrip("%")) > 100
-        ):
-            raise HTTPException(422, f"{permit}: invalid grade percentage")
+        buyer, dest, material = (item.buyer.strip(), item.destination.strip(),
+                                 item.material.strip())
+        if not all((buyer, dest, material, item.grade_percent.strip())):
+            raise HTTPException(422, f"{permit}: buyer, destination, material and grade are required")
+        try:
+            category_material = _amns_material(material, item.grade_percent, p.report_date)
+        except ValueError as exc:
+            raise HTTPException(422, f"{permit}: {exc}") from exc
+        projected = SimpleNamespace(
+            buyer=_amns_buyer(buyer), destination=dest,
+            material_grade=category_material, report_date=p.report_date,
+        )
+        if destination_bucket_index(projected) is None:
+            raise HTTPException(422,
+                f"{permit}: this exact AMNS destination/material is missing from "
+                "the report master. Do not select a different destination.")
         if item.permit_qty is not None and item.permit_qty < 0:
             raise HTTPException(422, f"{permit}: negative permit quantity")
         if item.balance_mt is not None and item.balance_mt < 0:
@@ -738,17 +832,16 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
                 f"{permit}: MIS AMNS {item.amns_trips} trips / {item.amns_mt} MT; "
                 f"Gmail E-Pass {len(epasses)} trips / {expected} MT. "
                 "Check cancellations or correct the entry.")
-        choice = (buyer, dest, material)
+        # Keep the original source fields if they disagree. The MIS record is
+        # a separately authenticated AMNS source used for report projections.
         for trip in epasses:
-            for field, new_value in zip(("buyer", "destination", "material_grade"), choice):
-                prior = str(getattr(trip, field) or "").strip()
-                comparator = (material_normalized if field == "material_grade" else normalized)
-                same = (comparator(prior, p.report_date) == comparator(new_value, p.report_date)
-                        if field == "material_grade" else comparator(prior) == comparator(new_value))
-                if prior and not same:
-                    raise HTTPException(422, f"{permit}: {field} conflicts with existing E-Pass data")
-                if not prior:
-                    setattr(trip, field, new_value)
+            for field, value in (
+                ("buyer", _amns_buyer(buyer)),
+                ("destination", dest),
+                ("material_grade", category_material),
+            ):
+                if not str(getattr(trip, field) or "").strip():
+                    setattr(trip, field, value)
                     amended += 1
         record = db.scalar(select(DespatchPermitDay).where(
             DespatchPermitDay.report_date == p.report_date,
@@ -758,7 +851,7 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
             record = DespatchPermitDay(report_date=p.report_date,
                                        permit_no=epasses[0].permit_no)
             db.add(record)
-        record.buyer, record.destination, record.material = choice
+        record.buyer, record.destination, record.material = buyer, dest, material
         record.grade_percent = item.grade_percent
         record.permit_qty = item.permit_qty
         record.reported_trips = item.amns_trips
@@ -959,8 +1052,8 @@ def export_check(report_type: str, request: Request,
     begin=from_date.replace(day=1)
     # Read only the fields needed to validate report availability. A full
     # E-Pass row contains many strings and is fetched again for the export.
-    source_fields = [DespatchTrip.epass_no, DespatchTrip.report_date,
-                     DespatchTrip.net_mt]
+    source_fields = [DespatchTrip.epass_no, DespatchTrip.permit_no,
+                     DespatchTrip.report_date, DespatchTrip.net_mt]
     if report_type in {"destination", "transporter"}:
         source_fields.extend((DespatchTrip.buyer, DespatchTrip.destination,
                               DespatchTrip.material_grade))
@@ -977,6 +1070,11 @@ def export_check(report_type: str, request: Request,
         return {"ready":False,"activeTrips":len(rows),"activeMt":float(total_mt),
                 "reportDate":to_date.isoformat(),
                 "message":f"No verified E-Pass trips for {to_date.isoformat()}. Latest available date: {last}. Check MIS Gmail import and the selected report date."}
+    try:
+        rows = _report_verified_amns(db, rows)
+    except ValueError as exc:
+        return {"ready": False, "activeTrips": len(rows), "activeMt": float(total_mt),
+                "reportDate": to_date.isoformat(), "message": str(exc)}
     from app.services.tiom_despatch_client_reports import _keymap, _material_counts
     errors=[]
     if report_type in {"destination","transporter"}:
@@ -1019,6 +1117,7 @@ def export_report(report_type: str, request: Request,
     read_ms = (perf_counter() - started) * 1000
     from app.services.tiom_despatch_client_reports import build_client_workbook
     try:
+        records = _report_verified_amns(db, records)
         buffer, summary = build_client_workbook(report_type, records, from_date, to_date)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
