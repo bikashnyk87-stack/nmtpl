@@ -508,14 +508,15 @@ async def upload_image(request: Request, file: UploadFile = File(...),
         return {"ok": True, "id": old.id, "duplicate": True}
     doc = DespatchDocument(id=uuid4().hex, report_date=report_date,
                            filename=(file.filename or "AMNS image")[:255],
-                           media_type=ctype, sha256=digest, image_data=contents)
+                           media_type=ctype, sha256=digest, image_data=contents,
+                           review_status="EVIDENCE_ONLY")
     db.add(doc)
     db.add(DespatchAudit(actor=user.login_id, action="IMAGE_UPLOAD", entity_key=doc.id,
-                         reason="AMNS image retained; scheduled automatic E-Pass and cancellation reconciliation",
+                         reason="Optional original AMNS report retained for MIS manual permit audit",
                          before_json=None, after_json=json.dumps({"filename": doc.filename, "date": str(report_date)})))
     db.commit()
-    return {"ok": True, "id": doc.id, "reviewStatus": "NEEDS_REVIEW",
-            "automaticReconciliation": "Scheduled with next MIS Gmail check"}
+    return {"ok": True, "id": doc.id, "reviewStatus": "EVIDENCE_ONLY",
+            "automaticReconciliation": "Disabled; use MIS Permit Entry"}
 
 
 @router.get("/images")
@@ -764,6 +765,13 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
         record.balance_mt = item.balance_mt
         record.review_status = "CONFIRMED"
         totals += expected
+    # AMNS image is supporting evidence, not an OCR verification requirement.
+    # Clear legacy pending flags only after the whole date has reconciled.
+    for image in db.scalars(select(DespatchDocument).where(
+        DespatchDocument.report_date == p.report_date,
+        DespatchDocument.review_status.in_(("NEEDS_REVIEW", "OCR_EXCEPTION")),
+    )):
+        image.review_status = "EVIDENCE_ONLY"
     db.add(DespatchAudit(
         actor=user.login_id, action="MIS_PERMIT_BATCH",
         entity_key=p.report_date.isoformat(),
