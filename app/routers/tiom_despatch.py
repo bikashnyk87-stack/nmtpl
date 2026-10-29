@@ -5,6 +5,7 @@ import csv
 import hashlib
 import json
 import re
+from time import perf_counter
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from email.utils import parseaddr
@@ -17,7 +18,7 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from pydantic import BaseModel, Field
 from sqlalchemy import Boolean, Date, DateTime, Integer, LargeBinary, Numeric, String, Text, func, select
-from sqlalchemy.orm import Mapped, Session, mapped_column
+from sqlalchemy.orm import Mapped, Session, mapped_column, load_only
 
 from app.auth import csrf, get_user, require
 from app.db import Base, get_db
@@ -956,7 +957,16 @@ def export_check(report_type: str, request: Request,
     if (from_date.year, from_date.month) != (to_date.year, to_date.month):
         raise HTTPException(422, "Choose one calendar month per client report")
     begin=from_date.replace(day=1)
-    rows=db.scalars(select(DespatchTrip).where(
+    # Read only the fields needed to validate report availability. A full
+    # E-Pass row contains many strings and is fetched again for the export.
+    source_fields = [DespatchTrip.epass_no, DespatchTrip.report_date,
+                     DespatchTrip.net_mt]
+    if report_type in {"destination", "transporter"}:
+        source_fields.extend((DespatchTrip.buyer, DespatchTrip.destination,
+                              DespatchTrip.material_grade))
+    elif report_type in {"material", "despatch"}:
+        source_fields.append(DespatchTrip.material_grade)
+    rows=db.scalars(select(DespatchTrip).options(load_only(*source_fields)).where(
         DespatchTrip.report_date.between(begin,to_date),
         DespatchTrip.status=="ACTIVE")).all()
     day_count=sum(x.report_date==to_date for x in rows)
@@ -999,21 +1009,30 @@ def export_report(report_type: str, request: Request,
     if (from_date.year, from_date.month) != (to_date.year, to_date.month):
         raise HTTPException(422, "Export one calendar month at a time")
     beginning = from_date.replace(day=1)
+    started = perf_counter()
     records = db.scalars(
         select(DespatchTrip).where(
             DespatchTrip.report_date.between(beginning, to_date),
             DespatchTrip.status.in_(["ACTIVE", "CANCELLED"]),
         ).order_by(DespatchTrip.report_date, DespatchTrip.epass_no)
     ).all()
+    read_ms = (perf_counter() - started) * 1000
     from app.services.tiom_despatch_client_reports import build_client_workbook
     try:
         buffer, summary = build_client_workbook(report_type, records, from_date, to_date)
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
+    build_ms = (perf_counter() - started) * 1000 - read_ms
     filename = f"AMIPL_{report_type}_{to_date:%Y-%m-%d}_Client_Format.xlsx"
+    # BytesIO's default iterator is line based, which fragments compressed ZIP
+    # workbooks into many tiny chunks. Send predictable 256KiB chunks instead.
+    size = buffer.getbuffer().nbytes
     return StreamingResponse(
-        buffer, media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        iter(lambda: buffer.read(256 * 1024), b""),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f'attachment; filename="{filename}"',
+                 "Content-Length": str(size),
+                 "Server-Timing": f"db;dur={read_ms:.0f}, workbook;dur={build_ms:.0f}",
                  "X-Despatch-Trip-Count": str(summary["trips"]),
                  "X-Despatch-Quantity-MT": str(summary["quantityMt"])}
     )

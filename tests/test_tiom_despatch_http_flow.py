@@ -94,6 +94,8 @@ def test_end_to_end_despatch_management():
         for kind in ("trip","transporter","material","destination","despatch"):
             resp=api.get("/api/tiom/despatch/export/"+kind)
             assert resp.status_code == 200, (kind, resp.text)
+            assert int(resp.headers["content-length"]) == len(resp.content)
+            assert "workbook;dur=" in resp.headers["server-timing"]
             wb=load_workbook(BytesIO(resp.content),read_only=True)
             ws=wb.active
             if kind == "trip":
