@@ -95,8 +95,12 @@ DESTINATION_BUCKETS = [
     ("Sri Balaji Metallics Pvt Ltd","KHAIRBONDH(SNG)","5-40mm(60-62)"),
     ("DNA MINERALS PVT LTD","Chandil","5-18mm(60-62)"),
     ("DNA MINERALS PVT LTD","Ramgarh","5-40mm(58-60)"),
+    # Approved AMNS 28-Oct report identifies these actual destinations.
+    # Do not silently treat Saraikela as Chandil; both get separate columns.
+    ("S N N MINERALS PRIVATE LIMITED","TUIDUNGRI (SARAIKELA)","5-18mm(60-62)"),
+    ("DNA MINERALS PVT LTD","TUIDUNGRI (SARAIKELA)","5-18mm(60-62)"),
 ]
-assert len(DESTINATION_BUCKETS) == 43
+assert len(DESTINATION_BUCKETS) == 45
 
 TRANSPORTERS_26_OCT = [
     "M/S  FIRST CHOICE CARRIER",
