@@ -749,7 +749,6 @@ def permit_entry_prefill(report_date: date, request: Request,
                                ("material", "material")):
                 item[key] = str(getattr(old, field) or item[key])
         item.update({
-        item.update({
             "grade_percent": old.grade_percent if old else "",
             "permit_qty": float(old.permit_qty) if old and old.permit_qty is not None
                           else item["permit_qty"],
@@ -814,7 +813,7 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
             raise HTTPException(422,
                 f"{permit}: this exact AMNS destination/material is missing from "
                 "the report master. Do not select a different destination.")
-        if item.permit_qty is not None        if item.permit_qty is not None and item.permit_qty < 0:
+        if item.permit_qty is not None and item.permit_qty < 0:
             raise HTTPException(422, f"{permit}: negative permit quantity")
         if item.balance_mt is not None and item.balance_mt < 0:
             raise HTTPException(422, f"{permit}: negative balance MT")
@@ -836,7 +835,7 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
                 if not str(getattr(trip, field) or "").strip():
                     setattr(trip, field, value)
                     amended += 1
-        record = db.scalar(select(DespatchPermitDay)        record = db.scalar(select(DespatchPermitDay).where(
+        record = db.scalar(select(DespatchPermitDay).where(
             DespatchPermitDay.report_date == p.report_date,
             DespatchPermitDay.permit_no == epasses[0].permit_no,
         ))
