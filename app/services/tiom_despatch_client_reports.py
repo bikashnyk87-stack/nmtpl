@@ -327,8 +327,10 @@ def _display_customer(buyer):
 
 def _build_destination(wb,trips,as_of,matrix):
     ws=wb.create_sheet(as_of.strftime("%b-%y"))
-    _fmt(ws,92);ws.freeze_panes="B6";ws.sheet_view.zoomScale=60
-    ws.merge_cells("A1:CN1")
+    category_end = 2 + 2*len(DESTINATION_BUCKETS)
+    ex_col, total_col, cumulative_col = category_end, category_end+2, category_end+4
+    _fmt(ws,cumulative_col);ws.freeze_panes="B6";ws.sheet_view.zoomScale=60
+    ws.merge_cells(start_row=1,start_column=1,end_row=1,end_column=cumulative_col)
     x=ws["A1"]
     x.value="THAKURANI IRON ORE MINE OF M/s ARCELORMITTAL INDIA PRIVATE LTD. ( DESTINATION WISE DISPATCH REPORT )"
     x.font=Font(bold=True,name="Calibri",size=13,color=WHITE)
@@ -367,14 +369,17 @@ def _build_destination(wb,trips,as_of,matrix):
         ws.merge_cells(start_row=2,start_column=buyer_start,end_row=2,end_column=endc-1)
     if endc-1>dest_start:
         ws.merge_cells(start_row=3,start_column=dest_start,end_row=3,end_column=endc-1)
-    # Original totals after the 43 bucket pairs: CJ/CK, CL/CM and CN.
-    for c,head in [(88,"Total Ex-Mines"),(90,"Grand Total"),(92,"Cummulative")]:
-        ws.merge_cells(start_row=2,start_column=c,end_row=4,end_column=c+(0 if c==92 else 1))
+    # Totals follow the original category columns plus any newly approved
+    # AMNS source destinations. Never merge Saraikela into Chandil.
+    for c,head in [(ex_col,"Total Ex-Mines"),(total_col,"Grand Total"),
+                   (cumulative_col,"Cummulative")]:
+        ws.merge_cells(start_row=2,start_column=c,end_row=4,
+                       end_column=c+(0 if c==cumulative_col else 1))
         _style(ws,2,c,head,header=True)
-    for c in (88,90):
+    for c in (ex_col,total_col):
         _style(ws,5,c,"TRIP",header=True)
         _style(ws,5,c+1,"QUANTITY",header=True)
-    for c in range(88,93):ws.column_dimensions[col(c)].width=17
+    for c in range(ex_col,cumulative_col+1):ws.column_dimensions[col(c)].width=17
     ws.row_dimensions[4].height=35
     per_day=_groups(trips)
     days=monthrange(as_of.year,as_of.month)[1]
@@ -385,17 +390,19 @@ def _build_destination(wb,trips,as_of,matrix):
             c=2+2*idx;count,mt=matrix[(d,idx)]
             _style(ws,r,c,count,fmt=INT)
             _style(ws,r,c+1,float(mt),fmt=NUM)
-        _style(ws,r,88,f"=SUM({','.join(col(2+2*j)+str(r) for j in range(9,len(DESTINATION_BUCKETS)))})",fmt=INT)
-        _style(ws,r,89,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(9,len(DESTINATION_BUCKETS)))})",fmt=NUM)
-        _style(ws,r,90,f"=SUM({','.join(col(2+2*j)+str(r) for j in range(9))})+CJ{r}",fmt=INT)
-        _style(ws,r,91,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(9))})+CK{r}",fmt=NUM)
-        _style(ws,r,92,f"=CM{r}"+(f"+CN{r-1}" if i>1 else ""),fmt=NUM)
+        _style(ws,r,ex_col,f"=SUM({','.join(col(2+2*j)+str(r) for j in range(9,len(DESTINATION_BUCKETS)))})",fmt=INT)
+        _style(ws,r,ex_col+1,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(9,len(DESTINATION_BUCKETS)))})",fmt=NUM)
+        _style(ws,r,total_col,f"=SUM({','.join(col(2+2*j)+str(r) for j in range(9))})+{col(ex_col)}{r}",fmt=INT)
+        _style(ws,r,total_col+1,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(9))})+{col(ex_col+1)}{r}",fmt=NUM)
+        _style(ws,r,cumulative_col,f"={col(total_col+1)}{r}"+(f"+{col(cumulative_col)}{r-1}" if i>1 else ""),fmt=NUM)
     last=days+6
     _style(ws,last,1,"Total",total=True)
-    for c in range(2,93):
+    for c in range(2,cumulative_col+1):
         cl=col(c)
-        _style(ws,last,c,f"=SUM({cl}6:{cl}{last-1})" if c!=92 else f"=CN{last-1}",total=True,fmt=INT if c%2==0 and c<92 else NUM)
-    ws.print_area=f"A1:CN{last}"
+        _style(ws,last,c,f"=SUM({cl}6:{cl}{last-1})"
+               if c != cumulative_col else f"={cl}{last-1}",
+               total=True,fmt=INT if c%2==0 and c<cumulative_col else NUM)
+    ws.print_area=f"A1:{col(cumulative_col)}{last}"
 
 
 def _transporter_grade(index, default):
@@ -476,6 +483,21 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
             tuple(rolling_total), tuple(rolling_captive),
             {key: tuple(value) for key, value in rolling_material.items()},
         )
+    # Prefix sums of per-date transporter totals, so the source-approved
+    # cumulative table is produced on EACH daily worksheet without rescans.
+    transport_per_day = defaultdict(list)
+    for (d, transport_key, idx), count_mt in daily_transporter.items():
+        transport_per_day[d].append((transport_key, idx, count_mt))
+    running_transport = defaultdict(lambda: [0, Decimal("0")])
+    day_to_transporter = {}
+    report_days = set(days)
+    for d in _days(to_date.replace(day=1), to_date):
+        for transport_key, idx, val in transport_per_day[d]:
+            tally = running_transport[(transport_key, idx)]
+            tally[0] += val[0]
+            tally[1] += val[1]
+        if d in report_days:
+            day_to_transporter[d] = {k: tuple(v) for k,v in running_transport.items()}
     for day in days:
         ws=wb.create_sheet(day.strftime("%d.%m.%y"))
         _fmt(ws,90);ws.sheet_view.zoomScale=55;ws.freeze_panes="C28"
@@ -556,8 +578,10 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
         endc=3+2*len(DESTINATION_BUCKETS)
         if endc-1>bstart:ws.merge_cells(start_row=24,start_column=bstart,end_row=24,end_column=endc-1)
         if endc-1>dstart:ws.merge_cells(start_row=25,start_column=dstart,end_row=25,end_column=endc-1)
-        _style(ws,24,89,"Total Trips",header=True)
-        _style(ws,24,90,"Total Quantity",header=True)
+        total_trips_col=3+2*len(DESTINATION_BUCKETS)
+        total_mt_col=total_trips_col+1
+        _style(ws,24,total_trips_col,"Total Trips",header=True)
+        _style(ws,24,total_mt_col,"Total Quantity",header=True)
         ws.column_dimensions["B"].width=42
         ws.column_dimensions["C"].width=17
         ws.column_dimensions["D"].width=16
@@ -571,108 +595,118 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
                 count,mt=daily_transporter[(day,transport_key,idx)]
                 _style(ws,r,c,count,fmt=INT)
                 _style(ws,r,c+1,float(mt),fmt=NUM)
-            _style(ws,r,89,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})",fmt=INT)
-            _style(ws,r,90,f"=SUM({','.join(col(4+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})",fmt=NUM)
+            _style(ws,r,total_trips_col,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})",fmt=INT)
+            _style(ws,r,total_mt_col,f"=SUM({','.join(col(4+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})",fmt=NUM)
         _style(ws,row_total,2,"Grand Total",total=True)
-        for c in range(3,91):
+        for c in range(3,total_mt_col+1):
             letter=col(c)
             _style(ws,row_total,c,f"=SUM({letter}28:{letter}{row_total-1})",total=True,
                    fmt=INT if c%2 else NUM)
-        ws.print_area=f"B2:CL{row_total}"
+        _append_transporter_cumulative(
+            ws, day, traders, day_to_transporter[day],
+            start_row=row_total+2,
+        )
 
 
-def _build_transporter_cumulative(wb, trips, as_of):
-    """Month-to-date transporter matrix accompanying the client's daily sheets."""
-    ws = wb.create_sheet("CUMULATIVE", 0)
-    _fmt(ws, 90)
-    ws.sheet_view.zoomScale = 60
-    ws.freeze_panes = "C9"
-    ws.merge_cells("B1:E1")
-    mark = ws["B1"]
-    mark.value = "NMTPL  |  TIOM DESPATCH"
-    mark.font = Font(name="Calibri", size=12, bold=True, color=WHITE)
-    mark.fill = PatternFill("solid", fgColor=BLUE)
-    mark.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[1].height = 23
-    _client_logo(ws, "Q1")
-    ws.merge_cells("B2:CL2")
-    heading = ws["B2"]
-    heading.value = "CUMULATIVE DISPATCH FOR THE MONTH OF " + as_of.strftime("%B-%Y").upper()
-    heading.font = Font(name="Calibri", size=16, bold=True, color=WHITE)
-    heading.fill = PatternFill("solid", fgColor=BLUE)
-    heading.alignment = Alignment(horizontal="center", vertical="center")
-    ws.row_dimensions[2].height = 34
-    ws.merge_cells("B3:P3")
-    sub = ws["B3"]
-    sub.value = ("MONTH TO DATE  |  01-" + as_of.strftime("%m-%Y")
-                 + " TO " + as_of.strftime("%d-%m-%Y")
-                 + "  |  CANCELLED E-PASSES EXCLUDED")
-    sub.font = Font(name="Calibri", size=10, italic=True, color=BLUE)
-    ws.row_dimensions[3].height = 23
-    ws.column_dimensions["B"].width = 44
-    _style(ws, 5, 2, "TRANSPORTER NAME", header=True)
+def _append_transporter_cumulative(ws, as_of, transporters, cumulative, start_row):
+    """Same-sheet cumulative table immediately below daily transporter total."""
+    blue_line = Side(style="thin", color="253542")
+    peach = PatternFill("solid", fgColor="F5C7A0")
+    label_row = start_row
+    buyer_row, dest_row, grade_row, trip_row = (
+        start_row+1, start_row+2, start_row+3, start_row+4
+    )
+    first = start_row+5
+    total_trips_col=3+2*len(DESTINATION_BUCKETS)
+    total_mt_col=total_trips_col+1
+    ws.merge_cells(start_row=label_row, start_column=2,
+                   end_row=label_row, end_column=total_mt_col)
+    title = ws.cell(label_row,2)
+    title.value = ("CUMULATIVE DISPATCH FOR THE MONTH OF "
+                   + as_of.strftime("%B-%Y").upper())
+    title.font = Font(name="Calibri",size=12,bold=True,color=DARK)
+    title.fill = peach
+    title.border = Border(top=blue_line,bottom=blue_line)
+    title.alignment = Alignment(horizontal="left",vertical="center")
+    ws.row_dimensions[label_row].height=25
+    ws.merge_cells(start_row=buyer_row,start_column=2,
+                   end_row=trip_row,end_column=2)
+    _style(ws,buyer_row,2,"TRANSPORTER NAME",header=True)
     previous_buyer = previous_dest = None
     buyer_start = dest_start = 3
-    for j, (buyer, dest, material) in enumerate(DESTINATION_BUCKETS):
-        c = 3 + j * 2
-        if buyer != previous_buyer:
-            if previous_buyer is not None and c - 1 > buyer_start:
-                ws.merge_cells(start_row=5, start_column=buyer_start,
-                               end_row=5, end_column=c-1)
-            buyer_start = c
-            _style(ws, 5, c, buyer, header=True)
-            previous_buyer, previous_dest = buyer, None
-        if dest != previous_dest:
-            if previous_dest is not None and c - 1 > dest_start:
-                ws.merge_cells(start_row=6, start_column=dest_start,
-                               end_row=6, end_column=c-1)
-            dest_start = c
-            _style(ws, 6, c, dest, header=True)
-            previous_dest = dest
-        ws.merge_cells(start_row=7, start_column=c, end_row=7, end_column=c+1)
-        _style(ws, 7, c, _transporter_grade(j, material), header=True)
-        _style(ws, 8, c, "Trips", header=True)
-        _style(ws, 8, c+1, "Quantity (MT)", header=True)
-        ws.column_dimensions[col(c)].width = 11
-        ws.column_dimensions[col(c+1)].width = 16
-    last_category = 3 + 2 * len(DESTINATION_BUCKETS)
-    if last_category - 1 > buyer_start:
-        ws.merge_cells(start_row=5, start_column=buyer_start,
-                       end_row=5, end_column=last_category-1)
-    if last_category - 1 > dest_start:
-        ws.merge_cells(start_row=6, start_column=dest_start,
-                       end_row=6, end_column=last_category-1)
-    _style(ws, 5, 89, "TOTAL TRIPS", header=True)
-    _style(ws, 5, 90, "TOTAL MT", header=True)
-    ws.column_dimensions["CK"].width = 15
-    ws.column_dimensions["CL"].width = 18
-    accumulated = defaultdict(lambda: [0, Decimal("0")])
-    for trip in trips:
-        index = destination_bucket_index(trip)
-        if index is None:
-            raise ValueError("Unclassified E-Pass on cumulative transporter report")
-        entry = accumulated[(normalized(trip.transporter), index)]
-        entry[0] += 1
-        entry[1] += Decimal(str(trip.net_mt))
-    transporters = _transporter_names(trips)
-    for i, (transporter_key, display_name) in enumerate(transporters):
-        r = 9 + i
-        _style(ws, r, 2, display_name)
-        for j in range(len(DESTINATION_BUCKETS)):
-            c = 3 + j * 2
-            count, quantity = accumulated[(transporter_key, j)]
-            _style(ws, r, c, count, fmt=INT)
-            _style(ws, r, c+1, float(quantity), fmt=NUM)
-        _style(ws, r, 89, f"=SUM({','.join(col(3+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})", fmt=INT)
-        _style(ws, r, 90, f"=SUM({','.join(col(4+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})", fmt=NUM)
-    total_row = 9 + len(transporters)
-    _style(ws, total_row, 2, "GRAND TOTAL", total=True)
-    for c in range(3, 91):
-        letter = col(c)
-        _style(ws, total_row, c, f"=SUM({letter}9:{letter}{total_row-1})",
-               total=True, fmt=INT if c % 2 else NUM)
-    ws.print_title_rows = "1:8"
-    ws.print_area = f"B1:CL{total_row}"
+    for idx,(buyer,dest,grade) in enumerate(DESTINATION_BUCKETS):
+        c=3+2*idx
+        if buyer!=previous_buyer:
+            if previous_buyer is not None and c-1>buyer_start:
+                ws.merge_cells(start_row=buyer_row,start_column=buyer_start,
+                               end_row=buyer_row,end_column=c-1)
+            buyer_start=c
+            _style(ws,buyer_row,c,buyer,header=True)
+            previous_buyer,previous_dest=buyer,None
+        if dest!=previous_dest:
+            if previous_dest is not None and c-1>dest_start:
+                ws.merge_cells(start_row=dest_row,start_column=dest_start,
+                               end_row=dest_row,end_column=c-1)
+            dest_start=c
+            _style(ws,dest_row,c,dest,header=True)
+            previous_dest=dest
+        ws.merge_cells(start_row=grade_row,start_column=c,
+                       end_row=grade_row,end_column=c+1)
+        _style(ws,grade_row,c,_transporter_grade(idx,grade),header=True)
+        _style(ws,trip_row,c,"Trips",header=True)
+        _style(ws,trip_row,c+1,"Quantity",header=True)
+    if total_trips_col-1>buyer_start:
+        ws.merge_cells(start_row=buyer_row,start_column=buyer_start,
+                       end_row=buyer_row,end_column=total_trips_col-1)
+    if total_trips_col-1>dest_start:
+        ws.merge_cells(start_row=dest_row,start_column=dest_start,
+                       end_row=dest_row,end_column=total_trips_col-1)
+    ws.merge_cells(start_row=buyer_row,start_column=total_trips_col,
+                   end_row=trip_row,end_column=total_trips_col)
+    ws.merge_cells(start_row=buyer_row,start_column=total_mt_col,
+                   end_row=trip_row,end_column=total_mt_col)
+    _style(ws,buyer_row,total_trips_col,"Total Trips",header=True)
+    _style(ws,buyer_row,total_mt_col,"Total Quantity",header=True)
+    for i,(transport_key,display_name) in enumerate(transporters):
+        row=first+i
+        _style(ws,row,2,display_name)
+        for idx in range(len(DESTINATION_BUCKETS)):
+            c=3+2*idx
+            count,mt=cumulative.get((transport_key,idx),(0,Decimal("0")))
+            _style(ws,row,c,count,fmt=INT)
+            _style(ws,row,c+1,float(mt),fmt=NUM)
+        _style(ws,row,total_trips_col,
+               f"=SUM({','.join(col(3+2*j)+str(row) for j in range(len(DESTINATION_BUCKETS)))})",
+               fmt=INT)
+        _style(ws,row,total_mt_col,
+               f"=SUM({','.join(col(4+2*j)+str(row) for j in range(len(DESTINATION_BUCKETS)))})",
+               fmt=NUM)
+    grand=first+len(transporters)
+    _style(ws,grand,2,"Grand Total",total=True)
+    for c in range(3,total_mt_col+1):
+        letter=col(c)
+        _style(ws,grand,c,f"=SUM({letter}{first}:{letter}{grand-1})",
+               total=True,fmt=INT if c%2 else NUM)
+    # Match the supplied peach/orange transporter layout; retain all figures
+    # and workbook calculations, with thin visible borders.
+    for row in list(range(23,28))+list(range(buyer_row,trip_row+1)):
+        for col_idx in range(2,total_mt_col+1):
+            cell=ws.cell(row,col_idx)
+            if cell.__class__.__name__ == "MergedCell":
+                continue
+            cell.fill=peach
+            cell.border=Border(left=blue_line,right=blue_line,
+                               top=blue_line,bottom=blue_line)
+            if cell.value is not None:
+                cell.font=Font(name="Calibri",size=9,bold=True,color=DARK)
+    for row in (28+len(transporters),grand):
+        for col_idx in range(2,total_mt_col+1):
+            cell=ws.cell(row,col_idx)
+            cell.fill=peach
+            cell.border=Border(left=blue_line,right=blue_line,
+                               top=blue_line,bottom=blue_line)
+            cell.font=Font(name="Calibri",size=9,bold=True,color=DARK)
+    ws.print_area=f"B1:{col(total_mt_col)}{grand}"
 
 
 def build_client_workbook(report_type, all_records, from_date, to_date):
@@ -710,7 +744,6 @@ def build_client_workbook(report_type, all_records, from_date, to_date):
         _build_trip(wb,active,cancelled,from_date,to_date)
     elif report_type=="transporter":
         _build_transporter(wb,active,from_date,to_date,matrix)
-        _build_transporter_cumulative(wb,active,to_date)
     elif report_type=="material":
         _build_material(wb,active,to_date)
     elif report_type=="destination":
