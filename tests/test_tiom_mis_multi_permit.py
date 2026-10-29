@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.routers import tiom_despatch as mod
 from app.services.tiom_despatch_client_reports import build_client_workbook
-from tests.test_tiom_despatch_http_flow import client
+from test_tiom_despatch_http_flow import client
 
 
 def _seed(engine):
