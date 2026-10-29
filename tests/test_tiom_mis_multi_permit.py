@@ -217,10 +217,10 @@ def test_28_oct_approved_image_prefills_all_four_correctly_without_mutating_ledg
         assert all(p["sourceCorrection"] for p in by_permit.values())
         # GET never mutates already stored MIS or Gmail source records.
         with Session(engine) as db:
-            old = db.scalar(select(mod.DespatchPermitDay).where(
+            previous = db.scalar(select(mod.DespatchPermitDay).where(
                 mod.DespatchPermitDay.permit_no == "L102603256"
             ))
-            assert old.destination == "Chandil"
+            assert previous.destination == "Chandil"
         rows = [
             {"permit_no": permit, "buyer": p["buyer"],
              "destination": p["destination"], "material": p["material"],
