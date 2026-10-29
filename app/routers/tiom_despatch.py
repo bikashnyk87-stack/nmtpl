@@ -691,6 +691,18 @@ def _amns_material(material: str, grade: str, report_date: date) -> str:
     raise ValueError("Material / grade does not match approved reporting masters")
 
 
+class _ReportTripView:
+    """Read-only report field overlay; doesn't mutate or reload the E-Pass row."""
+    def __init__(self, source, buyer, destination, material_grade):
+        self._source = source
+        self.buyer = buyer
+        self.destination = destination
+        self.material_grade = material_grade
+
+    def __getattr__(self, name):
+        return getattr(self._source, name)
+
+
 def _report_verified_amns(db: Session, rows):
     """Report on confirmed MIS source fields, preserving original E-Pass records."""
     if not rows:
@@ -711,13 +723,9 @@ def _report_verified_amns(db: Session, rows):
         if not saved:
             result.append(row)
             continue
-        projected = SimpleNamespace(**{
-            c.name: getattr(row, c.name) for c in row.__table__.columns
-        })
-        projected.buyer = _amns_buyer(saved.buyer)
-        projected.destination = saved.destination.strip()
-        projected.material_grade = _amns_material(
-            saved.material, saved.grade_percent, saved.report_date
+        projected = _ReportTripView(
+            row, _amns_buyer(saved.buyer), saved.destination.strip(),
+            _amns_material(saved.material, saved.grade_percent, saved.report_date),
         )
         if destination_bucket_index(projected) is None:
             raise ValueError(
