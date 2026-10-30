@@ -42,7 +42,7 @@ def test_invalid_distance_range_rejected(bad):
 
 def test_multiple_route_variations_share_one_physical_location():
     engine=create_engine("sqlite://")
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine, tables=[Site.__table__, SiteLocation.__table__])
     with Session(engine) as db:
         db.add(Site(site_id="KOCP",site_name="KOCP",short_name="KOCP",active=True))
         db.flush()
