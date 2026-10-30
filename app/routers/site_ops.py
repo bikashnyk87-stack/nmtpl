@@ -38,6 +38,7 @@ from app.site_models import (
     SiteOperationalImportBatch,
     SiteOperationalImportRow,
     SiteLocation,
+    SiteMovementRoute,
     SiteMaterial,
     SitePersonAttendance,
     SiteSatelliteObservation,
@@ -284,10 +285,12 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
     request_id = str(payload.get("requestId") or '').strip()
     if not request_id:
         raise HTTPException(422, "Request ID is required")
+    route_id = str(payload.get("routeId") or "").strip() or None
     existing = db.scalar(select(SiteTrip).where(SiteTrip.site_id == site_id, SiteTrip.source_type == "PORTAL_SIMPLE", SiteTrip.source_record_uid == request_id))
     if existing:
         same = (
             existing.operating_date == operating_day and existing.shift == shift and
+            (existing.route_id or None) == route_id and
             (existing.vehicle_id or None) == (str(payload.get("vehicleId") or '').strip() or None) and
             (existing.loading_equipment_id or None) == (str(payload.get("loadingEquipmentId") or '').strip() or None) and
             (existing.destination_location_id or None) == (str(payload.get("destinationLocationId") or '').strip() or None) and
@@ -356,6 +359,20 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
             or str(material_row.billable_unit or "").strip().upper() in {"CUM","M3","M³"}
         )
         kind = "OB" if is_ob else "TRIP"
+        movement_kind = "OB" if is_ob else "COAL"
+        selected_route = db.get(SiteMovementRoute, route_id) if route_id else None
+        if selected_route:
+            if (selected_route.site_id != site_id or not selected_route.active
+                    or selected_route.movement_kind != movement_kind):
+                raise HTTPException(422, "Selected route does not belong to this Coal/OB master.")
+            if destination != selected_route.destination_location_id:
+                raise HTTPException(422, "Destination does not match the selected route.")
+            if selected_route.source_location_id and source != selected_route.source_location_id:
+                raise HTTPException(422, "Source does not match the selected OB route.")
+        elif db.scalar(select(SiteMovementRoute.route_id).where(
+            SiteMovementRoute.site_id == site_id, SiteMovementRoute.movement_kind == movement_kind,
+            SiteMovementRoute.active.is_(True)).limit(1)):
+            raise HTTPException(422, f"Select a {movement_kind} master route for this entry.")
         factor_type = "OB_CUM_PER_TRIP" if is_ob else "COAL_AVG_MT_PER_TRIP"
         stmt = select(SiteWeightFactor).where(
             SiteWeightFactor.site_id == site_id, SiteWeightFactor.factor_type == factor_type,
@@ -382,7 +399,7 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
     event_at = datetime.combine(operating_day, shift_row.start_time)
     trip_id = f"TRIP-{site_id}-{uuid4().hex[:14].upper()}"
     row = SiteTrip(
-        trip_id=trip_id, site_id=site_id, operating_date=operating_day, shift=shift, event_at=event_at,
+        trip_id=trip_id, route_id=route_id, site_id=site_id, operating_date=operating_day, shift=shift, event_at=event_at,
         vehicle_id=vehicle, loading_equipment_id=loader, source_location_id=source, destination_location_id=destination,
         material_id=material, gp_no=gp_no, quantity_mt=mt, quantity_cum=cum, weight_basis=basis,
         factor_id=factor.factor_id if factor else None, source_type="PORTAL_SIMPLE", source_record_uid=request_id,
@@ -391,7 +408,7 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
     db.add(row)
     _audit(db, user, site_id, "CREATE_SIMPLE_TRIP", "site_trip", trip_id, after={
         "kind": kind, "operatingDate": str(operating_day), "shift": shift, "vehicle": vehicle, "loader": loader,
-        "destination": destination, "material": material, "quantityMt": str(mt) if mt is not None else None,
+        "destination": destination, "routeId": route_id, "material": material, "quantityMt": str(mt) if mt is not None else None,
         "quantityCum": str(cum) if cum is not None else None, "weightBasis": basis,
     })
     db.commit()
