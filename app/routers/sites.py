@@ -26,6 +26,7 @@ from app.site_models import (
     SiteAuditLog,
     SiteHsdTransaction,
     SiteLocation,
+    SiteMovementRoute,
     SiteMaterial,
     SiteShift,
     SiteTrip,
@@ -1093,6 +1094,25 @@ def create_site_trip(site_id: str, p: SiteTripIn, request: Request, db: Session 
         existing = db.scalar(select(SiteTrip.trip_id).where(SiteTrip.site_id == site_id, SiteTrip.source_type == p.sourceType, SiteTrip.source_record_uid == p.sourceRecordUid))
         if existing:
             return {"ok": True, "tripId": existing, "idempotent": True}
+    # Route selections are authoritative for KOCP destination and (for OB) source.
+    selected_route = None
+    if p.routeId:
+        selected_route = db.get(SiteMovementRoute, p.routeId)
+        if not selected_route or selected_route.site_id != site_id or not selected_route.active:
+            raise HTTPException(422, "Select an active route from this site's master.")
+        if site_id != "KOCP" or not p.entryKind or selected_route.movement_kind != p.entryKind:
+            raise HTTPException(422, "Coal and OB entries must select their own route master.")
+    elif site_id == "KOCP" and p.entryKind:
+        has_routes = db.scalar(select(SiteMovementRoute.route_id).where(
+            SiteMovementRoute.site_id == site_id,
+            SiteMovementRoute.movement_kind == p.entryKind,
+            SiteMovementRoute.active.is_(True)).limit(1))
+        if has_routes:
+            raise HTTPException(422, f"Select a {p.entryKind} route before saving.")
+    if selected_route and selected_route.source_location_id and p.sourceLocationId not in (None, "", selected_route.source_location_id):
+        raise HTTPException(422, "Source does not match the selected route.")
+    if selected_route and p.destinationLocationId not in (None, "", selected_route.destination_location_id):
+        raise HTTPException(422, "Destination does not match the selected route.")
     quantity_mt = p.quantityMt
     quantity_cum = p.quantityCum
     weight_basis = p.weightBasis
@@ -1116,6 +1136,7 @@ def create_site_trip(site_id: str, p: SiteTripIn, request: Request, db: Session 
     trip_id = f"TRIP-{site_id}-{uuid4().hex[:14].upper()}"
     row = SiteTrip(
         trip_id=trip_id,
+        route_id=p.routeId,
         site_id=site_id,
         operating_date=ctx.operating_date,
         shift=ctx.shift,
@@ -1125,8 +1146,8 @@ def create_site_trip(site_id: str, p: SiteTripIn, request: Request, db: Session 
         driver_id=p.driverId,
         loading_equipment_id=p.loadingEquipmentId,
         loading_operator_id=p.loadingOperatorId,
-        source_location_id=p.sourceLocationId,
-        destination_location_id=p.destinationLocationId,
+        source_location_id=(selected_route.source_location_id if selected_route and selected_route.source_location_id else p.sourceLocationId),
+        destination_location_id=(selected_route.destination_location_id if selected_route else p.destinationLocationId),
         material_id=p.materialId,
         gp_no=p.gpNo,
         trip_seq=p.tripSeq,
@@ -1144,7 +1165,7 @@ def create_site_trip(site_id: str, p: SiteTripIn, request: Request, db: Session 
         entered_by=user.login_id,
     )
     db.add(row)
-    _audit(db, user, site_id, "CREATE_TRIP", "site_trip", trip_id, after={"operatingDate": ctx.operating_date, "shift": ctx.shift, "vehicle": p.vehicleId or p.vehicleRaw, "quantityMt": str(quantity_mt) if quantity_mt is not None else None, "quantityCum": str(quantity_cum) if quantity_cum is not None else None})
+    _audit(db, user, site_id, "CREATE_TRIP", "site_trip", trip_id, after={"operatingDate": ctx.operating_date, "shift": ctx.shift, "vehicle": p.vehicleId or p.vehicleRaw, "routeId": p.routeId, "entryKind": p.entryKind, "quantityMt": str(quantity_mt) if quantity_mt is not None else None, "quantityCum": str(quantity_cum) if quantity_cum is not None else None})
     db.commit()
     return {"ok": True, "tripId": trip_id, "operatingDate": ctx.operating_date, "shift": ctx.shift}
 
@@ -1165,7 +1186,7 @@ def list_site_trips(site_id: str, request: Request, operating_date: date | None 
         "tripId": r.trip_id, "operatingDate": r.operating_date, "shift": r.shift,
         "eventAt": r.event_at, "vehicleId": r.vehicle_id, "vehicleRaw": r.vehicle_raw,
         "driverId": r.driver_id, "loadingEquipmentId": r.loading_equipment_id,
-        "sourceLocationId": r.source_location_id, "destinationLocationId": r.destination_location_id,
+        "routeId": r.route_id, "sourceLocationId": r.source_location_id, "destinationLocationId": r.destination_location_id,
         "materialId": r.material_id, "gpNo": r.gp_no, "quantityMt": r.quantity_mt,
         "quantityCum": r.quantity_cum, "weightBasis": r.weight_basis, "status": r.status,
         "enteredBy": r.entered_by, "enteredAt": r.entered_at,
