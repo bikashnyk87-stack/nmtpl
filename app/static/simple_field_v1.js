@@ -329,7 +329,8 @@ async function renderSimpleTrips(kind='TRIP'){
   }
   const rec=await api(`/api/sites/${siteId}/records/trips?operating_date=${state.ctx.operatingDate}&limit=60`).catch(()=>[]);
   const viewRec=siteId==='KOCP'?rec.filter(r=>{const m=String(r.materialId||'').toUpperCase();const isOB=/OVERBURDEN|(^|[^A-Z])OB([^A-Z]|$)/.test(m);return obMode?isOB:!isOB}):rec;
-  const rows=viewRec.map(r=>`<tr><td>${esc(r.shift)}</td><td>${esc(r.vehicleId||r.vehicleRaw||'—')}</td><td>${esc(r.loadingEquipmentId||'—')}</td>${isSocp?'':`<td>${esc(r.sourceLocationId||'—')}</td>`}<td>${esc(r.destinationLocationId||'—')}</td>${isSocp?'':`<td>${esc(r.materialId||'—')}</td>`}<td>${esc(r.gpNo||'—')}</td><td>${fmt(r.quantityMt,3)}</td><td>${fmt(r.quantityCum,3)}</td><td>${esc(r.weightBasis||'—')}</td></tr>`);
+  const kocpRouteLabel=routeId=>{const r=[...kocpRouteList.COAL,...kocpRouteList.OB].find(x=>x.routeId===routeId);return r?r.group+' · '+r.distanceRange:'—'};
+  const rows=viewRec.map(r=>`<tr><td>${esc(r.shift)}</td><td>${esc(r.vehicleId||r.vehicleRaw||'—')}</td><td>${esc(r.loadingEquipmentId||'—')}</td>${isSocp?'':`<td>${esc(kocpRouteLabel(r.routeId))}</td><td>${esc(r.sourceLocationId||'—')}</td>`}<td>${esc(r.destinationLocationId||'—')}</td>${isSocp?'':`<td>${esc(r.materialId||'—')}</td>`}<td>${esc(r.gpNo||'—')}</td><td>${fmt(r.quantityMt,3)}</td><td>${fmt(r.quantityCum,3)}</td><td>${esc(r.weightBasis||'—')}</td></tr>`);
   const defaults=isSocp
     ?`<div class="trip-default-grid">
         <div class="field"><span>Entry Date</span><input id="stDate" type="date" data-no-draft value="${state.ctx.operatingDate}"></div>
@@ -353,7 +354,7 @@ async function renderSimpleTrips(kind='TRIP'){
   const heads=isSocp
     ?'<th>#</th><th>Shift</th><th>Vehicle</th><th>Loader</th><th>Unloading Point</th><th>GP / Ref</th><th>Qty MT</th><th>Status</th>'
     :'<th>#</th><th>Shift</th><th>Vehicle</th><th>Loader / Excavator</th><th>Route / Distance</th><th>Source</th><th>Destination</th><th>Material</th><th>GP / Ref</th><th>Quantity</th><th>Status</th>';
-  const recentHeads=isSocp?['Shift','Vehicle','Loader','Destination','GP','MT','CuM','Basis']:['Shift','Vehicle','Loader/Excavator','Source','Destination','Material','GP','MT','CuM','Basis'];
+  const recentHeads=isSocp?['Shift','Vehicle','Loader','Destination','GP','MT','CuM','Basis']:['Shift','Vehicle','Loader/Excavator','Route / Distance','Source','Destination','Material','GP','MT','CuM','Basis'];
   return simplePageHead(title,desc)+`<div id="simpleTripForm" class="simple-form batch-entry-form">
     ${defaults}
     <div class="entry-grid-note"><b>Fast entry:</b> Set repeated values above, click <b>Apply Defaults</b>, then enter only the changing vehicle/GP/quantity fields.</div>
