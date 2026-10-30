@@ -55,6 +55,8 @@ class SiteWbManualIn(BaseModel):
 
 
 class SiteTripIn(BaseModel):
+    routeId: str | None = Field(default=None, max_length=80)
+    entryKind: str | None = Field(default=None, pattern=r"^(COAL|OB)$")
     eventAt: datetime | None = None
     vehicleId: str | None = Field(default=None, max_length=50)
     vehicleRaw: str | None = Field(default=None, max_length=80)
