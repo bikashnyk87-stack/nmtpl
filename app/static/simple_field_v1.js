@@ -271,6 +271,36 @@ async function saveKocpHmrRows(){
   return{used,done};
 }
 
+const kocpRouteList={COAL:[],OB:[]};
+function kocpRouteKind(){return state.module==='OB'?'OB':'COAL'}
+function kocpRouteOptions(){
+  const routes=kocpRouteList[kocpRouteKind()].filter(x=>x.active);
+  return '<option value="">'+(routes.length?'Choose route / distance':'No routes imported yet')+'</option>'+
+    routes.map(r=>'<option value="'+r.routeId+'">'+esc(r.group+' → '+r.destination+' · '+r.category+' · '+r.distanceRange)+'</option>').join('');
+}
+function applyKocpRoute(i){
+  if(siteId!=='KOCP')return;
+  const selected=$('stRoute'+i)?.value;
+  const r=kocpRouteList[kocpRouteKind()].find(x=>x.routeId===selected);
+  const source=$('stSource'+i),dest=$('stDest'+i);
+  const sourceText=$('stSource'+i+'Text'),destText=$('stDest'+i+'Text');
+  if(!source||!dest)return;
+  if(r){
+    dest.value=r.destinationLocationId;
+    if(destText){destText.value=r.destination;destText.readOnly=true;destText.dataset.selected=r.destinationLocationId}
+    if(r.sourceLocationId){
+      source.value=r.sourceLocationId;
+      if(sourceText){sourceText.value=r.source;sourceText.readOnly=true;sourceText.dataset.selected=r.sourceLocationId}
+    }else if(sourceText){sourceText.readOnly=false}
+  }else{
+    if(sourceText)sourceText.readOnly=false;
+    if(destText)destText.readOnly=false;
+  }
+  if($('simpleTripForm'))saveDraft('simpleTripForm',draftKey(state.module));
+}
+function syncKocpRoutes(){
+  if(siteId==='KOCP')document.querySelectorAll('.simple-trip-row').forEach(row=>applyKocpRoute(row.dataset.i));
+}
 function tripGridRows(kind,count=10){
   const isSocp=siteId==='SOCP';
   return Array.from({length:count},(_,i)=>`<tr class="simple-trip-row" data-i="${i}">
@@ -278,6 +308,7 @@ function tripGridRows(kind,count=10){
     <td><select class="stShift">${shiftOpts(simpleShift())}</select></td>
     <td>${lookupMarkup(`stVehicle${i}`,'ASSET','Vehicle','TRANSPORT,VEHICLE,TIPPER,DUMPER')}</td>
     <td>${lookupMarkup(`stLoader${i}`,'ASSET',siteId==='KOCP'?'Loader / Excavator':'Loader','LOADING,LOADER,EXCAVATOR')}</td>
+    ${isSocp?'':`<td><select id="stRoute${i}" onchange="applyKocpRoute(${i})">${kocpRouteOptions()}</select></td>`}
     ${isSocp
       ?`<td>${lookupMarkup(`stDest${i}`,'LOCATION','Unloading point')}</td>`
       :`<td>${lookupMarkup(`stSource${i}`,'LOCATION','Source')}</td><td>${lookupMarkup(`stDest${i}`,'LOCATION','Destination')}</td><td>${lookupMarkup(`stMaterial${i}`,'MATERIAL','Material')}</td>`}
@@ -292,6 +323,10 @@ async function renderSimpleTrips(kind='TRIP'){
   const obMode=siteId==='KOCP'&&state.module==='OB';
   const title=siteId==='KOCP'?(obMode?'KOCP OB Entry':'KOCP Coal Entry'):'SOCP Trip Entry';
   const desc=isSocp?'Batch daily trip entry. Set the repeated shift/loader/unloading point once, then fill vehicles and quantities.':(obMode?'Enter Overburden movements only. Choose OB material from the master; MCL quantity is calculated automatically.':'Enter Coal movements only. Choose Coal material from the master; MCL quantity is calculated automatically.');
+  if(siteId==='KOCP'){
+    const kind=obMode?'OB':'COAL';
+    kocpRouteList[kind]=await api('/api/sites/KOCP/routes?kind='+kind).catch(()=>[]);
+  }
   const rec=await api(`/api/sites/${siteId}/records/trips?operating_date=${state.ctx.operatingDate}&limit=60`).catch(()=>[]);
   const viewRec=siteId==='KOCP'?rec.filter(r=>{const m=String(r.materialId||'').toUpperCase();const isOB=/OVERBURDEN|(^|[^A-Z])OB([^A-Z]|$)/.test(m);return obMode?isOB:!isOB}):rec;
   const rows=viewRec.map(r=>`<tr><td>${esc(r.shift)}</td><td>${esc(r.vehicleId||r.vehicleRaw||'—')}</td><td>${esc(r.loadingEquipmentId||'—')}</td>${isSocp?'':`<td>${esc(r.sourceLocationId||'—')}</td>`}<td>${esc(r.destinationLocationId||'—')}</td>${isSocp?'':`<td>${esc(r.materialId||'—')}</td>`}<td>${esc(r.gpNo||'—')}</td><td>${fmt(r.quantityMt,3)}</td><td>${fmt(r.quantityCum,3)}</td><td>${esc(r.weightBasis||'—')}</td></tr>`);
@@ -308,6 +343,7 @@ async function renderSimpleTrips(kind='TRIP'){
         <div class="field"><span>Entry Date</span><input id="stDate" type="date" data-no-draft value="${state.ctx.operatingDate}"></div>
         <div class="field"><span>Default Shift</span><select id="stDefaultShift">${shiftOpts(simpleShift())}</select></div>
         ${defaultLookupBox('stDefaultLoader','Default Loader / Excavator','LOADING,LOADER,EXCAVATOR')}
+        <div class="field"><span>Default ${obMode?'OB':'Coal'} Route / Distance</span><select id="stDefaultRoute">${kocpRouteOptions()}</select></div>
         ${defaultLookupBox('stDefaultSource','Default Source','LOCATION')}
         ${defaultLookupBox('stDefaultDest','Default Destination','LOCATION')}
         ${defaultLookupBox('stDefaultMaterial','Default Material','MATERIAL')}
@@ -316,7 +352,7 @@ async function renderSimpleTrips(kind='TRIP'){
       </div>`;
   const heads=isSocp
     ?'<th>#</th><th>Shift</th><th>Vehicle</th><th>Loader</th><th>Unloading Point</th><th>GP / Ref</th><th>Qty MT</th><th>Status</th>'
-    :'<th>#</th><th>Shift</th><th>Vehicle</th><th>Loader / Excavator</th><th>Source</th><th>Destination</th><th>Material</th><th>GP / Ref</th><th>Quantity</th><th>Status</th>';
+    :'<th>#</th><th>Shift</th><th>Vehicle</th><th>Loader / Excavator</th><th>Route / Distance</th><th>Source</th><th>Destination</th><th>Material</th><th>GP / Ref</th><th>Quantity</th><th>Status</th>';
   const recentHeads=isSocp?['Shift','Vehicle','Loader','Destination','GP','MT','CuM','Basis']:['Shift','Vehicle','Loader/Excavator','Source','Destination','Material','GP','MT','CuM','Basis'];
   return simplePageHead(title,desc)+`<div id="simpleTripForm" class="simple-form batch-entry-form">
     ${defaults}
@@ -334,6 +370,7 @@ function rebuildSimpleTripRows(){
   $('simpleTripRows').innerHTML=tripGridRows('TRIP',n);
   bindLookups($('simpleTripForm'));
   restoreDraft('simpleTripForm',draftKey(state.module));
+  syncKocpRoutes();
 }
 function copyLookupDefault(srcId,dstId){
   const src=$(srcId),dst=$(dstId),srcText=$(srcId+'Text'),dstText=$(dstId+'Text');
@@ -354,6 +391,9 @@ function applyTripDefaults(){
       copyLookupDefault('stDefaultSource',`stSource${i}`);
       copyLookupDefault('stDefaultDest',`stDest${i}`);
       copyLookupDefault('stDefaultMaterial',`stMaterial${i}`);
+      const route=$('stRoute'+i),defaultRoute=$('stDefaultRoute');
+      if(route&&defaultRoute?.value&&!route.value)route.value=defaultRoute.value;
+      applyKocpRoute(i);
     }
   });
   if(siteId==='KOCP')syncKocpHmrMachines();
@@ -368,6 +408,7 @@ async function saveSimpleTrips(kind){
       const destination=$(`stDest${i}`).value;
       const source=siteId==='KOCP'?$(`stSource${i}`).value:null;
       const material=siteId==='KOCP'?$(`stMaterial${i}`).value:null;
+      const routeId=siteId==='KOCP'?$(`stRoute${i}`)?.value||null:null;
       const materialLabel=siteId==='KOCP'?String($(`stMaterial${i}Text`)?.value||'').toUpperCase():'';
       const qty=siteId==='SOCP'?$(`stQty${i}`).value:'';
       if(!vehicle&&!loader&&!destination&&!source&&!material&&!gp&&!qty)continue;
@@ -377,6 +418,8 @@ async function saveSimpleTrips(kind){
         if(!loader)throw new Error('Select loader/excavator');
         if(!destination)throw new Error(siteId==='SOCP'?'Select unloading point':'Select destination');
         if(siteId==='KOCP'&&!source)throw new Error('Select source');
+        if(siteId==='KOCP'&&kocpRouteList[kocpRouteKind()].some(x=>x.active)&&!routeId)
+          throw new Error('Choose a '+kocpRouteKind()+' route / distance');
         if(siteId==='KOCP'&&!material)throw new Error('Select material');
         if(siteId==='KOCP'){
           const selectedOb=/OVERBURDEN|(^|[^A-Z])OB([^A-Z]|$)/.test(materialLabel);
@@ -386,7 +429,7 @@ async function saveSimpleTrips(kind){
         st.textContent='Saving…';st.className='simple-status muted';
         const body={kind,operatingDate:$('stDate').value,shift:row.querySelector('.stShift').value,vehicleId:vehicle,loadingEquipmentId:loader,destinationLocationId:destination,gpNo:gp||null};
         if(siteId==='SOCP')body.quantityMt=qty;
-        else{body.sourceLocationId=source;body.materialId=material}
+        else{body.sourceLocationId=source;body.materialId=material;body.routeId=routeId}
         body.requestId=getReq(siteId==='KOCP'?state.module:kind,body,i);
         const r=await api(`/api/site-ops/${siteId}/trips/simple`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         st.textContent=r.idempotent?'Already saved':'Saved ✓';st.className='simple-status good';clearReq(siteId==='KOCP'?state.module:kind,i);done++;
@@ -612,7 +655,7 @@ async function saveSimpleMeters(){
 }
 function clearSimpleMeterDraft(){localStorage.removeItem(draftKey('HMR_KMR'));render()}
 window.NMTPLClearActiveDrafts=function(){NMTPLNet.clearUserDrafts(simpleUser())};
-function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module))restoreDraft('simpleTripForm',draftKey(state.module));if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){restoreDraft('simpleHsdForm',draftKey('HSD'));document.querySelectorAll('.simple-hsd-row').forEach(r=>toggleHsdRow(r.dataset.i))}if(state.module==='HMR_KMR'){restoreDraft('simpleMeterForm',draftKey('HMR_KMR'));document.querySelectorAll('.simple-meter-row').forEach(r=>calcMeterRow(r.dataset.i))}const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
+function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module)){restoreDraft('simpleTripForm',draftKey(state.module));syncKocpRoutes()}if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){restoreDraft('simpleHsdForm',draftKey('HSD'));document.querySelectorAll('.simple-hsd-row').forEach(r=>toggleHsdRow(r.dataset.i))}if(state.module==='HMR_KMR'){restoreDraft('simpleMeterForm',draftKey('HMR_KMR'));document.querySelectorAll('.simple-meter-row').forEach(r=>calcMeterRow(r.dataset.i))}const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
 async function simpleRender(){
   const cfg=SIMPLE[siteId]||{entry:[],setup:[],review:[],control:[]};
   const visible=new Set(['DASHBOARD',...(cfg.entry||[]),...(cfg.setup||[]),...(cfg.review||[]),...(cfg.control||[])]);
@@ -636,7 +679,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,rebuildSimpleTripRows,applyTripDefaults,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,rebuildSimpleTripRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
