@@ -146,6 +146,28 @@ class SiteLocation(Base):
     __table_args__ = (UniqueConstraint("site_id", "code", name="uq_site_location_code"),)
 
 
+class SiteMovementRoute(Base):
+    """KOCP movement-specific routes. Physical locations remain de-duplicated in SiteLocation."""
+    __tablename__ = "site_movement_route"
+
+    route_id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("site.site_id"), index=True)
+    movement_kind: Mapped[str] = mapped_column(String(10), index=True)  # COAL / OB
+    route_group: Mapped[str] = mapped_column(String(160), nullable=False)
+    category: Mapped[str] = mapped_column(String(160), nullable=False)
+    source_label: Mapped[str | None] = mapped_column(String(160))
+    destination_label: Mapped[str] = mapped_column(String(160), nullable=False)
+    source_location_id: Mapped[str | None] = mapped_column(ForeignKey("site_location.site_location_id"))
+    destination_location_id: Mapped[str] = mapped_column(ForeignKey("site_location.site_location_id"))
+    distance_range: Mapped[str] = mapped_column(String(50), nullable=False)
+    location_type: Mapped[str | None] = mapped_column(String(60))
+    active: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    import_batch_id: Mapped[str | None] = mapped_column(String(60), index=True)
+    __table_args__ = (
+        Index("ix_site_movement_route_kind", "site_id", "movement_kind", "active"),
+    )
+
+
 class SiteMaterial(Base):
     __tablename__ = "site_material"
 
@@ -207,6 +229,7 @@ class SiteTrip(Base):
     driver_id: Mapped[str | None] = mapped_column(ForeignKey("persons.employee_id"), index=True)
     loading_equipment_id: Mapped[str | None] = mapped_column(ForeignKey("equipment.machine_id"), index=True)
     loading_operator_id: Mapped[str | None] = mapped_column(ForeignKey("persons.employee_id"), index=True)
+    route_id: Mapped[str | None] = mapped_column(ForeignKey("site_movement_route.route_id"), index=True)
     source_location_id: Mapped[str | None] = mapped_column(ForeignKey("site_location.site_location_id"), index=True)
     destination_location_id: Mapped[str | None] = mapped_column(ForeignKey("site_location.site_location_id"), index=True)
     material_id: Mapped[str | None] = mapped_column(ForeignKey("site_material.site_material_id"), index=True)
@@ -985,6 +1008,7 @@ MULTISITE_TABLES = [
     PersonSiteAssignment,
     EquipmentSiteAssignment,
     SiteLocation,
+    SiteMovementRoute,
     SiteMaterial,
     MasterImportBatch,
     MasterImportRow,
@@ -1039,6 +1063,7 @@ def ensure_tiom_entry_columns(engine) -> None:
     from sqlalchemy import inspect, text
     targets = {
         'tiom_source_deployment': {'operator_id': 'VARCHAR(60)'},
+        'site_trip': {'route_id': 'VARCHAR(80)'},
         'tiom_drilling_shift': {
             'rom_ob_holes': 'INTEGER',
             'bhj_bhq_holes': 'INTEGER',
