@@ -269,7 +269,13 @@ def route_confirm(site_id:str,batch_id:str,request:Request,db:Session=Depends(ge
 
 @router.get("/{site_id}/routes")
 def list_routes(site_id:str,request:Request,kind:str|None=None,db:Session=Depends(get_db)):
-    user=_access(db,request,site_id,"VIEW")
+    user=get_user(db,request)
+    site_id=require_site(db,user,site_id)
+    if site_id!="KOCP":
+        raise HTTPException(404,"KOCP movement routes only.")
+    if not user.admin and not any(has_permission(db,user,site_id,module,action)
+        for module in ("MASTERS","TRIP","OB") for action in ("VIEW","CREATE","EDIT","APPROVE")):
+        raise HTTPException(403,"Route lookup permission is required.")
     stmt=select(SiteMovementRoute).where(SiteMovementRoute.site_id=="KOCP")
     if kind:stmt=stmt.where(SiteMovementRoute.movement_kind==_kind(kind))
     rows=db.scalars(stmt.order_by(SiteMovementRoute.movement_kind,SiteMovementRoute.route_group,
