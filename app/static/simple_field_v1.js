@@ -272,6 +272,7 @@ async function saveKocpHmrRows(){
 }
 
 const kocpRouteList={COAL:[],OB:[]};
+const kocpMaterialTypes={COAL:[],OB:[]};
 function kocpRouteKind(){return state.module==='OB'?'OB':'COAL'}
 function kocpRouteOptions(){
   const routes=kocpRouteList[kocpRouteKind()].filter(x=>x.active);
@@ -280,10 +281,12 @@ function kocpRouteOptions(){
 }
 function applyKocpRoute(i){
   if(siteId!=='KOCP')return;
+  const kind=kocpRouteKind();
   const selected=$('stRoute'+i)?.value;
-  const r=kocpRouteList[kocpRouteKind()].find(x=>x.routeId===selected);
+  const r=kocpRouteList[kind].find(x=>x.routeId===selected);
   const source=$('stSource'+i),dest=$('stDest'+i);
   const sourceText=$('stSource'+i+'Text'),destText=$('stDest'+i+'Text');
+  const material=$('stMaterial'+i),materialText=$('stMaterial'+i+'Text');
   if(!source||!dest)return;
   if(r){
     dest.value=r.destinationLocationId;
@@ -292,9 +295,40 @@ function applyKocpRoute(i){
       source.value=r.sourceLocationId;
       if(sourceText){sourceText.value=r.source;sourceText.readOnly=true;sourceText.dataset.selected=r.sourceLocationId}
     }else if(sourceText){sourceText.readOnly=false}
+    // Derive material type from the selected route; never ask an operator
+    // to pick the same Soft/Hard OB classification a second time.
+    const words=String(r.group+' '+r.category).toUpperCase();
+    const code=kind==='COAL'?(words.includes('REJECT')?'REJECT':'COAL'):
+      (/RE.HAND/.test(words)?'REHANDLING_OB':words.includes('SOFT')?'SOFT_OB':
+        words.includes('HARD')?'HARD_OB':'');
+    const match=(kocpMaterialTypes[kind]||[]).find(x=>x.typeCode===code&&x.materialId&&x.active);
+    if(match&&material&&materialText){
+      material.value=match.materialId;
+      materialText.value=match.name;
+      materialText.dataset.selected=match.materialId;
+      materialText.dataset.autoRouteMaterial='1';
+      materialText.readOnly=true;
+      materialText.style.pointerEvents='none';
+      materialText.tabIndex=-1;
+    }else if(material&&materialText){
+      if(materialText.dataset.autoRouteMaterial==='1'){
+        material.value='';materialText.value='';materialText.dataset.selected='';
+      }
+      materialText.dataset.autoRouteMaterial='';
+      materialText.readOnly=false;materialText.style.pointerEvents='';
+      materialText.tabIndex=0;
+    }
   }else{
     if(sourceText)sourceText.readOnly=false;
     if(destText)destText.readOnly=false;
+    if(materialText){
+      if(materialText.dataset.autoRouteMaterial==='1'){
+        material.value='';materialText.value='';materialText.dataset.selected='';
+      }
+      materialText.dataset.autoRouteMaterial='';
+      materialText.readOnly=false;materialText.style.pointerEvents='';
+      materialText.tabIndex=0;
+    }
   }
   if($('simpleTripForm'))saveDraft('simpleTripForm',draftKey(state.module));
 }
@@ -325,7 +359,12 @@ async function renderSimpleTrips(kind='TRIP'){
   const desc=isSocp?'Batch daily trip entry. Set the repeated shift/loader/unloading point once, then fill vehicles and quantities.':(obMode?'Enter Overburden movements only. Choose OB material from the master; MCL quantity is calculated automatically.':'Enter Coal movements only. Choose Coal material from the master; MCL quantity is calculated automatically.');
   if(siteId==='KOCP'){
     const kind=obMode?'OB':'COAL';
-    kocpRouteList[kind]=await api('/api/sites/KOCP/routes?kind='+kind).catch(()=>[]);
+    const [routes,catalog]=await Promise.all([
+      api('/api/sites/KOCP/routes?kind='+kind).catch(()=>[]),
+      api('/api/sites/KOCP/material-types').catch(()=>({COAL:[],OB:[]}))
+    ]);
+    kocpRouteList[kind]=routes;
+    kocpMaterialTypes[kind]=catalog[kind]||[];
   }
   const rec=await api(`/api/sites/${siteId}/records/trips?operating_date=${state.ctx.operatingDate}&limit=60`).catch(()=>[]);
   const viewRec=siteId==='KOCP'?rec.filter(r=>{const m=String(r.materialId||'').toUpperCase();const isOB=/OVERBURDEN|(^|[^A-Z])OB([^A-Z]|$)/.test(m);return obMode?isOB:!isOB}):rec;
