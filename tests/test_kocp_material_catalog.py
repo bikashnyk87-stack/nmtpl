@@ -50,7 +50,7 @@ def test_invalid_unit_or_unknown_material_are_blocked():
 
 def test_safe_existing_material_reuse_and_conflict():
     engine=create_engine("sqlite://")
-    Base.metadata.create_all(engine)
+    Base.metadata.create_all(engine, tables=[Site.__table__, SiteMaterial.__table__])
     with Session(engine) as db:
         db.add(Site(site_id="KOCP",site_name="KOCP",short_name="KOCP",active=True))
         db.add(SiteMaterial(site_material_id="KOCP:OLD_COAL",site_id="KOCP",code="OLD_COAL",
