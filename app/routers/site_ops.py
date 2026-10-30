@@ -233,7 +233,25 @@ def operational_lookup(site_id: str, request: Request, kind: str, q: str = "", l
                     out.append({"id": x.product_id, "label": x.name, "sub": x.product_id, "type": "MATERIAL"})
                     if len(out) >= limit: break
         else:
-            rows = list(db.scalars(select(SiteMaterial).where(SiteMaterial.site_id == site_id, SiteMaterial.active.is_(True)).order_by(SiteMaterial.name).limit(1000)))
+            rows = list(db.scalars(select(SiteMaterial).where(SiteMaterial.site_id == site_id, SiteMaterial.active.is_(True)).order_by(SiteMaterial.name,SiteMaterial.code).limit(1000)))
+            # KOCP's original material workbook repeated Coal/OB descriptions
+            # for every distance. Material lookup must offer one category, not
+            # 21+11 nearly identical dropdown options. Routes own distances.
+            if site_id == "KOCP":
+                from app.routers.site_material_types import _classify
+                chosen = {}
+                others = []
+                for item in rows:
+                    is_ob = str(item.default_unit or "").upper() in {"CUM","M3","M³"}
+                    kind = "OB" if is_ob else "COAL"
+                    canonical = _classify(kind,item.name)
+                    if not canonical:
+                        others.append(item)
+                        continue
+                    old = chosen.get(canonical)
+                    if old is None or (str(item.code).upper()==canonical and str(old.code).upper()!=canonical):
+                        chosen[canonical] = item
+                rows = list(chosen.values()) + others
             for x in rows:
                 if _contains_text(x.site_material_id, x.code, x.name, x.material_group, q=q):
                     unit = x.default_unit or x.billable_unit or ''
