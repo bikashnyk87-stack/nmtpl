@@ -387,6 +387,15 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
                 raise HTTPException(422, "Destination does not match the selected route.")
             if selected_route.source_location_id and source != selected_route.source_location_id:
                 raise HTTPException(422, "Source does not match the selected OB route.")
+            from app.routers.site_material_types import _classify
+            if movement_kind == "OB":
+                route_material = _classify("OB", selected_route.category)
+            else:
+                route_label = " ".join((selected_route.route_group,selected_route.category))
+                route_material = "REJECT" if "REJECT" in route_label.upper() else "COAL"
+            chosen_material = _classify(movement_kind, material_row.name)
+            if route_material and chosen_material and route_material != chosen_material:
+                raise HTTPException(422, "Selected material does not match the Coal/OB route category.")
         elif db.scalar(select(SiteMovementRoute.route_id).where(
             SiteMovementRoute.site_id == site_id, SiteMovementRoute.movement_kind == movement_kind,
             SiteMovementRoute.active.is_(True)).limit(1)):
