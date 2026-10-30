@@ -1,0 +1,69 @@
+/* KOCP Master Management — compact ERP control surface */
+.kcm{font:400 13px/1.38 system-ui,-apple-system,"Segoe UI",Arial,sans-serif;color:#243344;max-width:1600px;margin:0 auto;padding:4px 2px 24px}
+.kcm *{box-sizing:border-box}
+.kcm-header{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px}
+.kcm-title{margin:0;color:#142d38;font-size:22px;font-weight:740;letter-spacing:-.025em}
+.kcm-sub{font-size:12px;color:#708091;margin:3px 0 0}
+.kcm-metrics{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:8px;margin-bottom:12px}
+.kcm-metric{background:#fff;border:1px solid #dfe7eb;border-radius:9px;padding:9px 13px;min-width:0}
+.kcm-metric small{font-size:10.5px;letter-spacing:.04em;text-transform:uppercase;color:#708091;font-weight:700;display:block}
+.kcm-metric strong{font-size:22px;font-variant-numeric:tabular-nums;color:#14323b;display:block;margin-top:3px;font-weight:740}
+.kcm-tabs{display:flex;gap:4px;overflow-x:auto;border-bottom:1px solid #dfe7eb;background:#fff;padding:3px 6px 0;margin-bottom:12px;scrollbar-width:thin;border-radius:9px 9px 0 0}
+.kcm-tab{appearance:none;border:0;background:none;padding:10px 14px;border-bottom:3px solid transparent;cursor:pointer;color:#687c86;font-weight:650;white-space:nowrap;font-size:12.5px}
+.kcm-tab[aria-selected=true]{color:#0c7668;border-color:#0f927e;background:#f0faf7}
+.kcm-tab em{font-style:normal;color:#78929c;background:#eef2f3;border-radius:12px;padding:1px 6px;margin-left:5px;font-size:11px}
+.kcm-card{background:#fff;border:1px solid #dfe7eb;border-radius:10px;margin-bottom:10px;overflow:hidden;box-shadow:0 2px 5px rgba(29,55,65,.025)}
+.kcm-toolbar{padding:10px 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;border-bottom:1px solid #eaf0f2}
+.kcm-toolbar h2{font-size:15px;letter-spacing:-.01em;margin:0 14px 0 0;font-weight:730;color:#1b323c}
+.kcm-toolbar .kcm-spacer{flex:1}
+.kcm-search{border:1px solid #d8e4e8;border-radius:7px;background:#fff;padding:7px 9px;width:210px;min-height:34px;font:inherit;outline-offset:2px}
+.kcm-btn{border:1px solid #cbd8de;background:#fff;color:#314853;border-radius:7px;font:600 12px/1.2 inherit;padding:8px 11px;min-height:33px;cursor:pointer;white-space:nowrap}
+.kcm-btn:hover{background:#f2f8f8}
+.kcm-btn.primary{background:#0b856f;color:#fff;border-color:#0b856f}
+.kcm-btn.primary:hover{background:#076f5e}
+.kcm-btn.small{padding:5px 9px;min-height:28px}
+.kcm-btn:disabled{opacity:.55;cursor:not-allowed}
+.kcm-table-wrap{overflow-x:auto;width:100%}
+.kcm-table{width:100%;border-collapse:collapse;text-align:left;table-layout:auto}
+.kcm-table th{background:#f3f7f8;color:#526873;font-weight:700;font-size:10.5px;letter-spacing:.035em;text-transform:uppercase;padding:8px 12px;white-space:nowrap;border-bottom:1px solid #e5edef}
+.kcm-table td{padding:7px 12px;font-size:12px;color:#2c4551;vertical-align:middle;border-bottom:1px solid #f0f3f5;line-height:1.4}
+.kcm-table tr:last-child td{border-bottom:0}
+.kcm-table tbody tr:hover{background:#f9fcfc}
+.kcm-table .kcm-primary{color:#152f39;font-weight:650}
+.kcm-status{font-weight:650;font-size:11px;color:#19836e}
+.kcm-status.off{color:#8c98a0}
+.kcm-status.warn{color:#b36c16}
+.kcm-pill{font-size:10px;border-radius:4px;padding:3px 6px;background:#f0f6f6;color:#4b6d76}
+.kcm-footer{display:flex;align-items:center;gap:10px;justify-content:flex-end;padding:9px 12px;border-top:1px solid #edf1f2;color:#6e808b;font-size:12px}
+.kcm-muted{font-size:12px;color:#71848d}
+.kcm-empty{padding:32px 18px;text-align:center;color:#70818b}
+.kcm-note{font-size:12px;color:#5c7480;padding:10px 12px;background:#f6fbfb;border-bottom:1px solid #e2eeee}
+.kcm-import{margin:0;padding:12px;background:#f9fcfc;border-bottom:1px solid #e7eff0}
+.kcm-import-row{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+.kcm-import-row input[type=file]{font:inherit;border:1px solid #d8e4e8;border-radius:6px;background:#fff;padding:5px;max-width:360px}
+.kcm-preview{padding:8px 0 0;font-size:12px}
+.kcm-preview strong{font-weight:750}
+.kcm-issues{color:#aa5b27;max-height:140px;overflow:auto;font-size:11px;margin-top:5px}
+.kcm-form{padding:13px;background:#f9fbfc;border-bottom:1px solid #e7eff0}
+.kcm-formhead{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;gap:10px}
+.kcm-formhead h3{font-size:14px;font-weight:720;margin:0}
+.kcm-formgrid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.kcm-field span{display:block;font-size:11px;font-weight:650;color:#6c7d87;margin-bottom:4px}
+.kcm-field input,.kcm-field select{width:100%;border:1px solid #d7e2e6;border-radius:6px;min-height:35px;padding:7px 9px;background:#fff;font:inherit}
+.kcm-field input[type=checkbox]{width:auto;min-height:0}
+.kcm-actions{display:flex;justify-content:flex-end;gap:7px;margin-top:10px}
+.kcm-subtabs{display:flex;gap:6px;padding:12px 12px 5px;flex-wrap:wrap}
+.kcm-subtabs button{padding:6px 13px;border:1px solid #d7e2e6;background:#fff;color:#6d808a;border-radius:6px;font:600 12px/1.2 inherit;cursor:pointer}
+.kcm-subtabs button.active{color:#087463;background:#edf9f5;border-color:#c5e5dc}
+.kcm-overview{display:flex;align-items:center;gap:10px;justify-content:space-between;flex-wrap:wrap;margin:9px 12px 12px;color:#657a84;font-size:12px}
+.kcm-overview b{font-weight:700;color:#2b5560}
+.kcm-catalog{padding:5px 12px 12px}
+.kcm-tag{font-size:11px;font-weight:650;border-radius:4px;background:#f2f7f8;color:#516f7c;padding:3px 6px}
+.kcm-tag.missing{background:#fff6e8;color:#a66b1e}
+.kcm-tag.ok{background:#edf8f3;color:#178064}
+.kcm-compact-list{margin:0;padding:0}
+.kcm-details{margin:11px 12px 13px;border:1px solid #e5eaed;border-radius:7px;padding:9px 12px}
+.kcm-details summary{cursor:pointer;font-weight:650;color:#49616c}
+.kcm-details[open] summary{margin-bottom:10px}
+@media(max-width:900px){.kcm-metrics{grid-template-columns:repeat(3,minmax(0,1fr))}.kcm-formgrid{grid-template-columns:repeat(2,minmax(0,1fr))}.kcm-toolbar h2{width:100%}}
+@media(max-width:560px){.kcm-title{font-size:19px}.kcm-metrics{grid-template-columns:repeat(2,minmax(0,1fr))}.kcm-formgrid{grid-template-columns:1fr}.kcm-tab{padding:9px 10px}.kcm-search{flex:1;min-width:120px;width:auto}.kcm-toolbar{padding:9px}}
