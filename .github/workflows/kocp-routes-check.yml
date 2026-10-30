@@ -9,10 +9,15 @@ on:
       - "app/routers/sites.py"
       - "app/routers/site_ops.py"
       - "app/routers/site_routes.py"
+      - "app/routers/site_material_types.py"
       - "app/static/site_routes.js"
       - "app/static/site_master_ops.js"
+      - "app/static/kocp_masters_compact.js"
+      - "app/static/kocp_masters_compact.css"
+      - "app/static/site.html"
       - "app/static/simple_field_v1.js"
       - "tests/test_kocp_movement_routes.py"
+      - "tests/test_kocp_material_catalog.py"
       - ".github/workflows/kocp-routes-check.yml"
   workflow_dispatch:
 
@@ -31,8 +36,9 @@ jobs:
           node-version: '22'
       - name: Parse changed Python and JavaScript
         run: |
-          python -m py_compile app/site_models.py app/site_schemas.py app/routers/sites.py app/routers/site_ops.py app/routers/site_routes.py
+          python -m py_compile app/site_models.py app/site_schemas.py app/routers/sites.py app/routers/site_ops.py app/routers/site_routes.py app/routers/site_material_types.py
           node --check app/static/site_routes.js
+          node --check app/static/kocp_masters_compact.js
           node --check app/static/site_master_ops.js
           node --check app/static/simple_field_v1.js
       - name: Install lightweight route test dependencies
@@ -40,4 +46,4 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install pytest "fastapi>=0.115,<1" "SQLAlchemy>=2,<3" "python-dotenv>=1,<2" "pydantic>=2.9,<3" "openpyxl>=3.1,<4" "python-multipart>=0.0.9,<1"
       - name: Run KOCP movement master tests
-        run: python -m pytest -q tests/test_kocp_movement_routes.py
+        run: python -m pytest -q tests/test_kocp_movement_routes.py tests/test_kocp_material_catalog.py
