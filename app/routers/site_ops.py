@@ -1239,6 +1239,13 @@ def fuel_summary(
     ).group_by(SiteHsdTransaction.asset_id).order_by(
         func.sum(SiteHsdTransaction.litres).desc()
     ).limit(10)).all()
+    asset_ids = [asset for asset, _litres, _count in issue_asset_rows if asset]
+    equipment_labels = {}
+    if asset_ids:
+        for equipment in db.scalars(select(Equipment).where(Equipment.machine_id.in_(asset_ids))):
+            parts = [f"Door {equipment.door_no}" if equipment.door_no else None,
+                     equipment.vehicle_no, equipment.machine_id]
+            equipment_labels[equipment.machine_id] = " · ".join(str(x) for x in parts if x)
     issue_shift_rows = db.execute(select(
         SiteHsdTransaction.shift,
         func.coalesce(func.sum(SiteHsdTransaction.litres), 0),
@@ -1265,7 +1272,8 @@ def fuel_summary(
         "todayTotals": today_totals, "periodTotals": totals,
         "litresPerMt": round(totals["issueL"] / mt, 3) if mt > 0 else None,
         "litresPerCum": round(totals["issueL"] / cum, 3) if cum > 0 else None,
-        "issueByAsset": [{"assetId": asset, "litres": _fmt_decimal(litres), "count": int(count)}
+        "issueByAsset": [{"assetId": asset, "label": equipment_labels.get(asset, asset),
+                          "litres": _fmt_decimal(litres), "count": int(count)}
                          for asset, litres, count in issue_asset_rows],
         "issueByShift": [{"shift": shift or "Unassigned", "litres": _fmt_decimal(litres)}
                          for shift, litres in issue_shift_rows],
