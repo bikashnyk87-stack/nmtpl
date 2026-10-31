@@ -33,11 +33,19 @@ function getReq(module,payload={},slot='single'){const key=reqKey(module,slot),f
 function clearReq(module,slot=null){if(slot!==null){localStorage.removeItem(reqKey(module,slot));return}const prefix=`NMTPL_SIMPLE_REQ:${siteId}:${simpleUser()}:${simpleDate()}:${module}:`;const keys=[];for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i)||'';if(k.startsWith(prefix))keys.push(k)}keys.forEach(k=>localStorage.removeItem(k))}
 function saveDraft(containerId,key){const root=$(containerId);if(!root)return;const o={};root.querySelectorAll('input[id],select[id],textarea[id]').forEach(el=>{if(el.type!=='file')o[el.id]=el.type==='checkbox'?el.checked:el.value});localStorage.setItem(key,JSON.stringify(o));const x=root.querySelector('.draft-state');if(x){x.textContent='Draft saved ✓';x.classList.add('ok')}}
 let activeHsdEntryType='ISSUE';
-function hsdDraftKey(){return activeHsdEntryType==='LEGACY'?draftKey('HSD'):draftKey('HSD_'+activeHsdEntryType+'_V2')}
+function hsdDraftKey(){return activeHsdEntryType==='LEGACY'?draftKey('HSD'):activeHsdEntryType==='RECOVERY'?draftKey('HSD_RECEIPT_V2'):draftKey('HSD_'+activeHsdEntryType+'_V2')}
+function hsdReceiptDraftKey(){return draftKey('HSD_RECEIPT_SINGLE_V3')}
+function hasPreviousReceiptDraft(){
+  try{
+    const item=JSON.parse(localStorage.getItem(draftKey('HSD_RECEIPT_V2'))||'{}');
+    return Object.entries(item).some(([k,v])=>/^sh(?:Litres|Supplier|Ref)\d+$/.test(k)&&String(v||'').trim());
+  }catch{return false}
+}
 function hsdTypeLabel(){return activeHsdEntryType==='RECEIPT'?'Receipts':activeHsdEntryType==='LEGACY'?'Previous Draft':'Issues'}
 function setSimpleHsdMode(mode){
-  if(!['ISSUE','RECEIPT','OPENING','LEGACY'].includes(mode))return;
+  if(!['ISSUE','RECEIPT','OPENING','LEGACY','RECOVERY'].includes(mode))return;
   if($('simpleHsdForm'))saveDraft('simpleHsdForm',hsdDraftKey());
+  if($('simpleHsdReceiptForm'))saveDraft('simpleHsdReceiptForm',hsdReceiptDraftKey());
   activeHsdEntryType=mode;
   render();
 }
@@ -831,7 +839,7 @@ function clearSimpleWbDraft(){localStorage.removeItem(draftKey('WB'));render()}
 
 function hsdGridRows(count=10,start=0){
   return Array.from({length:count},(_,offset)=>{
-    const i=start+offset, receipt=activeHsdEntryType==='RECEIPT', legacy=activeHsdEntryType==='LEGACY';
+    const i=start+offset, receipt=['RECEIPT','RECOVERY'].includes(activeHsdEntryType), legacy=['LEGACY','RECOVERY'].includes(activeHsdEntryType);
     const type=receipt?'RECEIPT':'ISSUE';
     return `<tr class="simple-hsd-row" data-i="${i}">
       <td>${i+1}</td>
@@ -843,6 +851,47 @@ function hsdGridRows(count=10,start=0){
       <td><span id="shStatus${i}" class="simple-status muted">Ready</span></td>
     </tr>`;
   }).join('')
+}
+function hsdBalanceStrip(fuel){
+  const balance=fuel?.stockBalance;
+  const verified=balance!==null&&balance!==undefined&&Number.isFinite(Number(balance));
+  const asOf=fuel?.toDate||state.ctx.operatingDate;
+  return `<section class="hsd-balance-strip ${verified?'hsd-balance-ready':'hsd-balance-unverified'}" aria-label="Live available diesel stock">
+    <div class="hsd-balance-main"><span>Available Fuel · as of ${esc(asOf)}</span>
+      <strong id="hsdBalanceLitres">${verified?dashNum(balance,2)+' L':'Not verified'}</strong>
+      <small id="hsdBalanceNote">${esc(fuel?.stockNote||'Opening balance not set. Enter verified opening stock first.')}</small></div>
+    <div class="hsd-balance-metric"><span>Today received</span><b id="hsdTodayReceived">${fuel?dashNum(fuel.todayTotals?.receiptL||0,2)+' L':'—'}</b></div>
+    <div class="hsd-balance-metric"><span>Today issued</span><b id="hsdTodayIssued">${fuel?dashNum(fuel.todayTotals?.issueL||0,2)+' L':'—'}</b></div>
+    <button type="button" class="hsd-balance-refresh" onclick="refreshHsdBalance()" aria-label="Refresh fuel balance">↻ Refresh</button>
+  </section>`;
+}
+async function refreshHsdBalance(){
+  const strip=document.querySelector('.hsd-balance-strip');
+  if(!strip)return null;
+  const note=$('hsdBalanceNote');
+  try{
+    // Always read posted inventory from Neon after a successful save;
+    // never calculate "remaining" stock by blindly subtracting in browser.
+    const day=state.ctx.operatingDate;
+    const b=await api(`/api/site-ops/${siteId}/fuel/balance?as_of_date=${encodeURIComponent(day)}`);
+    const ready=b.stockBalance!==null&&b.stockBalance!==undefined&&Number.isFinite(Number(b.stockBalance));
+    const value=$('hsdBalanceLitres'),received=$('hsdTodayReceived'),issued=$('hsdTodayIssued');
+    if(value)value.textContent=ready?dashNum(b.stockBalance,2)+' L':'Not verified';
+    if(note)note.textContent=b.stockNote||'Stock reconciliation required.';
+    if(received)received.textContent=dashNum(b.todayReceiptL||0,2)+' L';
+    if(issued)issued.textContent=dashNum(b.todayIssueL||0,2)+' L';
+    strip.classList.toggle('hsd-balance-ready',ready);
+    strip.classList.toggle('hsd-balance-unverified',!ready);
+    return b;
+  }catch(e){
+    // Keep successful transaction as saved even if the subsequent KPI refresh
+    // fails; never show a stale figure as a verified live stock balance.
+    if($('hsdBalanceLitres'))$('hsdBalanceLitres').textContent='Update unavailable';
+    if(note)note.textContent='Could not confirm latest balance. Use Refresh to retry.';
+    strip.classList.remove('hsd-balance-ready');
+    strip.classList.add('hsd-balance-unverified');
+    return null;
+  }
 }
 function fuelKpiCards(fuel){
   const t=fuel?.todayTotals||{},p=fuel?.periodTotals||{};
@@ -871,11 +920,11 @@ async function renderSimpleHsd(){
     api(`/api/sites/${siteId}/records/hsd?limit=60`).catch(()=>[]),
     api(`/api/site-ops/${siteId}/fuel/summary?from_date=${from}&to_date=${today}`).catch(()=>null)
   ]);
-  const rows=data.filter(r=>activeHsdEntryType==='LEGACY'||r.transactionType===activeHsdEntryType)
+  const rows=data.filter(r=>activeHsdEntryType==='LEGACY'||r.transactionType===(activeHsdEntryType==='RECOVERY'?'RECEIPT':activeHsdEntryType))
     .map(r=>`<tr><td>${esc(r.operatingDate)}</td><td>${esc(r.shift||'—')}</td><td>${esc(r.transactionType)}</td><td>${esc(r.assetId||r.supplier||'—')}</td><td>${fmt(r.litres,2)}</td><td>${esc(r.referenceNo||'—')}</td><td>${esc(r.status)}</td></tr>`);
   const legacyExists=!!localStorage.getItem(draftKey('HSD'));
   const tab=(type,label)=>`<button type="button" role="tab" aria-selected="${activeHsdEntryType===type}" class="hsd-mode-tab ${activeHsdEntryType===type?'active':''}" onclick="setSimpleHsdMode('${type}')">${label}</button>`;
-  const modeLabel=activeHsdEntryType==='RECEIPT'?'Receipt':activeHsdEntryType==='OPENING'?'Opening Balance':activeHsdEntryType==='LEGACY'?'Previous Mixed Draft':'Issue';
+  const modeLabel=activeHsdEntryType==='RECEIPT'?'Receipt':activeHsdEntryType==='RECOVERY'?'Previous Receipt Batch':activeHsdEntryType==='OPENING'?'Opening Balance':activeHsdEntryType==='LEGACY'?'Previous Mixed Draft':'Issue';
   if(activeHsdEntryType==='OPENING' && siteId==='KOCP'){
     const existing=fuel?.openingBalance;
     const note=fuel?.stockNote||'Enter the verified initial fuel stock only once.';
@@ -889,13 +938,36 @@ async function renderSimpleHsd(){
           <div class="simple-note">This is a one-time initial balance, not a diesel receipt. It can be zero. Check the actual stock sheet before saving.</div>
         </div>`;
     return simplePageHead('KOCP Fuel / HSD','One-time starting diesel stock and day-to-day fuel register.')+
-      `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${tab('OPENING','Opening Balance')}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
-      fuelKpiCards(fuel)+
+      `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${tab('OPENING','Opening Balance')}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
+      hsdBalanceStrip(fuel)+
       `<section class="hsd-opening-panel"><h3>Initial Fuel Opening Balance</h3><p class="field-help">Record the diesel physically available at KOCP at the start of operations. Later stock = opening + posted receipts − posted issues.</p>${content}<p class="field-help">${esc(note)}</p></section>`;
   }
+
+  if(siteId==='KOCP'&&activeHsdEntryType==='RECEIPT'){
+    // A fuel delivery is one receipt, not a ten-row vehicle-style batch.
+    // Previous old-style receipt drafts remain recoverable in a separate tab.
+    return simplePageHead(`${siteId} Fuel / HSD`,'Quick diesel receipt entry; the live balance updates after each successful save.')+
+      `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
+      hsdBalanceStrip(fuel)+
+      `<section class="hsd-receipt-card">
+        <div class="hsd-receipt-head"><div><b>New Fuel Receipt</b><span>Enter one tanker / delivery at a time</span></div><small>Posted records update the fuel balance</small></div>
+        <div id="simpleHsdReceiptForm" class="hsd-receipt-form">
+          <label><span>Date *</span><input id="rcDate" type="date" value="${esc(today)}"></label>
+          <label><span>Shift *</span><select id="rcShift">${shiftOpts(simpleShift())}</select></label>
+          <label><span>Supplier / Source *</span><input id="rcSupplier" autocomplete="off" placeholder="Supplier name" maxlength="180"></label>
+          <label><span>Received (litres) *</span><input id="rcLitres" type="number" inputmode="decimal" min="0.001" step="0.001" placeholder="Litres"></label>
+          <label><span>Challan / Receipt Ref.</span><input id="rcReference" autocomplete="off" placeholder="Challan / invoice no." maxlength="120"></label>
+          <input id="rcUid" type="hidden">
+          <div class="hsd-receipt-actions"><button type="button" class="btn primary" id="rcSave" onclick="saveCompactHsdReceipt()">Save Receipt</button><button type="button" class="btn outline" onclick="clearCompactHsdReceipt()">Clear</button></div>
+          <span class="draft-state" aria-live="polite">Draft autosaves on this PC</span>
+        </div>
+        <div id="rcSaveStatus" class="hsd-entry-feedback" aria-live="polite"></div>
+      </section>`+
+      panel('Recent Fuel Receipts',recentTable(['Date','Shift','Type','Supplier','Litres','Reference','Status'],rows.slice(0,15)),`${rows.length} recent records`);
+  }
   return simplePageHead(`${siteId} Fuel / HSD`,'Separate diesel issue and receipt registers; batch entry with saved drafts.')+
-  `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
-  fuelKpiCards(fuel)+
+  `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
+  (siteId==='KOCP'?hsdBalanceStrip(fuel):fuelKpiCards(fuel))+
   `<div id="simpleHsdForm" class="simple-form batch-entry-form">
     <div class="simple-top compact-entry-controls">
       <div class="field"><span>Date *</span><input id="shDate" type="date" data-no-draft value="${state.ctx.operatingDate}"></div>
@@ -910,7 +982,7 @@ async function renderSimpleHsd(){
       <tbody id="simpleHsdRows">${hsdGridRows(10)}</tbody>
     </table></div>
     <div class="simple-actions"><button type="button" id="shSave" class="btn primary" onclick="saveSimpleHsd()">Save ${esc(modeLabel)} Rows</button><button type="button" class="btn outline" onclick="clearSimpleHsdDraft()">Clear This Draft</button><span class="draft-state">Draft autosaves on this PC</span></div>
-    <div class="simple-note">Fuel movement is not closing stock. Opening balance, transfers and adjustments must be verified separately.</div>
+    <div class="simple-note">Live balance refreshes from posted Neon transactions after every successful issue; unfinished rows are retained.</div>
   </div>`+
   panel('Recent '+modeLabel+' records',recentTable(['Date','Shift','Type','Equipment / Supplier','Litres','Reference','Status'],rows),`${rows.length} recent records`)+
   panel('Top HSD-consuming equipment',fuelAssetBreakdown(fuel),'Selected month');
@@ -934,6 +1006,53 @@ async function saveHsdOpening(){
     await render();
   }catch(e){toast(e.message,'bad')}
   finally{if(btn.isConnected)btn.disabled=false}
+}
+function clearCompactHsdReceipt(){
+  const date=$('rcDate')?.value,shift=$('rcShift')?.value;
+  localStorage.removeItem(hsdReceiptDraftKey());
+  for(const id of ['rcSupplier','rcLitres','rcReference','rcUid'])if($(id))$(id).value='';
+  if($('rcDate'))$('rcDate').value=date||state.ctx.operatingDate;
+  if($('rcShift')&&shift)$('rcShift').value=shift;
+  if($('rcSaveStatus'))$('rcSaveStatus').textContent='';
+  $('rcSupplier')?.focus();
+}
+async function saveCompactHsdReceipt(){
+  const btn=$('rcSave'),date=$('rcDate')?.value,shift=$('rcShift')?.value,
+        supplier=$('rcSupplier')?.value.trim(),litres=$('rcLitres')?.value,
+        ref=$('rcReference')?.value.trim(),uid=$('rcUid'),
+        status=$('rcSaveStatus');
+  if(!date)return toast('Select the receipt date','bad');
+  if(!shift)return toast('Select a shift','bad');
+  if(!supplier)return toast('Enter the fuel supplier','bad');
+  if(litres===''||!Number.isFinite(Number(litres))||Number(litres)<=0)return toast('Enter received litres above zero','bad');
+  if(!uid.value){uid.value='HSD-'+siteId+'-RECEIPT-'+Date.now()+'-'+Math.random().toString(36).slice(2,12)}
+  // Preserve the exact request identity before posting. If the network times
+  // out, retry cannot create a second transaction for the same receipt.
+  saveDraft('simpleHsdReceiptForm',hsdReceiptDraftKey());
+  btn.disabled=true;
+  if(status){status.textContent='Saving receipt…';status.className='hsd-entry-feedback'}
+  let posted=false;
+  try{
+    const payload={operatingDate:date,shift,transactionType:'RECEIPT',
+      supplier,litres,referenceNo:ref||null,
+      sourceType:'PORTAL',sourceRecordUid:uid.value};
+    await api(`/api/sites/${siteId}/hsd`,{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    posted=true;
+  }catch(e){
+    if(status){status.textContent='Receipt not confirmed: '+e.message+'. Retry with this saved draft; do not re-enter it as a new receipt.';
+      status.className='hsd-entry-feedback error'}
+    toast(e.message||'Receipt not confirmed','bad');
+  }finally{if(btn.isConnected)btn.disabled=false}
+  if(!posted)return;
+  localStorage.removeItem(hsdReceiptDraftKey());
+  if(status){status.textContent='Receipt saved. Updating balance…';status.className='hsd-entry-feedback success'}
+  // Clear the receipt only after the server confirms the POST.
+  for(const id of ['rcSupplier','rcLitres','rcReference','rcUid'])if($(id))$(id).value='';
+  await refreshHsdBalance();
+  toast('Fuel receipt posted · balance refreshed');
+  // Reload the recent receipts list and the server-confirmed fuel totals.
+  try{await render()}catch(e){if(status)status.textContent='Receipt saved. Use Refresh to load the latest records.'}
 }
 function toggleHsdRow(i){
   const receipt=$('shType'+i)?.value==='RECEIPT',asset=$('shAssetBox'+i),supplier=$('shSupplier'+i);
@@ -996,6 +1115,9 @@ async function saveSimpleHsd(){
         await api(`/api/sites/${siteId}/hsd`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         st.textContent='Saved ✓';st.className='simple-status good';done++;row.dataset.saved='1';
         row.querySelectorAll('input,select').forEach(input=>{input.disabled=true});
+        // Confirm the remaining fuel after EVERY posted issue, not only after
+        // the last row in a batch. Do not rerender/erase unsaved issue rows.
+        await refreshHsdBalance();
       }catch(e){st.textContent=e.message;st.className='simple-status bad'}
     }
     if(!used){
@@ -1075,7 +1197,14 @@ async function saveSimpleMeters(){
 }
 function clearSimpleMeterDraft(){localStorage.removeItem(draftKey('HMR_KMR'));render()}
 window.NMTPLClearActiveDrafts=function(){NMTPLNet.clearUserDrafts(simpleUser())};
-function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module)){restoreDraft('simpleTripForm',draftKey(state.module));syncKocpRoutes()}if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){restoreDraft('simpleHsdForm',hsdDraftKey());document.querySelectorAll('.simple-hsd-row').forEach(r=>toggleHsdRow(r.dataset.i))}if(state.module==='HMR_KMR'){restoreDraft('simpleMeterForm',draftKey('HMR_KMR'));document.querySelectorAll('.simple-meter-row').forEach(r=>calcMeterRow(r.dataset.i))}refreshEntryRowCounts();const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
+function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module)){restoreDraft('simpleTripForm',draftKey(state.module));syncKocpRoutes()}if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){
+  if(activeHsdEntryType==='RECEIPT'&&$('simpleHsdReceiptForm')){
+    restoreDraft('simpleHsdReceiptForm',hsdReceiptDraftKey());
+  }else if($('simpleHsdForm')){
+    restoreDraft('simpleHsdForm',hsdDraftKey());
+    document.querySelectorAll('.simple-hsd-row').forEach(r=>toggleHsdRow(r.dataset.i));
+  }
+}if(state.module==='HMR_KMR'){restoreDraft('simpleMeterForm',draftKey('HMR_KMR'));document.querySelectorAll('.simple-meter-row').forEach(r=>calcMeterRow(r.dataset.i))}refreshEntryRowCounts();const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
 async function simpleRender(){
   const cfg=SIMPLE[siteId]||{entry:[],setup:[],review:[],control:[]};
   const visible=new Set(['DASHBOARD',...(cfg.entry||[]),...(cfg.setup||[]),...(cfg.review||[]),...(cfg.control||[])]);
@@ -1099,7 +1228,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
