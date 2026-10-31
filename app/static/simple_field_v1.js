@@ -306,7 +306,8 @@ async function renderSimpleDashboard(){
   if(d.error)return `<div class="bad">${esc(d.error)}</div>`;
   const t=d.todayTotals||{},p=d.periodTotals||{},isK=siteId==='KOCP';
   const fuel=isK?await api(`/api/site-ops/${siteId}/fuel/summary?from_date=${encodeURIComponent(from)}&to_date=${encodeURIComponent(to)}`).catch(()=>null):null;
-  const draftCount=(cfg.entry||[]).filter(m=>localStorage.getItem(draftKey(m))).length;
+  const draftCount=(cfg.entry||[]).filter(m=>localStorage.getItem(draftKey(m))).length+
+    (isK&&['ISSUE','RECEIPT'].some(mode=>localStorage.getItem(draftKey('HSD_'+mode+'_V2')))?1:0);
   const trendKey=isK?(p.quantityCum>p.quantityMt?'quantityCum':'quantityMt'):(p.wbMt>0?'wbMt':'quantityMt');
   // WB MT is not daily in trend; SOCP uses trip MT trend, while WB MT remains KPI.
   const trendMetric=isK?(p.quantityCum>p.quantityMt?'quantityCum':'quantityMt'):'quantityMt';
@@ -836,6 +837,8 @@ function fuelKpiCards(fuel){
     ${dashKpi('Period Receipts',shown?dashNum(p.receiptL,1)+' L':'—',shown?dashNum(p.receiptCount)+' receipts':'No data','good')}
     ${dashKpi('Period Issues',shown?dashNum(p.issueL,1)+' L':'—',shown?dashNum(p.issueCount)+' issues':'No data','warn')}
     ${dashKpi('Net Fuel Movement',shown?dashNum(p.netMovementL,1)+' L':'—','Receipts − issues; NOT closing stock','')}
+    ${dashKpi('Fuel / Coal MT',fuel?.litresPerMt!=null?dashNum(fuel.litresPerMt,3)+' L/MT':'—','Only if posted Coal MT exists','')}
+    ${dashKpi('Fuel / OB CuM',fuel?.litresPerCum!=null?dashNum(fuel.litresPerCum,3)+' L/CuM':'—','Only if posted OB CuM exists','')}
   </div>`
 }
 function fuelAssetBreakdown(fuel){
