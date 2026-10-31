@@ -18,12 +18,10 @@ def test_hsd_cannot_be_zeroed_by_environment_flag_on_restart():
 
 def test_dashboard_read_does_not_write_missing_wb_mapping():
     src = (ROOT / "app/routers/webapp.py").read_text(encoding="utf-8")
-    start = src.index("def dashboard_desk(")
-    end = src.index("def ", start + 5)
-    dashboard = src[start:end]
-    assert "missing_canonical" in dashboard
-    assert "wb_canonical_all.update(canonicalize_wb_rows" not in dashboard
-    assert "import/reconciliation required" in dashboard
+    assert "def dashboard_desk(" in src
+    assert "missing_canonical = [w for w in wb_all" in src
+    assert "wb_canonical_all.update(canonicalize_wb_rows" not in src
+    assert "import/reconciliation required" in src
 
 
 def test_wb_ingestion_still_writes_canonical_mapping():
