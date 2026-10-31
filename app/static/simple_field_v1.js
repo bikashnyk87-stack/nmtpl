@@ -37,7 +37,21 @@ function clearDraft(containerId,key){localStorage.removeItem(key);const root=$(c
 function lookupMarkup(hiddenId,kind,placeholder,groups=''){
   return `<div class="lookup" data-kind="${kind}" data-hidden="${hiddenId}" data-groups="${groups}"><input id="${hiddenId}Text" type="text" autocomplete="off" placeholder="${esc(placeholder)}"><input id="${hiddenId}" type="hidden"><div class="lookup-menu"></div></div>`
 }
-function itemAllowed(w,item){if(siteId==='KOCP'&&w.dataset.kind==='MATERIAL'&&['TRIP','OB'].includes(state.module)){const name=String([item.label,item.sub,item.group,item.type,item.id].join(' ')).toUpperCase();const isOB=/OVERBURDEN|(^|[^A-Z])OB([^A-Z]|$)/.test(name);if((state.module==='OB')!==isOB)return false;}const g=(w.dataset.groups||'').split(',').map(x=>x.trim().toUpperCase()).filter(Boolean);if(!g.length)return true;const hay=`${item.group||''} ${item.type||''}`.toUpperCase();return g.some(x=>hay.includes(x))}
+function itemAllowed(w,item){
+  if(siteId==='KOCP'&&w.dataset.kind==='MATERIAL'&&['TRIP','OB'].includes(state.module)){
+    const name=String([item.label,item.sub,item.group,item.type,item.id].join(' ')).toUpperCase();
+    const isOB=/OVERBURDEN|(^|[^A-Z])OB([^A-Z]|$)/.test(name);
+    if((state.module==='OB')!==isOB)return false;
+  }
+  // KOCP activity + machine role are now checked on the server against the
+  // approved equipment master. Do not re-filter by vague model words here:
+  // "TATA HITACHI-3200" is a valid excavator without the word EXCAVATOR.
+  if(siteId==='KOCP'&&w.dataset.kind==='ASSET'&&['TRIP','OB'].includes(state.module))return true;
+  const g=(w.dataset.groups||'').split(',').map(x=>x.trim().toUpperCase()).filter(Boolean);
+  if(!g.length)return true;
+  const hay=`${item.group||''} ${item.type||''}`.toUpperCase();
+  return g.some(x=>hay.includes(x));
+}
 function bindLookups(root=document){root.querySelectorAll('.lookup:not([data-bound])').forEach(w=>{w.dataset.bound='1';const input=w.querySelector('input[type=text]'),hidden=w.querySelector('input[type=hidden]'),menu=w.querySelector('.lookup-menu');let timer=null,items=[],active=-1;
   async function search(){const q=input.value.trim();menu.innerHTML='<div class="lookup-empty">Searching…</div>';w.classList.add('open');try{
     const groups=String(w.dataset.groups||'').toUpperCase();
