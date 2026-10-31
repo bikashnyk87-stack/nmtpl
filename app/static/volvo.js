@@ -26,7 +26,7 @@ function renderVolvo(){
       '<label>Truck / Machine<select id="volvo_machine"><option value="ALL">All Volvo trucks</option></select></label>'+
       '<label>Live movement<select id="volvo_state"><option value="ALL">All live states</option><option value="RUNNING">Moving now</option><option value="IDLE">Engine on / idle</option><option value="STOPPED">Stationary</option><option value="OFFLINE">Offline</option></select></label>'+
       '<label>Location<select id="volvo_location"><option value="ALL">All locations</option><option value="UNASSIGNED">Transit / outside zones</option></select></label>'+
-      '<label>Shift<select id="volvo_shift"><option value="ALL">All shifts</option><option value="A">A · 06:00–14:00</option><option value="B">B · 14:00–22:00</option><option value="C">C · 22:00–06:00</option></select></label>'+
+      '<label>Shift<select id="volvo_shift"><option value="ALL">All shifts</option><option value="A">A · 05:00–13:00</option><option value="B">B · 13:00–21:00</option><option value="C">C · 21:00–05:00</option></select></label>'+
       '<label>Mapping<select id="volvo_mapping"><option value="ALL">Mapped + Unmapped</option><option value="MAPPED">Mapped only</option><option value="UNMAPPED">Unmapped only</option></select></label>'+
       '<div class="volvo-filter-actions"><button class="btn primary" onclick="loadVolvoDashboard()">Apply</button><button id="volvo_live_btn" class="btn secondary" onclick="toggleVolvoLive()">Live 30s: ON</button><button class="btn secondary" onclick="resetVolvoFilters()">Reset</button></div>'+
     '</div><div id="volvo_body"><div class="panel"><div class="loading">Loading Volvo dashboard…</div></div></div></div>');

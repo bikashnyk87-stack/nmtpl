@@ -114,3 +114,27 @@ def test_live_volvo_stop_button_and_backend_authorization_present():
     assert "CREATE TRIGGER" in sync and "existing_triggers" in sync
     assert 'DROP TRIGGER IF EXISTS' not in sync
     assert "tiom-volvo-r17-schedule" in html
+
+
+def test_pc_installers_preserve_hourly_windows():
+    main=(ROOT/"scripts/install_render_sync.ps1").read_text("utf-8")
+    despatch=(ROOT/"scripts/install_pc_despatch_independent.ps1").read_text("utf-8")
+    migration=(ROOT/"scripts/Set-PC-TIOM-Sync-Hourly.ps1").read_text("utf-8")
+    for source in (main,despatch,migration):
+        assert "New-ScheduledTaskTrigger -Daily" in source
+        assert "6..22" in source
+        assert "StartWhenAvailable" in source
+    assert "/SC MINUTE /MO 3" not in main
+    assert "/SC MINUTE /MO 5" not in despatch
+    assert "Export-ScheduledTask" in migration
+    assert "Disable-ScheduledTask" in migration
+
+
+def test_startup_route_history_deduplicated_and_volvo_shifts_current():
+    src=(ROOT/"app/services/tiom_location_erp.py").read_text("utf-8")
+    assert "canonical_pairs=list(db.execute(select(" in src
+    assert "TiomWbCanonical.destination_location_id" in src
+    assert ").distinct()))" in src
+    ui=(ROOT/"app/static/volvo.js").read_text("utf-8")
+    for shift in ("A · 05:00–13:00","B · 13:00–21:00","C · 21:00–05:00"):
+        assert shift in ui

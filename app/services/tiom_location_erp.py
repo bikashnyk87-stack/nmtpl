@@ -290,8 +290,13 @@ def _source_has_bench_rl(loc: Location | None) -> bool:
 
 def ensure_tiom_routes_from_history(db: Session) -> int:
     """Create missing WITH_WB Route Master pairs from canonical WB history."""
-    canonical_rows=list(db.scalars(select(TiomWbCanonical)))
-    if not canonical_rows:
+    # Aggregate distinct source/destination pairs in PostgreSQL instead of
+    # transferring every WB historical movement to Python on each restart.
+    canonical_pairs=list(db.execute(select(
+        TiomWbCanonical.source_location_id,
+        TiomWbCanonical.destination_location_id,
+    ).distinct()))
+    if not canonical_pairs:
         return 0
     existing=list(db.scalars(select(TiomRouteMaster)))
     known={
@@ -301,8 +306,8 @@ def ensure_tiom_routes_from_history(db: Session) -> int:
     locations={x.location_id:x for x in db.scalars(select(Location))}
     created=0
     seen=set()
-    for c in canonical_rows:
-        src_id=str(c.source_location_id or ""); dst_id=str(c.destination_location_id or "")
+    for source_id, destination_id in canonical_pairs:
+        src_id=str(source_id or ""); dst_id=str(destination_id or "")
         if not src_id or not dst_id or src_id==dst_id:
             continue
         key=(src_id,dst_id,"WITH_WB")
