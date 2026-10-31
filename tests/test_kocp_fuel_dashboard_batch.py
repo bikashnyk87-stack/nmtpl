@@ -69,7 +69,10 @@ def test_hsd_modes_drafts_globals_and_stock_label():
     assert "draftKey('HSD_'+activeHsdEntryType+'_V2')" in js
     assert "Recover Previous Draft" in js
     assert "Fuel Issues" in js and "Fuel Receipts" in js
-    assert "stockBalance" not in js[js.index("function fuelKpiCards"):js.index("function fuelAssetBreakdown")]
+    cards=js[js.index("function fuelKpiCards"):js.index("function fuelAssetBreakdown")]
+    assert "fuel?.stockBalance!=null" in cards
+    assert "physical check required" in cards
+    assert "NOT closing stock" in cards
     assert "NOT closing stock" in js
     assert "sourceRecordUid:uid.value" in js
     assert "simple_field_v1.js?v=kocp-opening-colour-r7" in html
