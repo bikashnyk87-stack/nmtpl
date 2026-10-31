@@ -920,11 +920,11 @@ async function renderSimpleHsd(){
     api(`/api/sites/${siteId}/records/hsd?limit=60`).catch(()=>[]),
     api(`/api/site-ops/${siteId}/fuel/summary?from_date=${from}&to_date=${today}`).catch(()=>null)
   ]);
-  const rows=data.filter(r=>activeHsdEntryType==='LEGACY'||r.transactionType===activeHsdEntryType)
+  const rows=data.filter(r=>activeHsdEntryType==='LEGACY'||r.transactionType===(activeHsdEntryType==='RECOVERY'?'RECEIPT':activeHsdEntryType))
     .map(r=>`<tr><td>${esc(r.operatingDate)}</td><td>${esc(r.shift||'—')}</td><td>${esc(r.transactionType)}</td><td>${esc(r.assetId||r.supplier||'—')}</td><td>${fmt(r.litres,2)}</td><td>${esc(r.referenceNo||'—')}</td><td>${esc(r.status)}</td></tr>`);
   const legacyExists=!!localStorage.getItem(draftKey('HSD'));
   const tab=(type,label)=>`<button type="button" role="tab" aria-selected="${activeHsdEntryType===type}" class="hsd-mode-tab ${activeHsdEntryType===type?'active':''}" onclick="setSimpleHsdMode('${type}')">${label}</button>`;
-  const modeLabel=activeHsdEntryType==='RECEIPT'?'Receipt':activeHsdEntryType==='OPENING'?'Opening Balance':activeHsdEntryType==='LEGACY'?'Previous Mixed Draft':'Issue';
+  const modeLabel=activeHsdEntryType==='RECEIPT'?'Receipt':activeHsdEntryType==='RECOVERY'?'Previous Receipt Batch':activeHsdEntryType==='OPENING'?'Opening Balance':activeHsdEntryType==='LEGACY'?'Previous Mixed Draft':'Issue';
   if(activeHsdEntryType==='OPENING' && siteId==='KOCP'){
     const existing=fuel?.openingBalance;
     const note=fuel?.stockNote||'Enter the verified initial fuel stock only once.';
@@ -938,13 +938,36 @@ async function renderSimpleHsd(){
           <div class="simple-note">This is a one-time initial balance, not a diesel receipt. It can be zero. Check the actual stock sheet before saving.</div>
         </div>`;
     return simplePageHead('KOCP Fuel / HSD','One-time starting diesel stock and day-to-day fuel register.')+
-      `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${tab('OPENING','Opening Balance')}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
-      fuelKpiCards(fuel)+
+      `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${tab('OPENING','Opening Balance')}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
+      hsdBalanceStrip(fuel)+
       `<section class="hsd-opening-panel"><h3>Initial Fuel Opening Balance</h3><p class="field-help">Record the diesel physically available at KOCP at the start of operations. Later stock = opening + posted receipts − posted issues.</p>${content}<p class="field-help">${esc(note)}</p></section>`;
   }
+
+  if(activeHsdEntryType==='RECEIPT'){
+    // A fuel delivery is one receipt, not a ten-row vehicle-style batch.
+    // Previous old-style receipt drafts remain recoverable in a separate tab.
+    return simplePageHead(${siteId} Fuel / HSD,'Quick diesel receipt entry; the live balance updates after each successful save.')+
+      `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
+      hsdBalanceStrip(fuel)+
+      `<section class="hsd-receipt-card">
+        <div class="hsd-receipt-head"><div><b>New Fuel Receipt</b><span>Enter one tanker / delivery at a time</span></div><small>Posted records update the fuel balance</small></div>
+        <div id="simpleHsdReceiptForm" class="hsd-receipt-form">
+          <label><span>Date *</span><input id="rcDate" type="date" value="${esc(today)}"></label>
+          <label><span>Shift *</span><select id="rcShift">${shiftOpts(simpleShift())}</select></label>
+          <label><span>Supplier / Source *</span><input id="rcSupplier" autocomplete="off" placeholder="Supplier name" maxlength="180"></label>
+          <label><span>Received (litres) *</span><input id="rcLitres" type="number" inputmode="decimal" min="0.001" step="0.001" placeholder="Litres"></label>
+          <label><span>Challan / Receipt Ref.</span><input id="rcReference" autocomplete="off" placeholder="Challan / invoice no." maxlength="120"></label>
+          <input id="rcUid" type="hidden">
+          <div class="hsd-receipt-actions"><button type="button" class="btn primary" id="rcSave" onclick="saveCompactHsdReceipt()">Save Receipt</button><button type="button" class="btn outline" onclick="clearCompactHsdReceipt()">Clear</button></div>
+          <span class="draft-state" aria-live="polite">Draft autosaves on this PC</span>
+        </div>
+        <div id="rcSaveStatus" class="hsd-entry-feedback" aria-live="polite"></div>
+      </section>`+
+      panel('Recent Fuel Receipts',recentTable(['Date','Shift','Type','Supplier','Litres','Reference','Status'],rows.slice(0,15)),${rows.length} recent records`);
+  }
   return simplePageHead(`${siteId} Fuel / HSD`,'Separate diesel issue and receipt registers; batch entry with saved drafts.')+
-  `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
-  fuelKpiCards(fuel)+
+  `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
+  hsdBalanceStrip(fuel)+
   `<div id="simpleHsdForm" class="simple-form batch-entry-form">
     <div class="simple-top compact-entry-controls">
       <div class="field"><span>Date *</span><input id="shDate" type="date" data-no-draft value="${state.ctx.operatingDate}"></div>
@@ -959,7 +982,7 @@ async function renderSimpleHsd(){
       <tbody id="simpleHsdRows">${hsdGridRows(10)}</tbody>
     </table></div>
     <div class="simple-actions"><button type="button" id="shSave" class="btn primary" onclick="saveSimpleHsd()">Save ${esc(modeLabel)} Rows</button><button type="button" class="btn outline" onclick="clearSimpleHsdDraft()">Clear This Draft</button><span class="draft-state">Draft autosaves on this PC</span></div>
-    <div class="simple-note">Fuel movement is not closing stock. Opening balance, transfers and adjustments must be verified separately.</div>
+    <div class="simple-note">Live balance refreshes from posted Neon transactions after every successful issue; unfinished rows are retained.</div>
   </div>`+
   panel('Recent '+modeLabel+' records',recentTable(['Date','Shift','Type','Equipment / Supplier','Litres','Reference','Status'],rows),`${rows.length} recent records`)+
   panel('Top HSD-consuming equipment',fuelAssetBreakdown(fuel),'Selected month');
