@@ -36,10 +36,15 @@ let activeHsdEntryType='ISSUE';
 function hsdDraftKey(){return activeHsdEntryType==='LEGACY'?draftKey('HSD'):draftKey('HSD_'+activeHsdEntryType+'_V2')}
 function hsdTypeLabel(){return activeHsdEntryType==='RECEIPT'?'Receipts':activeHsdEntryType==='LEGACY'?'Previous Draft':'Issues'}
 function setSimpleHsdMode(mode){
-  if(!['ISSUE','RECEIPT','LEGACY'].includes(mode))return;
+  if(!['ISSUE','RECEIPT','OPENING','LEGACY'].includes(mode))return;
   if($('simpleHsdForm'))saveDraft('simpleHsdForm',hsdDraftKey());
   activeHsdEntryType=mode;
   render();
+}
+function openHsdOpening(){
+  activeHsdEntryType='OPENING';
+  state.module='HSD';
+  simpleRender();
 }
 function restoreDraft(containerId,key){
   const root=$(containerId);if(!root)return;
@@ -362,7 +367,7 @@ async function renderSimpleDashboard(){
 
     <div class="ops-kpis">${kpis.join('')}</div>
     ${isK?`<section class="ops-fuel-dashboard">
-      <div class="ops-panel-head"><div><b>Fuel / HSD — Operating Summary</b><span>Selected date range · Posted receipts and issues only</span></div><button type="button" onclick="openSiteModule('HSD')">Fuel / HSD Entry</button></div>
+      <div class="ops-panel-head"><div><b>Fuel / HSD — Operating Summary</b><span>Selected date range · Posted receipts and issues only</span></div><div class="ops-fuel-cta"><button type="button" onclick="openHsdOpening()">${fuel?.openingBalance?'View Opening Stock':'Set Opening Stock'}</button><button type="button" onclick="openSiteModule('HSD')">Fuel / HSD Entry</button></div></div>
       ${fuelKpiCards(fuel)}
       <div class="ops-fuel-detail">
         <div><b>Top Diesel-Using Equipment</b>${fuelAssetBreakdown(fuel)}</div>
@@ -847,6 +852,8 @@ function fuelKpiCards(fuel){
     ${dashKpi('Today Issues',shown?dashNum(t.issueL,1)+' L':'—',shown?'Posted HSD issues':'Unable to read summary','warn')}
     ${dashKpi('Period Receipts',shown?dashNum(p.receiptL,1)+' L':'—',shown?dashNum(p.receiptCount)+' receipts':'No data','good')}
     ${dashKpi('Period Issues',shown?dashNum(p.issueL,1)+' L':'—',shown?dashNum(p.issueCount)+' issues':'No data','warn')}
+    ${dashKpi('Opening Stock',fuel?.openingBalance?dashNum(fuel.openingBalance.litres,1)+' L':'Not set',fuel?.openingBalance?'Verified starting balance · '+esc(fuel.openingBalance.date):'Enter in Opening Balance tab','primary')}
+    ${dashKpi('Calculated Stock',fuel?.stockBalance!=null?dashNum(fuel.stockBalance,1)+' L':'—',fuel?.stockBalance!=null?'Ledger at period end · physical check required':'Waiting for reconciled opening stock','good')}
     ${dashKpi('Net Fuel Movement',shown?dashNum(p.netMovementL,1)+' L':'—','Receipts − issues; NOT closing stock','')}
     ${dashKpi('Fuel / Coal MT',fuel?.litresPerMt!=null?dashNum(fuel.litresPerMt,3)+' L/MT':'—','Only if posted Coal MT exists','')}
     ${dashKpi('Fuel / OB CuM',fuel?.litresPerCum!=null?dashNum(fuel.litresPerCum,3)+' L/CuM':'—','Only if posted OB CuM exists','')}
@@ -868,9 +875,26 @@ async function renderSimpleHsd(){
     .map(r=>`<tr><td>${esc(r.operatingDate)}</td><td>${esc(r.shift||'—')}</td><td>${esc(r.transactionType)}</td><td>${esc(r.assetId||r.supplier||'—')}</td><td>${fmt(r.litres,2)}</td><td>${esc(r.referenceNo||'—')}</td><td>${esc(r.status)}</td></tr>`);
   const legacyExists=!!localStorage.getItem(draftKey('HSD'));
   const tab=(type,label)=>`<button type="button" role="tab" aria-selected="${activeHsdEntryType===type}" class="hsd-mode-tab ${activeHsdEntryType===type?'active':''}" onclick="setSimpleHsdMode('${type}')">${label}</button>`;
-  const modeLabel=activeHsdEntryType==='RECEIPT'?'Receipt':activeHsdEntryType==='LEGACY'?'Previous Mixed Draft':'Issue';
+  const modeLabel=activeHsdEntryType==='RECEIPT'?'Receipt':activeHsdEntryType==='OPENING'?'Opening Balance':activeHsdEntryType==='LEGACY'?'Previous Mixed Draft':'Issue';
+  if(activeHsdEntryType==='OPENING' && siteId==='KOCP'){
+    const existing=fuel?.openingBalance;
+    const note=fuel?.stockNote||'Enter the verified initial fuel stock only once.';
+    const content=existing
+      ? `<div class="hsd-opening-locked"><b>Opening balance recorded</b><p><strong>${dashNum(existing.litres,3)} L</strong> · ${esc(existing.date)} · ${esc(existing.reference||'No reference')}</p><small>One opening per site. Use Receipts and Issues for later movements; do not enter another opening.</small></div>`
+      : `<div id="hsdOpeningForm" class="hsd-opening-form">
+          <div class="field"><span>Opening as of date *</span><input type="date" id="hsdOpenDate" value="${esc(today)}"></div>
+          <div class="field"><span>Verified diesel in stock (litres) *</span><input id="hsdOpenLitres" type="number" min="0" step="0.001" inputmode="decimal" placeholder="Enter measured litres"></div>
+          <div class="field"><span>Stock check / document reference *</span><input id="hsdOpenRef" maxlength="120" placeholder="Physical verification / stock sheet number"></div>
+          <button type="button" id="hsdOpenSave" class="btn primary" onclick="saveHsdOpening()">Save Opening Balance</button>
+          <div class="simple-note">This is a one-time initial balance, not a diesel receipt. It can be zero. Check the actual stock sheet before saving.</div>
+        </div>`;
+    return simplePageHead('KOCP Fuel / HSD','One-time starting diesel stock and day-to-day fuel register.')+
+      `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${tab('OPENING','Opening Balance')}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
+      fuelKpiCards(fuel)+
+      `<section class="hsd-opening-panel"><h3>Initial Fuel Opening Balance</h3><p class="field-help">Record the diesel physically available at KOCP at the start of operations. Later stock = opening + posted receipts − posted issues.</p>${content}<p class="field-help">${esc(note)}</p></section>`;
+  }
   return simplePageHead(`${siteId} Fuel / HSD`,'Separate diesel issue and receipt registers; batch entry with saved drafts.')+
-  `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
+  `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
   fuelKpiCards(fuel)+
   `<div id="simpleHsdForm" class="simple-form batch-entry-form">
     <div class="simple-top compact-entry-controls">
@@ -890,6 +914,26 @@ async function renderSimpleHsd(){
   </div>`+
   panel('Recent '+modeLabel+' records',recentTable(['Date','Shift','Type','Equipment / Supplier','Litres','Reference','Status'],rows),`${rows.length} recent records`)+
   panel('Top HSD-consuming equipment',fuelAssetBreakdown(fuel),'Selected month');
+}
+async function saveHsdOpening(){
+  const btn=$('hsdOpenSave'),date=$('hsdOpenDate')?.value;
+  const litres=$('hsdOpenLitres')?.value,reference=$('hsdOpenRef')?.value.trim();
+  if(!date)return toast('Select opening stock date','bad');
+  if(litres===''||!Number.isFinite(Number(litres))||Number(litres)<0)return toast('Enter verified litres (zero is allowed)','bad');
+  if(!reference)return toast('Enter a stock verification reference','bad');
+  if(!confirm('Save the one-time KOCP opening stock of '+litres+' L dated '+date+'? Confirm this matches the physical stock sheet.'))return;
+  btn.disabled=true;
+  try{
+    await api('/api/sites/KOCP/hsd',{
+      method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({operatingDate:date,shift:null,transactionType:'OPENING',
+        litres,referenceNo:reference,sourceType:'PORTAL',
+        sourceRecordUid:'KOCP-OPENING-'+date})
+    });
+    toast('KOCP opening balance saved');
+    await render();
+  }catch(e){toast(e.message,'bad')}
+  finally{if(btn.isConnected)btn.disabled=false}
 }
 function toggleHsdRow(i){
   const receipt=$('shType'+i)?.value==='RECEIPT',asset=$('shAssetBox'+i),supplier=$('shSupplier'+i);
@@ -1055,7 +1099,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
