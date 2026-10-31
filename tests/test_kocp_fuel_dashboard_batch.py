@@ -38,7 +38,7 @@ function box(store,selector){
 }
 const tripBody=box(tripRows,'.simple-trip-row'),hsdBody=box(hsdRows,'.simple-hsd-row');
 const nodes={simpleTripRows:tripBody,simpleHsdRows:hsdBody,stRowCount:{textContent:''},shRowCount:{textContent:''},stRows:{value:'10',dataset:{}},shRows:{value:'10',dataset:{}}};
-const $=id=>nodes[id],toast=()=>{},bindLookups=()=>{},saveDraft=()=>{},draftKey=()=> 'TRIP',hsdDraftKey=()=> 'HSD_ISSUE_V2';
+const $=id=>nodes[id],toast=()=>{},bindLookups=()=>{},saveDraft=()=>{},draftKey=()=> 'TRIP',hsdDraftKey=()=> 'HSD_ISSUE_V2',state={module:'TRIP'};
 function tripGridRows(kind,count,start){return Array.from({length:count},(_,i)=>'<tr data-i="'+(start+i)+'"></tr>').join('')}
 function hsdGridRows(count,start){return Array.from({length:count},(_,i)=>'<tr data-i="'+(start+i)+'"></tr>').join('')}
 addSimpleTripRows(10);
