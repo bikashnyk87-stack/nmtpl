@@ -61,6 +61,16 @@ function restoreDraft(containerId,key){
     const existing=hmr?.querySelectorAll('.kocp-hmr-row').length||0;
     if(hmr&&n>existing){hmr.insertAdjacentHTML('beforeend',kocpHmrRows(n-existing,existing));bindLookups(hmr)}
   }
+  if(containerId==='simpleHsdForm'){
+    const parent=$('simpleHsdRows');
+    const indexes=Object.keys(o).map(k=>/^shLitres(\d+)$/.exec(k)).filter(Boolean).map(x=>Number(x[1]));
+    const count=indexes.length?Math.min(200,Math.max(...indexes)+1):0;
+    const existing=parent?.querySelectorAll('.simple-hsd-row').length||0;
+    if(parent&&count>existing){
+      parent.insertAdjacentHTML('beforeend',hsdGridRows(count-existing,existing));
+      bindLookups(parent);
+    }
+  }
   Object.entries(o).forEach(([id,v])=>{const el=$(id);if(el){if(el.type==='checkbox')el.checked=!!v;else el.value=v}});
   root.querySelectorAll('input,select,textarea').forEach(el=>{
     if(el.type==='file'||el.dataset.noDraft)return;
@@ -295,6 +305,7 @@ async function renderSimpleDashboard(){
   const d=await api(`/api/site-ops/${siteId}/dashboard/operations?from_date=${encodeURIComponent(from)}&to_date=${encodeURIComponent(to)}`).catch(e=>({error:e.message,todayTotals:{},periodTotals:{},shifts:[],trend:[],materials:[],destinations:[],vehicles:[],loaders:[],fleet:{status:{}},reconciliation:{},meters:{},factors:[]}));
   if(d.error)return `<div class="bad">${esc(d.error)}</div>`;
   const t=d.todayTotals||{},p=d.periodTotals||{},isK=siteId==='KOCP';
+  const fuel=isK?await api(`/api/site-ops/${siteId}/fuel/summary?from_date=${encodeURIComponent(from)}&to_date=${encodeURIComponent(to)}`).catch(()=>null):null;
   const draftCount=(cfg.entry||[]).filter(m=>localStorage.getItem(draftKey(m))).length;
   const trendKey=isK?(p.quantityCum>p.quantityMt?'quantityCum':'quantityMt'):(p.wbMt>0?'wbMt':'quantityMt');
   // WB MT is not daily in trend; SOCP uses trip MT trend, while WB MT remains KPI.
@@ -349,6 +360,17 @@ async function renderSimpleDashboard(){
     <section class="ops-entry-strip"><div class="ops-strip-head"><div><b>Entry Workspace</b><span>Same compact field-entry workflow: open sheet → enter multiple rows → save once.</span></div><small>${draftCount} local draft sheet${draftCount===1?'':'s'}</small></div>${dashQuickActions(cfg)}</section>
 
     <div class="ops-kpis">${kpis.join('')}</div>
+    ${isK?`<section class="ops-fuel-dashboard">
+      <div class="ops-panel-head"><div><b>Fuel / HSD — Operating Summary</b><span>Selected date range · Posted receipts and issues only</span></div><button type="button" onclick="openSiteModule('HSD')">Fuel / HSD Entry</button></div>
+      ${fuelKpiCards(fuel)}
+      <div class="ops-fuel-detail">
+        <div><b>Top Diesel-Using Equipment</b>${fuelAssetBreakdown(fuel)}</div>
+        <div><b>Issue by Shift</b>
+          ${(fuel?.issueByShift||[]).length?dashBars((fuel.issueByShift||[]).map(x=>({label:x.shift,litres:x.litres})),'litres',' L',5):'<div class="ops-empty">No posted fuel issue by shift.</div>'}
+          <p class="field-help">${esc(fuel?.stockNote||'Opening balance required to report closing stock.')}</p>
+        </div>
+      </div>
+    </section>`:''}
 
     <div class="ops-grid">
       <section class="ops-panel ops-trend"><div class="ops-panel-head"><div><b>${esc(trendTitle)}</b><span>${esc(from)} → ${esc(to)}</span></div></div>${dashTrend(d.trend,trendMetric,trendTitle,trendUnit)}</section>
@@ -992,7 +1014,7 @@ async function saveSimpleMeters(){
 }
 function clearSimpleMeterDraft(){localStorage.removeItem(draftKey('HMR_KMR'));render()}
 window.NMTPLClearActiveDrafts=function(){NMTPLNet.clearUserDrafts(simpleUser())};
-function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module)){restoreDraft('simpleTripForm',draftKey(state.module));syncKocpRoutes()}if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){restoreDraft('simpleHsdForm',draftKey('HSD'));document.querySelectorAll('.simple-hsd-row').forEach(r=>toggleHsdRow(r.dataset.i))}if(state.module==='HMR_KMR'){restoreDraft('simpleMeterForm',draftKey('HMR_KMR'));document.querySelectorAll('.simple-meter-row').forEach(r=>calcMeterRow(r.dataset.i))}const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
+function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module)){restoreDraft('simpleTripForm',draftKey(state.module));syncKocpRoutes()}if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){restoreDraft('simpleHsdForm',hsdDraftKey());document.querySelectorAll('.simple-hsd-row').forEach(r=>toggleHsdRow(r.dataset.i))}if(state.module==='HMR_KMR'){restoreDraft('simpleMeterForm',draftKey('HMR_KMR'));document.querySelectorAll('.simple-meter-row').forEach(r=>calcMeterRow(r.dataset.i))}const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
 async function simpleRender(){
   const cfg=SIMPLE[siteId]||{entry:[],setup:[],review:[],control:[]};
   const visible=new Set(['DASHBOARD',...(cfg.entry||[]),...(cfg.setup||[]),...(cfg.review||[]),...(cfg.control||[])]);
