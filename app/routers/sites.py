@@ -10,7 +10,7 @@ import json
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from openpyxl import Workbook, load_workbook
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.auth import WebSession, WebUser, csrf, get_user, hash_password
@@ -1265,11 +1265,21 @@ def create_hsd_transaction(site_id: str, p: SiteHsdTransactionIn, request: Reque
     user = get_user(db, request)
     site_id = require_site(db, user, site_id)
     require_permission(db, user, site_id, "HSD", "CREATE")
-    if not _site_shift_active(db,site_id,p.shift):
-        raise HTTPException(422, f"Choose a valid active shift for {site_id}.")
     tx_type=str(p.transactionType or "").strip().upper()
-    if p.litres is None or p.litres <= 0:
+    if tx_type=="OPENING" and site_id=="KOCP":
+        # Opening stock is a one-time starting point, not a daily receipt.
+        # It can legitimately be zero. All other HSD transactions need >0 L.
+        if p.litres is None or p.litres < 0:
+            raise HTTPException(422, "Opening balance must be zero or more litres.")
+        if not (p.referenceNo or "").strip():
+            raise HTTPException(422, "Opening balance requires a stock-verification reference.")
+        if p.assetId or p.supplier:
+            raise HTTPException(422, "Opening balance belongs to KOCP fuel stock, not a vehicle/supplier.")
+    elif p.litres is None or p.litres <= 0:
         raise HTTPException(422, "Litres must be greater than zero.")
+    if tx_type!="OPENING" or site_id!="KOCP":
+        if not _site_shift_active(db,site_id,p.shift):
+            raise HTTPException(422, f"Choose a valid active shift for {site_id}.")
     if tx_type=="ISSUE":
         if not p.assetId or not _site_equipment_assignment(db,site_id,p.assetId,p.operatingDate):
             raise HTTPException(422, f"Choose a valid active equipment assigned to {site_id}.")
@@ -1279,13 +1289,34 @@ def create_hsd_transaction(site_id: str, p: SiteHsdTransactionIn, request: Reque
         existing = db.scalar(select(SiteHsdTransaction.transaction_id).where(SiteHsdTransaction.site_id == site_id, SiteHsdTransaction.source_type == p.sourceType, SiteHsdTransaction.source_record_uid == p.sourceRecordUid))
         if existing:
             return {"ok": True, "transactionId": existing, "idempotent": True}
+    if tx_type=="OPENING" and site_id=="KOCP":
+        # PostgreSQL transaction-scoped lock prevents two simultaneous requests
+        # from creating duplicate initial stock baselines without a schema change.
+        if db.bind is not None and db.bind.dialect.name == "postgresql":
+            db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                       {"key": f"HSD_OPENING_{site_id}"})
+        existing_open = db.scalar(select(SiteHsdTransaction.transaction_id).where(
+            SiteHsdTransaction.site_id==site_id,
+            SiteHsdTransaction.transaction_type=="OPENING",
+            SiteHsdTransaction.status=="POSTED",
+        ).limit(1))
+        if existing_open:
+            raise HTTPException(409, "Opening balance already recorded. Do not add another opening; use the existing reference.")
+        older = db.scalar(select(SiteHsdTransaction.transaction_id).where(
+            SiteHsdTransaction.site_id==site_id,
+            SiteHsdTransaction.status=="POSTED",
+            SiteHsdTransaction.transaction_type.in_(["RECEIPT", "ISSUE", "ADJUSTMENT"]),
+            SiteHsdTransaction.operating_date < p.operatingDate,
+        ).limit(1))
+        if older:
+            raise HTTPException(409, "Earlier posted fuel movements exist. Opening date must be on or before the first transaction.")
     tx_id = f"HSD-{site_id}-{uuid4().hex[:14].upper()}"
     row = SiteHsdTransaction(
         transaction_id=tx_id,
         site_id=site_id,
         operating_date=p.operatingDate,
-        shift=p.shift,
-        transaction_type=p.transactionType,
+        shift=None if (tx_type=="OPENING" and site_id=="KOCP") else p.shift,
+        transaction_type=tx_type,
         asset_type=p.assetType,
         asset_id=p.assetId,
         litres=p.litres,
