@@ -943,7 +943,7 @@ async function renderSimpleHsd(){
       `<section class="hsd-opening-panel"><h3>Initial Fuel Opening Balance</h3><p class="field-help">Record the diesel physically available at KOCP at the start of operations. Later stock = opening + posted receipts − posted issues.</p>${content}<p class="field-help">${esc(note)}</p></section>`;
   }
 
-  if(activeHsdEntryType==='RECEIPT'){
+  if(siteId==='KOCP'&&activeHsdEntryType==='RECEIPT'){
     // A fuel delivery is one receipt, not a ten-row vehicle-style batch.
     // Previous old-style receipt drafts remain recoverable in a separate tab.
     return simplePageHead(${siteId} Fuel / HSD,'Quick diesel receipt entry; the live balance updates after each successful save.')+
@@ -967,7 +967,7 @@ async function renderSimpleHsd(){
   }
   return simplePageHead(`${siteId} Fuel / HSD`,'Separate diesel issue and receipt registers; batch entry with saved drafts.')+
   `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
-  hsdBalanceStrip(fuel)+
+  (siteId==='KOCP'?hsdBalanceStrip(fuel):fuelKpiCards(fuel))+
   `<div id="simpleHsdForm" class="simple-form batch-entry-form">
     <div class="simple-top compact-entry-controls">
       <div class="field"><span>Date *</span><input id="shDate" type="date" data-no-draft value="${state.ctx.operatingDate}"></div>
