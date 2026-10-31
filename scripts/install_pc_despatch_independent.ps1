@@ -133,23 +133,38 @@ app.include_router(tiom_despatch.router)
     [System.IO.File]::WriteAllText($index,$indexText,[System.Text.UTF8Encoding]::new($false))
     Write-Host "PC Despatch API and Five Reports UI registered without changing WB sync files."
 
-    # Scheduled task belongs only to Despatch. The existing every-3-min WB
-    # scheduler, state files and token stay untouched.
+    # Only the separate Despatch PC mirror is scheduled here.
+    # WB Gmail and the primary PC sync schedules are never modified by this installer.
+    if ((Get-TimeZone).Id -ne 'India Standard Time') {
+        throw "Safety stop: Windows time zone must be India Standard Time."
+    }
     $taskName="NMTPL Despatch Mirror - Every 5 Minutes"
-    # Use the console-free executable: python.exe produces a visible terminal
-    # every five minutes when the task runs in the logged-on user's session.
-    # Keep the exact same task interval, current user, pairing and database.
-    $pythonw=Join-Path $ProjectRoot ".venv\Scripts\pythonw.exe"
+    $pythonw=Join-Path $ProjectRoot ".venv\\Scripts\\pythonw.exe"
     if (-not (Test-Path -LiteralPath $pythonw)) {
-        throw "Windows background Python missing: $pythonw. Despatch was mirrored, but no visible-window scheduler was created."
+        throw "Windows background Python missing: $pythonw. Despatch data is mirrored but task not installed."
     }
-    $command='"'+$pythonw+'" "'+$worker+'"'
-    & schtasks.exe /Create /TN $taskName /SC MINUTE /MO 5 /TR $command /F | Out-Host
-    if($LASTEXITCODE -ne 0) {
-        Write-Warning "Despatch data synced, but silent task creation failed. Existing WB tasks are unchanged."
-    } else {
-        Write-Host "Automatic Despatch mirror scheduled every 5 minutes without popup windows."
+    $old=Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
+    if ($null -ne $old) {
+        $oldAction=(($old.Actions | ForEach-Object { "$($_.Execute) $($_.Arguments)" }) -join ' ')
+        if ($oldAction -notmatch 'pc_despatch_mirror_standalone[.]py') {
+            throw "Safety stop: unexpected existing Despatch task action: $oldAction"
+        }
+        Export-ScheduledTask -TaskName $taskName |
+            Out-File -FilePath (Join-Path $backup 'despatch_task_original.xml') -Encoding Unicode
     }
+    $triggers=@(6..22 | ForEach-Object {
+        New-ScheduledTaskTrigger -Daily -At ([datetime]::Today.AddHours($_))
+    })
+    $action=New-ScheduledTaskAction -Execute $pythonw -Argument ('"'+$worker+'"') -WorkingDirectory $ProjectRoot
+    $principal=New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive -RunLevel Limited
+    $settings=New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -StartWhenAvailable:$false -ExecutionTimeLimit (New-TimeSpan -Hours 1)
+    Register-ScheduledTask -TaskName $taskName -Action $action -Trigger $triggers -Principal $principal -Settings $settings -Force -ErrorAction Stop | Out-Null
+    $after=Get-ScheduledTask -TaskName $taskName
+    $hours=@($after.Triggers | ForEach-Object { ([datetime]$_.StartBoundary).Hour } | Sort-Object -Unique)
+    if ($hours.Count -ne 17 -or ($hours -join ',') -ne ((6..22) -join ',')) {
+        throw "Despatch hourly schedule verification failed. Original task XML backup: $backup"
+    }
+    Write-Host "VERIFIED: Despatch PC mirror now runs hourly 06:00–22:00 IST; no five-minute task."
     $status=Join-Path $tools "mirror_status.json"
     Write-Host ""
     Write-Host "Despatch database sync status:"
