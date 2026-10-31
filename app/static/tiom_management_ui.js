@@ -144,6 +144,13 @@
   // remain rendered underneath in the original workspace.js.
   window.tiomRefDetailed=function(d) {
     const p=d.production||{},k=d.kpis||{},br=d.breakdowns||{},unverified=!!p.allocationPending;
+    const entry=d.entryFreshness||{};
+    const entryGap=Number(entry.misEntryGapDays||0);
+    const sourceNotice=entryGap>2
+      ? '<div class="mc-flow-alert"><b>Manual MIS reporting gap:</b> last entered '+E(entry.misLatest||'not recorded')+
+        ' · last confirmed WB '+E(entry.wbLatest||'not recorded')+
+        ' · '+entryGap+' operating days apart. WB-based production is available, but it does not replace vehicle/driver MIS reports.</div>'
+      : '';
     const metrics=[
       metric('Fresh ROM',fmt(p.romInputMt,1,' t'),'Mine-origin material','teal','◆'),
       metric('Plant feed',fmt(p.plantFeedMt,1,' t'),'Weighed/recorded feed','blue','⇢'),
@@ -181,7 +188,7 @@
       '<b>'+E(x.machine)+'</b>',E(x.fault),fmt(x.periodDowntimeHours,1),status(!x.isOpen,x.status)]));
     const shifts=tbl(['Shift','WB trips','Tonnes','HSD L'],arr(d.shiftComparison).map(x=>[
       '<b>'+E(x.shift)+'</b>',fmt(x.trips,0),fmt(x.tonnes,1),fmt(x.fuel,1)]));
-    return '<div class="mc-dashboard-presentation"><div class="mc-dash-metrics">'+metrics+'</div>'+
+    return '<div class="mc-dashboard-presentation">'+sourceNotice+'<div class="mc-dash-metrics">'+metrics+'</div>'+
       box('Production flow & allocation',flow,'Fresh output is shown only where allocation evidence is complete')+
       '<div class="mc-dash-main">'+box('Plant feed vs output',plantTable(d,false),'Plant-level physical movement and actual HMR')+
       box('Movement reconciliation',recon,'Confirmed WB is authoritative for weighed movements')+
