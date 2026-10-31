@@ -1855,7 +1855,25 @@ def dashboard_desk(db, user, p):
         'TIOM dashboard built in %.2fs mode=%s period=%s..%s shift=%s wb=%d canonical_missing=%d',
         perf_counter()-dash_started, mode, start_day, end_day, selected_shift, len(wb_all), len(missing_canonical)
     )
+    # Surface field-entry freshness without creating fictional MIS reports.
+    # Confirmed SAP WB rows and manually entered MIS are separate sources.
+    last_wb_day = db.scalar(select(func.max(WbImportBatch.operating_date)).where(
+        WbImportBatch.status == 'CONFIRMED', WbImportBatch.confirmed_at.is_not(None)
+    ))
+    last_mis_day = db.scalar(select(func.max(TiomMisReport.operating_date)).where(
+        TiomMisReport.status != 'VOID'
+    ))
+    last_shift_report_day = db.scalar(select(func.max(TiomShiftProductionReport.operating_date)))
+    entry_freshness = {
+        'wbLatest': last_wb_day.isoformat() if last_wb_day else None,
+        'misLatest': last_mis_day.isoformat() if last_mis_day else None,
+        'shiftProductionLatest': last_shift_report_day.isoformat() if last_shift_report_day else None,
+        'misEntryGapDays': (last_wb_day - last_mis_day).days if last_wb_day and last_mis_day else None,
+        'shiftReportGapDays': (last_wb_day - last_shift_report_day).days if last_wb_day and last_shift_report_day else None,
+        'noFictitiousReports': True,
+    }
     return {
+        'entryFreshness': entry_freshness,
         'fromDate':start_day,'toDate':end_day,'shift':selected_shift,'mode':mode,'materialFilter':material_filter,'sourceFilter':source_filter,'destinationFilter':destination_filter,'vehicleFilter':vehicle_filter,'availableMaterials':available_materials,'availableSources':available_sources,'availableDestinations':available_destinations,'availableVehicles':available_vehicles,
         'kpis':{
             'wbTrips':wb_trips,'wbTonnes':round(wb_tonnes,2),'avgPayload':round(avg_payload,2),'fieldTrips':len(field_vehicle_trips),
