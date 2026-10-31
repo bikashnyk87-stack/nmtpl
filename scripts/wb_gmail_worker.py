@@ -1167,9 +1167,29 @@ def process_message(service, message, cfg, labels):
             results.append(result)
         except Exception as exc:
             reason = f"{type(exc).__name__}: {exc}"
-            q = quarantine_bytes(content, filename, reason)
-            logger.exception("WB attachment failed: message=%s file=%s quarantine=%s", message["id"], filename, q)
-            results.append({"outcome": "ERROR", "message": reason, "quarantine": str(q), "file": filename})
+            # Persist the exact rejected attachment in PostgreSQL. Render's
+            # ephemeral disk is not a durable place for exception evidence.
+            # An archive failure never hides the original import error.
+            archive_hash = ""
+            try:
+                from app.services.wb_quarantine import store_rejected_attachment
+                archive_hash = store_rejected_attachment(
+                    message["id"], sender, filename, content, reason
+                )
+            except Exception:
+                logger.exception("WB rejected XLSX could not be archived in DB: %s", filename)
+            try:
+                q = quarantine_bytes(content, filename, reason)
+            except OSError:
+                logger.exception("WB rejected XLSX local quarantine failed: %s", filename)
+                q = None
+            logger.exception(
+                "WB attachment failed: message=%s file=%s quarantine=%s db_hash=%s",
+                message["id"], filename, q, archive_hash
+            )
+            results.append({"outcome": "ERROR", "message": reason,
+                            "quarantine": str(q or ""), "archiveHash": archive_hash,
+                            "file": filename})
 
     outcomes = {r["outcome"] for r in results}
     add = []
