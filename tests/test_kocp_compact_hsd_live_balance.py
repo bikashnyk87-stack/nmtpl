@@ -115,7 +115,7 @@ def test_balance_api_and_dashboard_share_true_posted_ledger(monkeypatch):
 def test_compact_receipt_layout_and_issue_post_refresh():
     js=JS.read_text("utf-8")
     begin=js.index("if(siteId==='KOCP'&&activeHsdEntryType==='RECEIPT')")
-    end=js.index("  return simplePageHead(",begin)
+    end=js.index("  return simplePageHead(", js.index("panel('Recent Fuel Receipts'",begin))
     receipt=js[begin:end]
     assert "simpleHsdReceiptForm" in receipt
     for name in ("rcDate","rcShift","rcSupplier","rcLitres","rcReference"):
