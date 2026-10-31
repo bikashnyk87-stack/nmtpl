@@ -84,10 +84,18 @@ function bindLookups(root=document){root.querySelectorAll('.lookup:not([data-bou
     const isKocpTrip=siteId==='KOCP'&&['TRIP','OB'].includes(state.module);
     const activity=isKocpTrip&&w.dataset.kind==='ASSET'?(state.module==='OB'?'OB':'COAL'):'';
     const role=activity?(/TRIPPER|TIPPER|DUMPER|TRANSPORT|VEHICLE/.test(groups)?'TRANSPORT':'LOADING'):'';
-    const params=new URLSearchParams({kind:w.dataset.kind,q,limit:activity?'200':'40'});
+    // HSD must offer the full KOCP asset master, not the first 40 IDs.
+    // Coal/OB production queries remain isolated by activity + equipment role.
+    const kocpAsset=siteId==='KOCP'&&w.dataset.kind==='ASSET';
+    const params=new URLSearchParams({kind:w.dataset.kind,q,limit:kocpAsset?'200':'40'});
     if(activity){params.set('activity',activity);params.set('role',role)}
     let data=await api(`/api/site-ops/${siteId}/lookups?${params.toString()}`);
-    data=(data||[]).filter(x=>itemAllowed(w,x));items=data;active=-1;menu.innerHTML=data.length?data.map((x,i)=>`<div class="lookup-item" data-i="${i}"><b>${esc(x.label)}</b><small>${esc(x.sub||x.id)}</small></div>`).join(''):'<div class="lookup-empty">No matching active master record</div>';menu.querySelectorAll('.lookup-item').forEach(el=>el.onclick=()=>choose(items[+el.dataset.i]))}catch(e){menu.innerHTML=`<div class="lookup-empty">${esc(e.message)}</div>`}}
+    data=(data||[]).filter(x=>itemAllowed(w,x));items=data;active=-1;
+    const label=kocpAsset?(activity?(activity==='COAL'?'Coal':'OB')+' '+(role==='TRANSPORT'?'tippers':'loaders / excavators'):'KOCP equipment for HSD / other use'):'';
+    const summary=kocpAsset?`<div class="lookup-summary">${data.length} matching ${esc(label)} · Scroll or search Door No / registration</div>`:'';
+    menu.innerHTML=summary+(data.length?data.map((x,i)=>`<div class="lookup-item" data-i="${i}"><b>${esc(x.label)}</b><small>${esc([kocpAsset?x.group:'',x.sub||x.id].filter(Boolean).join(' · '))}</small></div>`).join(''):'<div class="lookup-empty">No matching active master record</div>');
+    menu.querySelectorAll('.lookup-item').forEach(el=>el.onclick=()=>choose(items[+el.dataset.i]))
+  }catch(e){menu.innerHTML=`<div class="lookup-empty">${esc(e.message)}</div>`}}
   function choose(x){hidden.value=x.id;input.value=x.label;input.dataset.selected=x.id;input.dataset.vehicleNo=x.vehicleNo||'';input.dataset.doorNo=x.doorNo||'';w.classList.remove('open');input.dispatchEvent(new Event('change',{bubbles:true}))}
   input.addEventListener('focus',search);input.addEventListener('input',()=>{hidden.value='';input.dataset.selected='';clearTimeout(timer);timer=setTimeout(search,160)});input.addEventListener('keydown',e=>{if(!w.classList.contains('open'))return;if(e.key==='ArrowDown'){e.preventDefault();active=Math.min(active+1,items.length-1)}else if(e.key==='ArrowUp'){e.preventDefault();active=Math.max(active-1,0)}else if(e.key==='Enter'&&active>=0){e.preventDefault();choose(items[active])}else if(e.key==='Escape'){w.classList.remove('open')}else return;menu.querySelectorAll('.lookup-item').forEach((el,i)=>el.classList.toggle('active',i===active))})
 })}
