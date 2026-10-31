@@ -1164,6 +1164,125 @@ def report_summary(site_id:str,request:Request,from_date:date|None=None,to_date:
 
 
 
+@router.get("/{site_id}/fuel/summary")
+def fuel_summary(
+    site_id: str,
+    request: Request,
+    from_date: date | None = None,
+    to_date: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """Read-only receipts/issues summary, never an inferred tank stock balance.
+
+    Receipts and issues are posted transactions; opening stock and stock
+    adjustments are deliberately excluded from the net movement KPI.
+    An actual closing balance must come from a separately approved opening
+    balance plus a complete inventory ledger.
+    """
+    user = get_user(db, request)
+    site_id = require_site(db, user, site_id)
+    if not user.admin and not any(
+        has_permission(db, user, site_id, module, action)
+        for module in ("HSD", "DASHBOARD")
+        for action in ("VIEW", "CREATE", "EDIT", "APPROVE")
+    ):
+        raise HTTPException(403, f"HSD or Dashboard permission is required for {site_id}.")
+    today = resolve_site_context(db, site_id).operating_date
+    start = from_date or today.replace(day=1)
+    end = to_date or today
+    if end < start or (end - start).days > 365:
+        raise HTTPException(422, "Choose a valid fuel date range within 366 days.")
+
+    rows = db.execute(select(
+        SiteHsdTransaction.operating_date,
+        SiteHsdTransaction.transaction_type,
+        func.count(),
+        func.coalesce(func.sum(SiteHsdTransaction.litres), 0),
+    ).where(
+        SiteHsdTransaction.site_id == site_id,
+        SiteHsdTransaction.operating_date >= start,
+        SiteHsdTransaction.operating_date <= end,
+        SiteHsdTransaction.status == "POSTED",
+        SiteHsdTransaction.transaction_type.in_(["RECEIPT", "ISSUE"]),
+    ).group_by(
+        SiteHsdTransaction.operating_date,
+        SiteHsdTransaction.transaction_type,
+    )).all()
+
+    totals = {"receiptL": 0.0, "issueL": 0.0, "receiptCount": 0, "issueCount": 0}
+    today_totals = dict(totals)
+    daily = {}
+    for operating_date, kind, count, litres in rows:
+        key = "receipt" if kind == "RECEIPT" else "issue"
+        bucket = daily.setdefault(operating_date.isoformat(), {"receiptL": 0.0, "issueL": 0.0})
+        value = _fmt_decimal(litres)
+        totals[key + "L"] += value
+        totals[key + "Count"] += int(count or 0)
+        bucket[key + "L"] += value
+        if operating_date == today:
+            today_totals[key + "L"] += value
+            today_totals[key + "Count"] += int(count or 0)
+    totals["netMovementL"] = round(totals["receiptL"] - totals["issueL"], 3)
+    today_totals["netMovementL"] = round(today_totals["receiptL"] - today_totals["issueL"], 3)
+
+    issue_asset_rows = db.execute(select(
+        SiteHsdTransaction.asset_id,
+        func.coalesce(func.sum(SiteHsdTransaction.litres), 0),
+        func.count(),
+    ).where(
+        SiteHsdTransaction.site_id == site_id,
+        SiteHsdTransaction.operating_date >= start,
+        SiteHsdTransaction.operating_date <= end,
+        SiteHsdTransaction.status == "POSTED",
+        SiteHsdTransaction.transaction_type == "ISSUE",
+        SiteHsdTransaction.asset_id.is_not(None),
+    ).group_by(SiteHsdTransaction.asset_id).order_by(
+        func.sum(SiteHsdTransaction.litres).desc()
+    ).limit(10)).all()
+    asset_ids = [asset for asset, _litres, _count in issue_asset_rows if asset]
+    equipment_labels = {}
+    if asset_ids:
+        for equipment in db.scalars(select(Equipment).where(Equipment.machine_id.in_(asset_ids))):
+            parts = [f"Door {equipment.door_no}" if equipment.door_no else None,
+                     equipment.vehicle_no, equipment.machine_id]
+            equipment_labels[equipment.machine_id] = " · ".join(str(x) for x in parts if x)
+    issue_shift_rows = db.execute(select(
+        SiteHsdTransaction.shift,
+        func.coalesce(func.sum(SiteHsdTransaction.litres), 0),
+    ).where(
+        SiteHsdTransaction.site_id == site_id,
+        SiteHsdTransaction.operating_date >= start,
+        SiteHsdTransaction.operating_date <= end,
+        SiteHsdTransaction.status == "POSTED",
+        SiteHsdTransaction.transaction_type == "ISSUE",
+    ).group_by(SiteHsdTransaction.shift)).all()
+    total_mt,total_cum = db.execute(select(
+        func.coalesce(func.sum(SiteTrip.quantity_mt),0),
+        func.coalesce(func.sum(SiteTrip.quantity_cum),0),
+    ).where(
+        SiteTrip.site_id == site_id,
+        SiteTrip.operating_date >= start,
+        SiteTrip.operating_date <= end,
+        SiteTrip.status != "VOID",
+    )).one()
+    mt, cum = _fmt_decimal(total_mt), _fmt_decimal(total_cum)
+    return {
+        "siteId": site_id, "today": today.isoformat(),
+        "fromDate": start.isoformat(), "toDate": end.isoformat(),
+        "todayTotals": today_totals, "periodTotals": totals,
+        "litresPerMt": round(totals["issueL"] / mt, 3) if mt > 0 else None,
+        "litresPerCum": round(totals["issueL"] / cum, 3) if cum > 0 else None,
+        "issueByAsset": [{"assetId": asset, "label": equipment_labels.get(asset, asset),
+                          "litres": _fmt_decimal(litres), "count": int(count)}
+                         for asset, litres, count in issue_asset_rows],
+        "issueByShift": [{"shift": shift or "Unassigned", "litres": _fmt_decimal(litres)}
+                         for shift, litres in issue_shift_rows],
+        "daily": [{"date": day, **values} for day, values in sorted(daily.items())],
+        "stockBalance": None,
+        "stockNote": "Net movement is receipts less issues; closing stock is not available without approved opening balance and adjustments.",
+    }
+
+
 @router.get("/{site_id}/dashboard/operations")
 def operations_dashboard(
     site_id: str,

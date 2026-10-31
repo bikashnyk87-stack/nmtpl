@@ -1608,3 +1608,25 @@ body.field-mode{
 @media(max-width:800px){
   .kocp-hmr-head{align-items:flex-start;flex-direction:column}
 }
+
+/* Compact HSD receipts/issues, fuel KPIs and read-only dashboard summary */
+.hsd-tabs{display:flex;gap:7px;flex-wrap:wrap;margin:8px 0 12px;border-bottom:1px solid #d1dfe2;padding-bottom:9px}
+.hsd-mode-tab{border:1px solid #b8cbce;border-radius:7px;padding:9px 14px;background:#f8fbfc;color:#24505b;font-size:12px;font-weight:700;cursor:pointer}
+.hsd-mode-tab.active,.hsd-mode-tab[aria-selected="true"]{background:#116d65;color:#fff;border-color:#116d65}
+.hsd-mode-tab:focus-visible{outline:2px solid #116d65;outline-offset:2px}
+.hsd-row-kind{font-size:11px;color:#365b60}
+.hsd-kpi-grid{margin:10px 0 14px;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.ops-fuel-dashboard{margin:12px 0 18px;padding:16px;background:#fff;border-radius:11px;border:1px solid #cbdcde;box-shadow:0 2px 12px #13383a0a}
+.ops-fuel-dashboard .ops-panel-head{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.ops-fuel-dashboard .ops-panel-head button{padding:7px 12px;cursor:pointer}
+.ops-fuel-detail{display:grid;grid-template-columns:1fr 1fr;gap:15px;margin-top:12px}
+.ops-fuel-detail>div{background:#f8fbfb;border:1px solid #e0e9ea;border-radius:8px;padding:11px}
+.ops-fuel-detail>div>b{font-size:13px;display:block;margin-bottom:9px}
+.ops-fuel-assets{display:grid;gap:6px}
+.ops-fuel-assets>div{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:6px 8px;border-bottom:1px solid #e4edef}
+.ops-fuel-assets>div span{flex:1;min-width:95px;font-size:11px}
+.ops-fuel-assets>div b{font-size:12px;white-space:nowrap}
+.ops-fuel-assets>div small{font-size:10px;color:#75858a}
+@media(max-width:800px){.ops-fuel-detail{grid-template-columns:1fr}.hsd-kpi-grid{grid-template-columns:repeat(2,minmax(130px,1fr))}}
+
+.row-count-badge{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;border:1px solid #b9d4d0;border-radius:20px;background:#eff9f7;color:#13665d;font-size:11px;font-weight:800;padding:6px 11px;min-height:29px}
