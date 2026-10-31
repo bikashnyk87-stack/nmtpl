@@ -179,8 +179,30 @@ def find_wb_sheet(workbook, db: Session):
                 ". Add the new header in Masters > WB Header Mapping."
             )
         return ws, row_no, columns, diag
+    # Retain concise actionable diagnostics for nonstandard Gmail templates.
+    # Never guess columns or ingest what may be a summary rather than SAP trips.
+    samples = []
+    for ws in workbook.worksheets[:5]:
+        candidate = None
+        for row_number, row in enumerate(
+            ws.iter_rows(min_row=1, max_row=min(ws.max_row, 25), values_only=True), 1
+        ):
+            labels = [str(value).strip()[:35] for value in row
+                      if isinstance(value, str) and str(value).strip()]
+            if len(labels) >= 3 and (
+                candidate is None or len(labels) > len(candidate[1])
+            ):
+                candidate = (row_number, labels[:8])
+        name = str(ws.title).replace("\\n", " ")[:45]
+        if candidate:
+            samples.append(f"{name}: row {candidate[0]} [{', '.join(candidate[1])}]")
+        else:
+            samples.append(f"{name}: no recognizable text header in first 25 rows")
     raise ValueError(
-        "WB transaction sheet/header row not found. Configure its header aliases in Masters > WB Header Mapping."
+        "WB transaction sheet/header row not found. Workbook tabs and candidate "
+        "headers: " + " | ".join(samples)[:850] +
+        ". Check the original Excel layout and configure verified column aliases "
+        "in Masters > WB Header Mapping. No WB rows were imported."
     )
 
 
