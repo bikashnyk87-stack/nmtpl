@@ -946,7 +946,7 @@ async function renderSimpleHsd(){
   if(siteId==='KOCP'&&activeHsdEntryType==='RECEIPT'){
     // A fuel delivery is one receipt, not a ten-row vehicle-style batch.
     // Previous old-style receipt drafts remain recoverable in a separate tab.
-    return simplePageHead(${siteId} Fuel / HSD,'Quick diesel receipt entry; the live balance updates after each successful save.')+
+    return simplePageHead(`${siteId} Fuel / HSD`,'Quick diesel receipt entry; the live balance updates after each successful save.')+
       `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
       hsdBalanceStrip(fuel)+
       `<section class="hsd-receipt-card">
@@ -963,7 +963,7 @@ async function renderSimpleHsd(){
         </div>
         <div id="rcSaveStatus" class="hsd-entry-feedback" aria-live="polite"></div>
       </section>`+
-      panel('Recent Fuel Receipts',recentTable(['Date','Shift','Type','Supplier','Litres','Reference','Status'],rows.slice(0,15)),${rows.length} recent records`);
+      panel('Recent Fuel Receipts',recentTable(['Date','Shift','Type','Supplier','Litres','Reference','Status'],rows.slice(0,15)),`${rows.length} recent records`);
   }
   return simplePageHead(`${siteId} Fuel / HSD`,'Separate diesel issue and receipt registers; batch entry with saved drafts.')+
   `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
