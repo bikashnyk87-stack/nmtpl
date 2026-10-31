@@ -1628,3 +1628,5 @@ body.field-mode{
 .ops-fuel-assets>div b{font-size:12px;white-space:nowrap}
 .ops-fuel-assets>div small{font-size:10px;color:#75858a}
 @media(max-width:800px){.ops-fuel-detail{grid-template-columns:1fr}.hsd-kpi-grid{grid-template-columns:repeat(2,minmax(130px,1fr))}}
+
+.row-count-badge{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;border:1px solid #b9d4d0;border-radius:20px;background:#eff9f7;color:#13665d;font-size:11px;font-weight:800;padding:6px 11px;min-height:29px}
