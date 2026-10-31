@@ -61,7 +61,7 @@ function restoreDraft(containerId,key){
 }
 function clearDraft(containerId,key){localStorage.removeItem(key);const root=$(containerId),x=root?.querySelector('.draft-state');if(x){x.textContent='Saved';x.classList.add('ok')}}
 function lookupMarkup(hiddenId,kind,placeholder,groups=''){
-  return `<div class="lookup" data-kind="${kind}" data-hidden="${hiddenId}" data-groups="${groups}"><input id="${hiddenId}Text" type="text" autocomplete="off" placeholder="${esc(placeholder)}"><input id="${hiddenId}" type="hidden"><div class="lookup-menu"></div></div>`
+  return `<div class="lookup" data-kind="${kind}" data-hidden="${hiddenId}" data-groups="${groups}"><input id="${hiddenId}Text" type="text" autocomplete="off" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-autocomplete="list" placeholder="${esc(placeholder)}"><input id="${hiddenId}" type="hidden"><div class="lookup-menu" role="listbox"></div></div>`
 }
 function itemAllowed(w,item){
   if(siteId==='KOCP'&&w.dataset.kind==='MATERIAL'&&['TRIP','OB'].includes(state.module)){
@@ -78,27 +78,132 @@ function itemAllowed(w,item){
   const hay=`${item.group||''} ${item.type||''}`.toUpperCase();
   return g.some(x=>hay.includes(x));
 }
-function bindLookups(root=document){root.querySelectorAll('.lookup:not([data-bound])').forEach(w=>{w.dataset.bound='1';const input=w.querySelector('input[type=text]'),hidden=w.querySelector('input[type=hidden]'),menu=w.querySelector('.lookup-menu');let timer=null,items=[],active=-1;
-  async function search(){const q=input.value.trim();menu.innerHTML='<div class="lookup-empty">Searching…</div>';w.classList.add('open');try{
-    const groups=String(w.dataset.groups||'').toUpperCase();
-    const isKocpTrip=siteId==='KOCP'&&['TRIP','OB'].includes(state.module);
-    const activity=isKocpTrip&&w.dataset.kind==='ASSET'?(state.module==='OB'?'OB':'COAL'):'';
-    const role=activity?(/TRIPPER|TIPPER|DUMPER|TRANSPORT|VEHICLE/.test(groups)?'TRANSPORT':'LOADING'):'';
-    // HSD must offer the full KOCP asset master, not the first 40 IDs.
-    // Coal/OB production queries remain isolated by activity + equipment role.
-    const kocpAsset=siteId==='KOCP'&&w.dataset.kind==='ASSET';
-    const params=new URLSearchParams({kind:w.dataset.kind,q,limit:kocpAsset?'200':'40'});
-    if(activity){params.set('activity',activity);params.set('role',role)}
-    let data=await api(`/api/site-ops/${siteId}/lookups?${params.toString()}`);
-    data=(data||[]).filter(x=>itemAllowed(w,x));items=data;active=-1;
-    const label=kocpAsset?(activity?(activity==='COAL'?'Coal':'OB')+' '+(role==='TRANSPORT'?'tippers':'loaders / excavators'):'KOCP equipment for HSD / other use'):'';
-    const summary=kocpAsset?`<div class="lookup-summary">${data.length} matching ${esc(label)} · Scroll or search Door No / registration</div>`:'';
-    menu.innerHTML=summary+(data.length?data.map((x,i)=>`<div class="lookup-item" data-i="${i}"><b>${esc(x.label)}</b><small>${esc([kocpAsset?x.group:'',x.sub||x.id].filter(Boolean).join(' · '))}</small></div>`).join(''):'<div class="lookup-empty">No matching active master record</div>');
-    menu.querySelectorAll('.lookup-item').forEach(el=>el.onclick=()=>choose(items[+el.dataset.i]))
-  }catch(e){menu.innerHTML=`<div class="lookup-empty">${esc(e.message)}</div>`}}
-  function choose(x){hidden.value=x.id;input.value=x.label;input.dataset.selected=x.id;input.dataset.vehicleNo=x.vehicleNo||'';input.dataset.doorNo=x.doorNo||'';w.classList.remove('open');input.dispatchEvent(new Event('change',{bubbles:true}))}
-  input.addEventListener('focus',search);input.addEventListener('input',()=>{hidden.value='';input.dataset.selected='';clearTimeout(timer);timer=setTimeout(search,160)});input.addEventListener('keydown',e=>{if(!w.classList.contains('open'))return;if(e.key==='ArrowDown'){e.preventDefault();active=Math.min(active+1,items.length-1)}else if(e.key==='ArrowUp'){e.preventDefault();active=Math.max(active-1,0)}else if(e.key==='Enter'&&active>=0){e.preventDefault();choose(items[active])}else if(e.key==='Escape'){w.classList.remove('open')}else return;menu.querySelectorAll('.lookup-item').forEach((el,i)=>el.classList.toggle('active',i===active))})
-})}
+
+function resolveLookupChoice(items, typed, active=-1){
+  // Never silently choose the first of multiple equipment matches.
+  if(active>=0&&items[active])return items[active];
+  const normalized=x=>String(x||'').trim().toUpperCase().replace(/[^A-Z0-9]/g,'');
+  const key=normalized(typed);
+  if(!key)return null;
+  const exact=items.filter(x=>[x.id,x.vehicleNo,x.doorNo,x.rentalRef,x.label].some(v=>normalized(v)===key));
+  if(exact.length===1)return exact[0];
+  return key.length>=3&&items.length===1?items[0]:null;
+}
+function focusAfterLookup(input){
+  const eligible=[...document.querySelectorAll('input:not([type=hidden]):not([disabled]),select:not([disabled]),textarea:not([disabled]),button:not([disabled])')]
+    .filter(el=>el.getClientRects().length>0&&el.tabIndex>=0);
+  const next=eligible[eligible.indexOf(input)+1];
+  if(next)next.focus();
+}
+function bindLookups(root=document){
+  root.querySelectorAll('.lookup:not([data-bound])').forEach(w=>{
+    w.dataset.bound='1';
+    const input=w.querySelector('input[type=text]'),hidden=w.querySelector('input[type=hidden]'),menu=w.querySelector('.lookup-menu');
+    let timer=null,items=[],active=-1,lastQuery=null,searchSerial=0,loading=false;
+    const markInvalid=()=>{w.classList.add('lookup-unresolved');input.setAttribute('aria-invalid','true')};
+    const markValid=()=>{w.classList.remove('lookup-unresolved');input.removeAttribute('aria-invalid')};
+    const setOpen=open=>{w.classList.toggle('open',!!open);input.setAttribute('aria-expanded',open?'true':'false')};
+    async function search(){
+      clearTimeout(timer);
+      const q=input.value.trim(),serial=++searchSerial;
+      loading=true;
+      menu.innerHTML='<div class="lookup-empty">Searching…</div>';
+      setOpen(true);
+      try{
+        const groups=String(w.dataset.groups||'').toUpperCase();
+        const isKocpTrip=siteId==='KOCP'&&['TRIP','OB'].includes(state.module);
+        const activity=isKocpTrip&&w.dataset.kind==='ASSET'?(state.module==='OB'?'OB':'COAL'):'';
+        const role=activity?(/TRIPPER|TIPPER|DUMPER|TRANSPORT|VEHICLE/.test(groups)?'TRANSPORT':'LOADING'):'';
+        const kocpAsset=siteId==='KOCP'&&w.dataset.kind==='ASSET';
+        const params=new URLSearchParams({kind:w.dataset.kind,q,limit:kocpAsset?'200':'40'});
+        if(activity){params.set('activity',activity);params.set('role',role)}
+        let data=await api(`/api/site-ops/${siteId}/lookups?${params.toString()}`);
+        if(serial!==searchSerial||q!==input.value.trim())return items;
+        data=(data||[]).filter(x=>itemAllowed(w,x));
+        items=data;active=-1;lastQuery=q;loading=false;
+        const label=kocpAsset?(activity?(activity==='COAL'?'Coal':'OB')+' '+(role==='TRANSPORT'?'tippers':'loaders / excavators'):'KOCP equipment for HSD / other use'):'';
+        const summary=kocpAsset?`<div class="lookup-summary">${data.length} matching ${esc(label)} · Search Door No / registration · Tab accepts unique match</div>`:'';
+        menu.innerHTML=summary+(data.length?data.map((x,i)=>`<div class="lookup-item" data-i="${i}" role="option" aria-selected="false"><b>${esc(x.label)}</b><small>${esc([kocpAsset?x.group:'',x.sub||x.id].filter(Boolean).join(' · '))}</small></div>`).join(''):'<div class="lookup-empty">No matching active master record</div>');
+        menu.querySelectorAll('.lookup-item').forEach(el=>{
+          el.addEventListener('mousedown',ev=>ev.preventDefault());
+          el.addEventListener('click',()=>choose(items[+el.dataset.i]));
+        });
+        return items;
+      }catch(e){
+        if(serial===searchSerial){items=[];lastQuery=q;loading=false;menu.innerHTML=`<div class="lookup-empty">${esc(e.message)}</div>`;}
+        return [];
+      }
+    }
+    function choose(x){
+      if(!x)return;
+      hidden.value=x.id;
+      // Replace a partial search such as "6249" with the full equipment identity.
+      input.value=x.label;
+      input.dataset.selected=x.id;
+      input.dataset.vehicleNo=x.vehicleNo||'';
+      input.dataset.doorNo=x.doorNo||'';
+      markValid();
+      setOpen(false);
+      input.dispatchEvent(new Event('change',{bubbles:true}));
+    }
+    function selectUnique(){
+      const match=resolveLookupChoice(items,input.value,active);
+      if(match){choose(match);return true}
+      return false;
+    }
+    function needChoice(){
+      setOpen(true);
+      markInvalid();
+      if(items.length>1){
+        menu.querySelector('.lookup-help')?.remove();
+        menu.insertAdjacentHTML('afterbegin','<div class="lookup-help">Multiple vehicles match. Use ↑ ↓ then Enter, or click the correct Door No / registration.</div>');
+      }
+    }
+    input.addEventListener('focus',()=>{
+      if(hidden.value){input.select();return}
+      search();
+    });
+    input.addEventListener('input',()=>{
+      hidden.value='';input.dataset.selected='';markValid();
+      searchSerial++;lastQuery=null;items=[];active=-1;loading=false;
+      clearTimeout(timer);timer=setTimeout(search,160);
+    });
+    input.addEventListener('blur',()=>{if(input.value.trim()&&!hidden.value)markInvalid()});
+    input.addEventListener('keydown',async e=>{
+      if(e.key==='Escape'){setOpen(false);return}
+      if(e.key==='Tab'&&!e.shiftKey){
+        if(hidden.value||!input.value.trim())return;
+        clearTimeout(timer);
+        if(lastQuery!==input.value.trim()||loading){
+          // The user can press Tab immediately after typing; await the fresh
+          // master lookup rather than leaving only an unvalidated partial text.
+          e.preventDefault();
+          await search();
+          if(selectUnique())focusAfterLookup(input);else needChoice();
+          return;
+        }
+        if(!selectUnique()){e.preventDefault();needChoice()}
+        return;
+      }
+      if(e.key==='ArrowDown'||e.key==='ArrowUp'){
+        if(!w.classList.contains('open'))await search();
+        if(!items.length)return;
+        e.preventDefault();
+        active=e.key==='ArrowDown'?Math.min(active+1,items.length-1):Math.max(active-1,0);
+      }else if(e.key==='Enter'){
+        if(!w.classList.contains('open'))return;
+        e.preventDefault();
+        if(selectUnique())focusAfterLookup(input);else needChoice();
+        return;
+      }else return;
+      menu.querySelectorAll('.lookup-item').forEach((el,i)=>{
+        el.classList.toggle('active',i===active);
+        el.setAttribute('aria-selected',i===active?'true':'false');
+        if(i===active)el.scrollIntoView({block:'nearest'});
+      });
+    });
+  });
+}
 document.addEventListener('click',e=>{document.querySelectorAll('.lookup.open').forEach(w=>{if(!w.contains(e.target))w.classList.remove('open')})});
 function simplePageHead(title,desc){return `<div class="software-page-head"><div><h1>${esc(title)}</h1><p>${esc(desc)}</p></div><div class="software-page-meta"><b>${siteId}</b><span>${esc(state.ctx.operatingDate)}</span><span>Shift ${esc(simpleShift())}</span></div></div>`}
 function setSimpleNav(){
@@ -720,7 +825,7 @@ async function saveSimpleHsd(){
       try{
         if(type==='ISSUE'&&!asset)throw new Error('Select equipment');
         if(type==='RECEIPT'&&!supplier)throw new Error('Enter supplier');
-        if(!+litres)throw new Error('Enter litres');
+        if(!Number.isFinite(Number(litres))||Number(litres)<=0)throw new Error('Enter litres greater than zero');
         const body={operatingDate:$('shDate').value,shift:$(`shShift${i}`).value,transactionType:type,assetType:type==='ISSUE'?'EQUIPMENT':null,assetId:type==='ISSUE'?asset:null,litres,supplier:type==='RECEIPT'?supplier:null,referenceNo:ref||null,sourceType:'PORTAL'};
         st.textContent='Saving…';st.className='simple-status muted';
         await api(`/api/sites/${siteId}/hsd`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
