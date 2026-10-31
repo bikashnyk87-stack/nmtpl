@@ -33,11 +33,19 @@ function getReq(module,payload={},slot='single'){const key=reqKey(module,slot),f
 function clearReq(module,slot=null){if(slot!==null){localStorage.removeItem(reqKey(module,slot));return}const prefix=`NMTPL_SIMPLE_REQ:${siteId}:${simpleUser()}:${simpleDate()}:${module}:`;const keys=[];for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i)||'';if(k.startsWith(prefix))keys.push(k)}keys.forEach(k=>localStorage.removeItem(k))}
 function saveDraft(containerId,key){const root=$(containerId);if(!root)return;const o={};root.querySelectorAll('input[id],select[id],textarea[id]').forEach(el=>{if(el.type!=='file')o[el.id]=el.type==='checkbox'?el.checked:el.value});localStorage.setItem(key,JSON.stringify(o));const x=root.querySelector('.draft-state');if(x){x.textContent='Draft saved ✓';x.classList.add('ok')}}
 let activeHsdEntryType='ISSUE';
-function hsdDraftKey(){return activeHsdEntryType==='LEGACY'?draftKey('HSD'):draftKey('HSD_'+activeHsdEntryType+'_V2')}
+function hsdDraftKey(){return activeHsdEntryType==='LEGACY'?draftKey('HSD'):activeHsdEntryType==='RECOVERY'?draftKey('HSD_RECEIPT_V2'):draftKey('HSD_'+activeHsdEntryType+'_V2')}
+function hsdReceiptDraftKey(){return draftKey('HSD_RECEIPT_SINGLE_V3')}
+function hasPreviousReceiptDraft(){
+  try{
+    const item=JSON.parse(localStorage.getItem(draftKey('HSD_RECEIPT_V2'))||'{}');
+    return Object.entries(item).some(([k,v])=>/^sh(?:Litres|Supplier|Ref)\d+$/.test(k)&&String(v||'').trim());
+  }catch{return false}
+}
 function hsdTypeLabel(){return activeHsdEntryType==='RECEIPT'?'Receipts':activeHsdEntryType==='LEGACY'?'Previous Draft':'Issues'}
 function setSimpleHsdMode(mode){
-  if(!['ISSUE','RECEIPT','OPENING','LEGACY'].includes(mode))return;
+  if(!['ISSUE','RECEIPT','OPENING','LEGACY','RECOVERY'].includes(mode))return;
   if($('simpleHsdForm'))saveDraft('simpleHsdForm',hsdDraftKey());
+  if($('simpleHsdReceiptForm'))saveDraft('simpleHsdReceiptForm',hsdReceiptDraftKey());
   activeHsdEntryType=mode;
   render();
 }
@@ -831,7 +839,7 @@ function clearSimpleWbDraft(){localStorage.removeItem(draftKey('WB'));render()}
 
 function hsdGridRows(count=10,start=0){
   return Array.from({length:count},(_,offset)=>{
-    const i=start+offset, receipt=activeHsdEntryType==='RECEIPT', legacy=activeHsdEntryType==='LEGACY';
+    const i=start+offset, receipt=['RECEIPT','RECOVERY'].includes(activeHsdEntryType), legacy=['LEGACY','RECOVERY'].includes(activeHsdEntryType);
     const type=receipt?'RECEIPT':'ISSUE';
     return `<tr class="simple-hsd-row" data-i="${i}">
       <td>${i+1}</td>
@@ -843,6 +851,47 @@ function hsdGridRows(count=10,start=0){
       <td><span id="shStatus${i}" class="simple-status muted">Ready</span></td>
     </tr>`;
   }).join('')
+}
+function hsdBalanceStrip(fuel){
+  const balance=fuel?.stockBalance;
+  const verified=balance!==null&&balance!==undefined&&Number.isFinite(Number(balance));
+  const asOf=fuel?.toDate||state.ctx.operatingDate;
+  return `<section class="hsd-balance-strip ${verified?'hsd-balance-ready':'hsd-balance-unverified'}" aria-label="Live available diesel stock">
+    <div class="hsd-balance-main"><span>Available Fuel · as of ${esc(asOf)}</span>
+      <strong id="hsdBalanceLitres">${verified?dashNum(balance,2)+' L':'Not verified'}</strong>
+      <small id="hsdBalanceNote">${esc(fuel?.stockNote||'Opening balance not set. Enter verified opening stock first.')}</small></div>
+    <div class="hsd-balance-metric"><span>Today received</span><b id="hsdTodayReceived">${fuel?dashNum(fuel.todayTotals?.receiptL||0,2)+' L':'—'}</b></div>
+    <div class="hsd-balance-metric"><span>Today issued</span><b id="hsdTodayIssued">${fuel?dashNum(fuel.todayTotals?.issueL||0,2)+' L':'—'}</b></div>
+    <button type="button" class="hsd-balance-refresh" onclick="refreshHsdBalance()" aria-label="Refresh fuel balance">↻ Refresh</button>
+  </section>`;
+}
+async function refreshHsdBalance(){
+  const strip=document.querySelector('.hsd-balance-strip');
+  if(!strip)return null;
+  const note=$('hsdBalanceNote');
+  try{
+    // Always read posted inventory from Neon after a successful save;
+    // never calculate "remaining" stock by blindly subtracting in browser.
+    const day=state.ctx.operatingDate;
+    const b=await api(`/api/site-ops/${siteId}/fuel/balance?as_of_date=${encodeURIComponent(day)}`);
+    const ready=b.stockBalance!==null&&b.stockBalance!==undefined&&Number.isFinite(Number(b.stockBalance));
+    const value=$('hsdBalanceLitres'),received=$('hsdTodayReceived'),issued=$('hsdTodayIssued');
+    if(value)value.textContent=ready?dashNum(b.stockBalance,2)+' L':'Not verified';
+    if(note)note.textContent=b.stockNote||'Stock reconciliation required.';
+    if(received)received.textContent=dashNum(b.todayReceiptL||0,2)+' L';
+    if(issued)issued.textContent=dashNum(b.todayIssueL||0,2)+' L';
+    strip.classList.toggle('hsd-balance-ready',ready);
+    strip.classList.toggle('hsd-balance-unverified',!ready);
+    return b;
+  }catch(e){
+    // Keep successful transaction as saved even if the subsequent KPI refresh
+    // fails; never show a stale figure as a verified live stock balance.
+    if($('hsdBalanceLitres'))$('hsdBalanceLitres').textContent='Update unavailable';
+    if(note)note.textContent='Could not confirm latest balance. Use Refresh to retry.';
+    strip.classList.remove('hsd-balance-ready');
+    strip.classList.add('hsd-balance-unverified');
+    return null;
+  }
 }
 function fuelKpiCards(fuel){
   const t=fuel?.todayTotals||{},p=fuel?.periodTotals||{};
