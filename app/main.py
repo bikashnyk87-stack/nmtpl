@@ -3,6 +3,7 @@ import os
 import json
 import base64
 import gzip
+import gc
 from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 from datetime import date
@@ -222,6 +223,9 @@ async def lifespan(app):
                 """),{"d":diag_date}).mappings().all()],
             }
             print("TIOM_TEMP_DIAG_RAW="+json.dumps(raw_diag,sort_keys=True,default=str),flush=True)
+            # Prevent a large diagnostic dashboard from staying referenced by
+            # this long-lived FastAPI lifespan generator after startup.
+            del dash, prod_diag, hsd_diag, raw_diag
         raw_export_date=os.getenv("TIOM_TEMP_RAW_EXPORT_DATE", "").strip()
         if raw_export_date:
             def _emit_raw(name, rows):
@@ -451,6 +455,16 @@ async def lifespan(app):
             if not all(v is True or (k=="leadRulesVisible" and int(v)>=276) for k,v in checks.items()):
                 raise RuntimeError("TIOM temp self-test failed: "+json.dumps(checks,sort_keys=True))
             print("TIOM_TEMP_SELFTEST_OK="+json.dumps(checks,sort_keys=True),flush=True)
+            # Startup self-tests can hold sizeable multi-day WB/dashboard
+            # responses. Release them before the worker enters its long-lived
+            # yield, especially on Render's 512 MiB free instance.
+            del mis_test, dash_test, checks, kpis, trip_machines
+            del activity_ids, machine_ids, production_source_ids
+            del production_destination_ids, dashboard_source_ids
+            del dashboard_destination_ids
+
+    gc.collect()
+
 
     attendance_task = asyncio.create_task(automation_loop(), name="attendance-auto-close")
     cloud_automation_task = asyncio.create_task(automation.automation_loop(), name="cloud-integrations")
