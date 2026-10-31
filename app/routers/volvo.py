@@ -30,7 +30,8 @@ def _ensure_location_zone_table(db):
 
 
 def _location_zones(db):
-    _ensure_location_zone_table(db)
+    # Base.metadata.create_all runs at application startup. Live GPS
+    # dashboard reads must not execute CREATE TABLE/checkfirst per refresh.
     zones=[]
     for zone, loc in db.execute(
         select(VolvoLocationZone, Location)
