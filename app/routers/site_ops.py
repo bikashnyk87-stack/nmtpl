@@ -53,6 +53,9 @@ from app.site_models import (
     TiomMisTripRow,
     TiomMisReconciliation,
 )
+from app.services.kocp_equipment import (
+    kocp_asset_allowed, kocp_role_allowed, kocp_asset_display,
+)
 from app.services.site_context import resolve_site_context
 from app.maintenance_models import MaintenanceBreakdown
 from app.site_schemas import (
@@ -174,11 +177,20 @@ def _contains_text(*values, q: str) -> bool:
 
 
 @router.get("/{site_id}/lookups")
-def operational_lookup(site_id: str, request: Request, kind: str, q: str = "", limit: int = 30, db: Session = Depends(get_db)):
+def operational_lookup(site_id: str, request: Request, kind: str, q: str = "", limit: int = 30,
+                       activity: str = "", role: str = "", db: Session = Depends(get_db)):
     user = get_user(db, request)
     site_id = require_site(db, user, site_id)
     kind = str(kind or '').strip().upper()
-    limit = _lookup_limit(limit)
+    # KOCP has 131 assigned assets. Filter by activity/role BEFORE limiting,
+    # rather than returning 40 rows and hiding matches in JavaScript.
+    limit = max(1, min(int(limit or 200), 250)) if site_id == "KOCP" and kind == "ASSET" else _lookup_limit(limit)
+    activity = str(activity or "").strip().upper()
+    role = str(role or "").strip().upper()
+    if site_id == "KOCP" and kind == "ASSET" and (
+        activity not in {"COAL", "OB"} or role not in {"TRANSPORT", "LOADING"}
+    ):
+        raise HTTPException(422, "KOCP equipment lookup requires Coal/OB activity and transport/loading role.")
     q = str(q or '').strip()
     out = []
 
@@ -202,12 +214,38 @@ def operational_lookup(site_id: str, request: Request, kind: str, q: str = "", l
             rows = list(db.scalars(select(Equipment).where(Equipment.active.is_(True)).order_by(Equipment.machine_id).limit(2000)))
             pairs = [(x, None) for x in rows]
         else:
-            pairs = db.execute(select(Equipment, EquipmentSiteAssignment).join(EquipmentSiteAssignment, EquipmentSiteAssignment.machine_id == Equipment.machine_id).where(EquipmentSiteAssignment.site_id == site_id, Equipment.active.is_(True), EquipmentSiteAssignment.active.is_(True)).order_by(Equipment.machine_id).limit(2000)).all()
+            pairs = db.execute(select(Equipment, EquipmentSiteAssignment).join(
+                EquipmentSiteAssignment, EquipmentSiteAssignment.machine_id == Equipment.machine_id
+            ).where(EquipmentSiteAssignment.site_id == site_id,
+                    Equipment.active.is_(True), EquipmentSiteAssignment.active.is_(True))
+                .order_by(Equipment.machine_id).limit(2000)).all()
+        seen = set()
         for x, a in pairs:
-            if _contains_text(x.machine_id, x.vehicle_no, x.door_no, x.type, x.group, x.make_model, q=q):
+            if x.machine_id in seen:
+                continue
+            seen.add(x.machine_id)
+            if site_id == "KOCP":
+                if not (kocp_asset_allowed(x.group, activity)
+                        and kocp_role_allowed(x.type, role)):
+                    continue
+                label, sub, rental = kocp_asset_display(
+                    x.machine_id, x.door_no, x.vehicle_no,
+                    x.ownership, a.party if a is not None else None, x.type)
+                if not _contains_text(x.machine_id, x.vehicle_no, x.door_no,
+                                      x.type, x.group, x.make_model, rental,
+                                      x.ownership, a.party if a is not None else None, q=q):
+                    continue
+                out.append({"id": x.machine_id, "label": label, "sub": sub,
+                            "type": x.type, "group": x.group,
+                            "vehicleNo": x.vehicle_no, "doorNo": x.door_no,
+                            "rentalRef": rental, "ownership": x.ownership})
+            else:
+                if not _contains_text(x.machine_id, x.vehicle_no, x.door_no, x.type, x.group, x.make_model, q=q):
+                    continue
                 primary = x.vehicle_no or x.door_no or x.machine_id
-                out.append({"id": x.machine_id, "label": primary, "sub": " · ".join(v for v in [x.machine_id, x.type, x.group] if v), "type": x.type, "group": x.group, "vehicleNo": x.vehicle_no, "doorNo": x.door_no})
-                if len(out) >= limit: break
+                out.append({"id": x.machine_id, "label": primary, "sub": " · ".join(v for v in [x.machine_id, x.type, x.group] if v),
+                            "type": x.type, "group": x.group, "vehicleNo": x.vehicle_no, "doorNo": x.door_no})
+            if len(out) >= limit: break
         return out
 
     if kind == "LOCATION":
@@ -378,6 +416,18 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
         )
         kind = "OB" if is_ob else "TRIP"
         movement_kind = "OB" if is_ob else "COAL"
+        # Enforce the same site master rules at save time, not only in the UI.
+        # Otherwise a Coal trip can still be posted using an OB excavator.
+        for selected_id, expected_role in ((vehicle, "TRANSPORT"), (loader, "LOADING")):
+            selected_machine = db.get(Equipment, selected_id) if selected_id else None
+            if selected_machine and not (
+                kocp_asset_allowed(selected_machine.group, movement_kind)
+                and kocp_role_allowed(selected_machine.type, expected_role)
+            ):
+                raise HTTPException(
+                    422, f"Equipment ID {selected_id} is not a {movement_kind} "
+                         f"{'vehicle' if expected_role == 'TRANSPORT' else 'loader/excavator'}."
+                )
         selected_route = db.get(SiteMovementRoute, route_id) if route_id else None
         if selected_route:
             if (selected_route.site_id != site_id or not selected_route.active
