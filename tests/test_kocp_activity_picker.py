@@ -84,4 +84,5 @@ def test_ui_keeps_unsaved_rows_and_expands_hmr_for_used_machines():
     assert "parent.insertAdjacentHTML('beforeend',tripGridRows('TRIP',amount,start))" in ui
     assert "parent.insertAdjacentHTML('beforeend',kocpHmrRows(1,i))" in ui
     assert "params.set('activity',activity)" in ui
-    assert "limit:activity?'200':'40'" in ui
+    assert "limit:kocpAsset?'200':'40'" in ui
+    assert "if(activity){params.set('activity',activity);params.set('role',role)}" in ui
