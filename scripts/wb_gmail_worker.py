@@ -974,6 +974,13 @@ def ingest_xlsx(content, filename, cfg, message_id):
     """Time-first WB Gmail ingestion restored from the working PC server."""
     from collections import Counter
 
+    # Validate BEFORE parsing into openpyxl: a large/compressed XLSX can exhaust
+    # Render's 512 MiB RAM before the single-shift importer checks its size.
+    max_bytes = min(15 * 1024 * 1024,
+                    int(float(cfg.get("max_file_mb", 15)) * 1024 * 1024))
+    if len(content) > max_bytes:
+        raise ValueError("WB Excel file exceeds configured import limit; no rows imported.")
+
     try:
         wb = load_workbook(BytesIO(content), data_only=True, read_only=True)
     except Exception:
@@ -982,6 +989,11 @@ def ingest_xlsx(content, filename, cfg, message_id):
     with SessionLocal() as db:
         ensure_wb_header_mapping(db)
         ws, header_row, idx, header_diag = find_wb_sheet(wb, db)
+        if ws.max_row > 25000 or ws.max_column > 150:
+            raise ValueError(
+                "WB Excel sheet exceeds the safe 25,000-row / 150-column "
+                "processing limit; review the original file before importing."
+            )
         definitions = {
             str(d.shift).strip().upper(): d
             for d in db.scalars(select(ShiftMaster).where(ShiftMaster.active))
