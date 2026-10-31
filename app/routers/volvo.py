@@ -16,6 +16,7 @@ from app.auth import get_user, require, csrf
 from app.models import Equipment, Location, Product, LoadTrip, LoadWbMatch, WbMovement
 from app.volvo_models import VolvoVehicle, VolvoMapping, VolvoAudit, VolvoSync, VolvoReport, VolvoLocationZone
 from app.services.volvo_store import latest_reports
+from app.services.volvo_control import collection_enabled, set_collection_enabled
 from app.services.volvo_client import timestamp
 from app.services.tiom_erp import authoritative_wb, vehicle_matches
 
@@ -602,6 +603,30 @@ def _fleet_row(vehicle, mappings, reports, recent_statuses, now, operational_vin
         'telemetry_age_seconds': age_seconds,
         'gps': gps,
     }
+
+
+@router.get('/collection-status')
+def collection_status(request: Request, db=Depends(get_db)):
+    user = get_user(db, request)
+    require(user, module='DASHBOARD')
+    return {
+        'enabled': collection_enabled(db),
+        'canManage': bool(user.admin),
+        'scope': 'cloud-volvo-ingestion',
+    }
+
+
+class CollectionControlIn(BaseModel):
+    enabled: bool
+
+
+@router.post('/collection-control')
+def collection_control(body: CollectionControlIn, request: Request, db=Depends(get_db)):
+    user = get_user(db, request)
+    require(user, admin=True)
+    csrf(request)
+    enabled = set_collection_enabled(db, body.enabled, user.login_id)
+    return {'ok': True, 'enabled': enabled, 'scope': 'cloud-volvo-ingestion'}
 
 
 @router.get('/fleet')
