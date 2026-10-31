@@ -1181,7 +1181,12 @@ def fuel_summary(
     """
     user = get_user(db, request)
     site_id = require_site(db, user, site_id)
-    _require_any(db, user, site_id, "HSD", "DASHBOARD")
+    if not user.admin and not any(
+        has_permission(db, user, site_id, module, action)
+        for module in ("HSD", "DASHBOARD")
+        for action in ("VIEW", "CREATE", "EDIT", "APPROVE")
+    ):
+        raise HTTPException(403, f"HSD or Dashboard permission is required for {site_id}.")
     today = resolve_site_context(db, site_id).operating_date
     start = from_date or today.replace(day=1)
     end = to_date or today
