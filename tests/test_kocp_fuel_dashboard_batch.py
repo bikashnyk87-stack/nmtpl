@@ -64,7 +64,7 @@ console.log('Trip + HSD buttons append 10/20 without dropping previously entered
 def test_hsd_modes_drafts_globals_and_stock_label():
     js=JS.read_text("utf-8")
     html=(ROOT/"app/static/site.html").read_text("utf-8")
-    assert "Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,addSimpleHsdRows" in js
+    assert "Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,addSimpleHsdRows" in js
     assert "hsdDraftKey()" in js
     assert "draftKey('HSD_'+activeHsdEntryType+'_V2')" in js
     assert "Recover Previous Draft" in js
