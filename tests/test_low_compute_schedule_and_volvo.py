@@ -90,6 +90,17 @@ def test_volvo_collector_skips_unchanged_vehicles_and_duplicate_reports(monkeypa
     engine.dispose()
 
 
+def test_shift_close_schedule_respects_shift_end_and_grace():
+    from app.services.attendance_automation import TZ, next_attendance_check
+    times=[datetime(2026,10,31,h,m).time() for h,m in
+           [(5,32),(13,32),(18,32),(21,32)]]
+    make=lambda h,m:datetime(2026,10,31,h,m,tzinfo=TZ)
+    assert next_attendance_check(make(4,0),times)==make(5,32)
+    assert next_attendance_check(make(13,0),times)==make(13,32)
+    assert next_attendance_check(make(19,0),times)==make(21,32)
+    assert next_attendance_check(make(22,0),times)==make(5,32)+timedelta(days=1)
+
+
 def test_live_volvo_stop_button_and_backend_authorization_present():
     ui=(ROOT/"app/static/volvo.js").read_text("utf-8")
     api=(ROOT/"app/routers/volvo.py").read_text("utf-8")
