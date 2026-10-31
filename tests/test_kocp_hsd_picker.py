@@ -35,8 +35,8 @@ def test_hsd_loads_all_assets_not_the_first_forty():
 def test_asset_picker_assets_are_cache_busted():
     page=(ROOT/"app/static/site.html").read_text("utf-8")
     css=(ROOT/"app/static/simple_field_v1.css").read_text("utf-8")
-    assert "simple_field_v1.js?v=kocp-fuel-dashboard-r6" in page
-    assert "simple_field_v1.css?v=kocp-fuel-dashboard-r6" in page
+    assert "simple_field_v1.js?v=kocp-opening-colour-r7" in page
+    assert "simple_field_v1.css?v=kocp-opening-colour-r7" in page
     assert ".lookup-summary" in css
     assert "max-height:min(52vh,400px)" in css
 

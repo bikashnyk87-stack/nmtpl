@@ -64,15 +64,18 @@ console.log('Trip + HSD buttons append 10/20 without dropping previously entered
 def test_hsd_modes_drafts_globals_and_stock_label():
     js=JS.read_text("utf-8")
     html=(ROOT/"app/static/site.html").read_text("utf-8")
-    assert "Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,addSimpleHsdRows" in js
+    assert "Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,addSimpleHsdRows" in js
     assert "hsdDraftKey()" in js
     assert "draftKey('HSD_'+activeHsdEntryType+'_V2')" in js
     assert "Recover Previous Draft" in js
     assert "Fuel Issues" in js and "Fuel Receipts" in js
-    assert "stockBalance" not in js[js.index("function fuelKpiCards"):js.index("function fuelAssetBreakdown")]
+    cards=js[js.index("function fuelKpiCards"):js.index("function fuelAssetBreakdown")]
+    assert "fuel?.stockBalance!=null" in cards
+    assert "physical check required" in cards
+    assert "NOT closing stock" in cards
     assert "NOT closing stock" in js
     assert "sourceRecordUid:uid.value" in js
-    assert "simple_field_v1.js?v=kocp-fuel-dashboard-r6" in html
+    assert "simple_field_v1.js?v=kocp-opening-colour-r7" in html
     proc=subprocess.run(["node","--check",str(JS)],capture_output=True,text=True,timeout=20)
     assert proc.returncode==0,proc.stderr
 

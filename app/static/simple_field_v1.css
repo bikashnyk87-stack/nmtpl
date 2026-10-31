@@ -1630,3 +1630,101 @@ body.field-mode{
 @media(max-width:800px){.ops-fuel-detail{grid-template-columns:1fr}.hsd-kpi-grid{grid-template-columns:repeat(2,minmax(130px,1fr))}}
 
 .row-count-badge{display:inline-flex;align-items:center;justify-content:center;white-space:nowrap;border:1px solid #b9d4d0;border-radius:20px;background:#eff9f7;color:#13665d;font-size:11px;font-weight:800;padding:6px 11px;min-height:29px}
+
+/* KOCP main operations dashboard — colour-coded operational categories.
+   Scoped to this workspace; all KPI figures still come from the live API. */
+.ops-theme-kocp.ops-dashboard{
+  --ops-accent:#136eae;
+  --ops-accent2:#15a4b5;
+  --ops-dark:#142d52;
+  --ops-soft:#eff8ff;
+  --ops-border:#cee1f1;
+  --ops-head:#e9f3fb;
+}
+.ops-theme-kocp .ops-dashboard-top{
+  background:linear-gradient(110deg,#15325b 0%,#145b82 52%,#0b7d76 100%);
+  border:1px solid #237f95;
+  padding:14px 16px;
+  border-radius:12px;
+  box-shadow:0 7px 20px rgba(14,72,110,.17);
+}
+.ops-theme-kocp .ops-dashboard-top h1{font-size:20px;letter-spacing:.01em;color:#fff}
+.ops-theme-kocp .ops-dashboard-top p{font-size:10px;color:#e0f6ff}
+.ops-theme-kocp .ops-range button{background:#12a68a;border-color:#12a68a;color:#fff;font-size:11px}
+.ops-theme-kocp .ops-entry-strip{
+  border:1px solid #b7dfeb;
+  border-left:5px solid #17a1ad;
+  border-radius:10px;
+  background:linear-gradient(105deg,#e8f9f6,#eef6ff);
+  padding:10px 12px;
+}
+.ops-theme-kocp .ops-strip-head b{font-size:12px;color:#114867}
+.ops-theme-kocp .ops-strip-head span,
+.ops-theme-kocp .ops-strip-head small{font-size:10px;color:#4a6474}
+.ops-theme-kocp .ops-quick{gap:8px}
+.ops-theme-kocp .ops-quick button{min-height:48px;padding:7px 9px;border-radius:8px;border:1px solid #b7d8e1;background:#fff}
+.ops-theme-kocp .ops-quick button:hover{border-color:#22a7b9;box-shadow:0 5px 16px rgba(24,103,125,.13);transform:translateY(-1px)}
+.ops-theme-kocp .ops-quick button>span{background:#dff4fb;color:#106888;border-color:#b2dbe4}
+.ops-theme-kocp .ops-quick button b{font-size:10px;color:#164457}
+.ops-theme-kocp .ops-quick button small{font-size:9px}
+.ops-theme-kocp .ops-kpis{gap:9px;margin-bottom:13px}
+.ops-theme-kocp .ops-kpi{
+  min-height:80px;border-radius:10px;padding:10px 11px;
+  border:1px solid #c5e2ec;border-top:4px solid #1880b8;
+  background:linear-gradient(155deg,#e8f6ff,#fff 80%);
+  box-shadow:0 4px 12px rgba(26,87,118,.08);
+}
+.ops-theme-kocp .ops-kpi.primary{background:linear-gradient(150deg,#dceeff,#fafdff 83%);border-top-color:#277bd2}
+.ops-theme-kocp .ops-kpi.good{background:linear-gradient(150deg,#d9f7e9,#fafffc 83%);border-top-color:#15966b}
+.ops-theme-kocp .ops-kpi.warn{background:linear-gradient(150deg,#fff0cc,#fffdf7 83%);border-top-color:#ea9b21}
+.ops-theme-kocp .ops-kpi.bad{background:linear-gradient(150deg,#ffe2e6,#fffafb 83%);border-top-color:#d94f69}
+.ops-theme-kocp .ops-kpi:nth-child(5n+5):not(.bad):not(.warn):not(.good):not(.primary){background:linear-gradient(150deg,#eee8ff,#fefcff 85%);border-top-color:#8861db}
+.ops-theme-kocp .ops-kpi span{font-size:9px;color:#527084;letter-spacing:.035em}
+.ops-theme-kocp .ops-kpi b{font-size:18px;color:#183d56;white-space:normal}
+.ops-theme-kocp .ops-kpi small{font-size:9px;color:#557487}
+.ops-theme-kocp .ops-grid{gap:11px}
+.ops-theme-kocp .ops-panel{
+  border:1px solid #d3e2ef;border-radius:11px;
+  padding:11px 12px;background:linear-gradient(170deg,#fff,#f7fbff);
+  box-shadow:0 3px 12px rgba(30,87,128,.07);
+}
+.ops-theme-kocp .ops-panel-head{border-bottom:1px solid #d9e8f0;padding-bottom:8px;margin-bottom:8px}
+.ops-theme-kocp .ops-panel-head b{font-size:12px;color:#164969}
+.ops-theme-kocp .ops-panel-head span{font-size:9px;color:#5c7b8a}
+.ops-theme-kocp .ops-panel:nth-child(4n+2){border-top:3px solid #13a4a0}
+.ops-theme-kocp .ops-panel:nth-child(4n+3){border-top:3px solid #e7a746}
+.ops-theme-kocp .ops-panel:nth-child(4n+4){border-top:3px solid #8c78d5}
+.ops-theme-kocp .ops-bar-track{background:#dce9f3;height:9px}
+.ops-theme-kocp .ops-bar-track i{background:linear-gradient(90deg,#1678c2,#22b6a9)}
+.ops-theme-kocp .ops-fuel-dashboard{
+  border:1px solid #c2dae9;border-left:5px solid #0e9d8b;
+  background:linear-gradient(125deg,#f0fafd,#fff 48%,#f5f8ff);
+  border-radius:12px;padding:14px 16px;box-shadow:0 4px 18px rgba(29,94,122,.10);
+}
+.ops-theme-kocp .ops-fuel-dashboard .ops-panel-head b{font-size:15px;color:#115b7c}
+.ops-fuel-cta{display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.ops-theme-kocp .ops-fuel-cta button:first-child{background:#0a957c;border-color:#0a957c;color:#fff}
+.ops-theme-kocp .ops-fuel-cta button:last-child{background:#1a75bd;border-color:#1a75bd;color:#fff}
+.hsd-opening-panel{
+  border:1px solid #b4dce7;border-left:5px solid #148d9d;
+  padding:18px 20px;background:linear-gradient(120deg,#edfcfa,#f4f9ff);
+  border-radius:10px;margin:12px 0;
+}
+.hsd-opening-panel h3{margin:0 0 7px;color:#165b6d;font-size:17px}
+.hsd-opening-panel .field-help{color:#547182;font-size:11px;line-height:1.6}
+.hsd-opening-form{display:grid;grid-template-columns:repeat(3,minmax(160px,1fr));gap:13px;align-items:end;margin:14px 0}
+.hsd-opening-form .field{display:grid;gap:6px;min-width:0}
+.hsd-opening-form .field span{font-size:11px;font-weight:750;color:#28536b}
+.hsd-opening-form input{width:100%;min-height:38px;border:1px solid #a9c7d2;border-radius:7px;padding:7px 10px;background:#fff}
+.hsd-opening-form button{min-height:38px;background:#078d79;border-color:#078d79}
+.hsd-opening-form .simple-note{grid-column:1/-1}
+.hsd-opening-locked{background:#e4f6ed;border:1px solid #9cdbbb;padding:14px;border-radius:9px;color:#17694d}
+.hsd-opening-locked p{margin:6px 0;font-size:14px}
+.hsd-opening-locked small{font-size:11px}
+@media(max-width:1100px){.ops-theme-kocp .ops-kpis{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:760px){
+  .ops-theme-kocp .ops-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .ops-theme-kocp .ops-dashboard-top{padding:11px}
+  .hsd-opening-form{grid-template-columns:1fr}
+  .ops-theme-kocp .ops-fuel-dashboard{padding:11px}
+}
