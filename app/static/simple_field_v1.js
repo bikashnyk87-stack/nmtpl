@@ -32,6 +32,15 @@ function reqKey(module,slot='single'){return `NMTPL_SIMPLE_REQ:${siteId}:${simpl
 function getReq(module,payload={},slot='single'){const key=reqKey(module,slot),fp=fastHash(stablePayload(payload));let saved=null;try{saved=JSON.parse(localStorage.getItem(key)||'null')}catch{};if(!saved||saved.fingerprint!==fp||!saved.requestId){saved={fingerprint:fp,requestId:`WEB-${siteId}-${module}-${fp}-${uuid().slice(0,12)}`};localStorage.setItem(key,JSON.stringify(saved))}return saved.requestId}
 function clearReq(module,slot=null){if(slot!==null){localStorage.removeItem(reqKey(module,slot));return}const prefix=`NMTPL_SIMPLE_REQ:${siteId}:${simpleUser()}:${simpleDate()}:${module}:`;const keys=[];for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i)||'';if(k.startsWith(prefix))keys.push(k)}keys.forEach(k=>localStorage.removeItem(k))}
 function saveDraft(containerId,key){const root=$(containerId);if(!root)return;const o={};root.querySelectorAll('input[id],select[id],textarea[id]').forEach(el=>{if(el.type!=='file')o[el.id]=el.type==='checkbox'?el.checked:el.value});localStorage.setItem(key,JSON.stringify(o));const x=root.querySelector('.draft-state');if(x){x.textContent='Draft saved ✓';x.classList.add('ok')}}
+let activeHsdEntryType='ISSUE';
+function hsdDraftKey(){return activeHsdEntryType==='LEGACY'?draftKey('HSD'):draftKey('HSD_'+activeHsdEntryType+'_V2')}
+function hsdTypeLabel(){return activeHsdEntryType==='RECEIPT'?'Receipts':activeHsdEntryType==='LEGACY'?'Previous Draft':'Issues'}
+function setSimpleHsdMode(mode){
+  if(!['ISSUE','RECEIPT','LEGACY'].includes(mode))return;
+  if($('simpleHsdForm'))saveDraft('simpleHsdForm',hsdDraftKey());
+  activeHsdEntryType=mode;
+  render();
+}
 function restoreDraft(containerId,key){
   const root=$(containerId);if(!root)return;
   let o={};try{o=JSON.parse(localStorage.getItem(key)||'{}')}catch{}
@@ -590,6 +599,9 @@ function addSimpleTripRows(amount){
   if(start+amount>200){toast('Maximum 200 entry rows per sheet. Save this sheet first.','bad');return}
   // Append without recreating earlier rows: unsaved field entries are retained.
   parent.insertAdjacentHTML('beforeend',tripGridRows('TRIP',amount,start));
+  // Both preset Rows and +10/+20 keep the selector consistent with actual grid.
+  const rowsSelect=$('stRows');
+  if(rowsSelect)rowsSelect.dataset.actualRows=String(start+amount);
   bindLookups(parent);
   const key=draftKey(state.module);
   [...parent.querySelectorAll('.simple-trip-row')].slice(start).forEach(row=>
@@ -926,7 +938,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,rebuildSimpleTripRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
