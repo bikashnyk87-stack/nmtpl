@@ -373,7 +373,21 @@ def ensure_routes_from_canonical_wb(
     return created
 
 
+def _lock_wb_canonicalization(db: Session) -> None:
+    """Serialize missing canonical WB and auto-route inserts across web workers.
+
+    Two dashboard requests (or a WB import and a dashboard request) can both
+    observe the same rows as missing, then collide on their primary keys.
+    Lock the shared reconciliation path for the current transaction *before*
+    any existence check. PostgreSQL releases this lock on commit or rollback;
+    it does not reset or change any existing data or sync cursor.
+    """
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT pg_advisory_xact_lock(14243, 8231)"))
+
+
 def canonicalize_wb_rows(db: Session, rows: list[WbMovement]) -> dict[str, TiomWbCanonical]:
+    _lock_wb_canonicalization(db)
     out = {}
     ensure_location_master_roles(db)
     resolver = build_location_resolver(db)
@@ -394,6 +408,7 @@ def canonicalize_wb_rows(db: Session, rows: list[WbMovement]) -> dict[str, TiomW
 
 
 def backfill_wb_canonical(db: Session) -> dict:
+    _lock_wb_canonicalization(db)
     rows = list(db.scalars(select(WbMovement)))
     ensure_location_master_roles(db)
     resolver = build_location_resolver(db)
