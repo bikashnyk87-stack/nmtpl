@@ -266,3 +266,11 @@
   .volvo-route-stats{grid-template-columns:repeat(3,1fr)}
   .volvo-route-stats .actions{grid-column:1/-1}
 }
+
+.volvo-collector-control{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;font-size:11px}
+#volvo_collection_status{font-weight:700;color:inherit}
+#volvo_collection_toggle{border-radius:7px;min-height:30px;padding:6px 10px;font-weight:750;font-size:11px;cursor:pointer}
+#volvo_collection_toggle.volvo-stop{background:#9e3447;border:1px solid #e5b3bc;color:#fff}
+#volvo_collection_toggle.volvo-resume{background:#117a61;border:1px solid #92d2c1;color:#fff}
+#volvo_collection_toggle:disabled{opacity:.6;cursor:default}
+#volvo_collection_toggle:focus-visible{outline:2px solid #fff;outline-offset:2px}
