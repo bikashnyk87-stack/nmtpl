@@ -93,4 +93,4 @@ def test_accessibility_and_hsd_guardrails():
     assert "if(!Number.isFinite(Number(litres))||Number(litres)<=0)" in src
     assert "lookup-unresolved" in src
     assert ".lookup-help" in css
-    assert "simple_field_v1.js?v=kocp-tab-vehicle-r5" in html
+    assert "simple_field_v1.js?v=kocp-fuel-dashboard-r6" in html
