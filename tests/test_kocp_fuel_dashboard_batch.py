@@ -72,7 +72,7 @@ def test_hsd_modes_drafts_globals_and_stock_label():
     assert "stockBalance" not in js[js.index("function fuelKpiCards"):js.index("function fuelAssetBreakdown")]
     assert "NOT closing stock" in js
     assert "sourceRecordUid:uid.value" in js
-    assert "simple_field_v1.js?v=kocp-fuel-dashboard-r6" in html
+    assert "simple_field_v1.js?v=kocp-opening-colour-r7" in html
     proc=subprocess.run(["node","--check",str(JS)],capture_output=True,text=True,timeout=20)
     assert proc.returncode==0,proc.stderr
 
