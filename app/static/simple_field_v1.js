@@ -844,7 +844,7 @@ function fuelAssetBreakdown(fuel){
     ? `<div class="ops-fuel-assets">${assets.map(x=>`<div><span>${esc(x.assetId)}</span><b>${dashNum(x.litres,1)} L</b><small>${dashNum(x.count)} issues</small></div>`).join('')}</div>`
     : '<div class="ops-empty">No posted equipment fuel issues for the selected period.</div>';
 }
-async function renderSimpleHsd(){
+async async function renderSimpleHsd(){
   const today=state.ctx.operatingDate,from=String(today).slice(0,8)+'01';
   const [data,fuel]=await Promise.all([
     api(`/api/sites/${siteId}/records/hsd?limit=60`).catch(()=>[]),
