@@ -187,10 +187,10 @@ def operational_lookup(site_id: str, request: Request, kind: str, q: str = "", l
     limit = max(1, min(int(limit or 200), 250)) if site_id == "KOCP" and kind == "ASSET" else _lookup_limit(limit)
     activity = str(activity or "").strip().upper()
     role = str(role or "").strip().upper()
-    if site_id == "KOCP" and kind == "ASSET" and (
+    if site_id == "KOCP" and kind == "ASSET" and (activity or role) and (
         activity not in {"COAL", "OB"} or role not in {"TRANSPORT", "LOADING"}
     ):
-        raise HTTPException(422, "KOCP equipment lookup requires Coal/OB activity and transport/loading role.")
+        raise HTTPException(422, "KOCP production lookup requires Coal/OB activity and transport/loading role.")
     q = str(q or '').strip()
     out = []
 
@@ -225,7 +225,9 @@ def operational_lookup(site_id: str, request: Request, kind: str, q: str = "", l
                 continue
             seen.add(x.machine_id)
             if site_id == "KOCP":
-                if not (kocp_asset_allowed(x.group, activity)
+                # Other KOCP modules can use general asset search without an
+                # activity/role filter; the Coal/OB entry screen always supplies both.
+                if activity and not (kocp_asset_allowed(x.group, activity)
                         and kocp_role_allowed(x.type, role)):
                     continue
                 label, sub, rental = kocp_asset_display(
