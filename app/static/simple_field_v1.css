@@ -1728,3 +1728,41 @@ body.field-mode{
   .hsd-opening-form{grid-template-columns:1fr}
   .ops-theme-kocp .ops-fuel-dashboard{padding:11px}
 }
+
+/* KOCP HSD – one-delivery receipts and always-visible verified fuel balance. */
+.hsd-balance-strip{
+  position:sticky;top:74px;z-index:5;
+  display:grid;grid-template-columns:minmax(210px,1.7fr) repeat(2,minmax(115px,.7fr)) auto;
+  gap:11px;align-items:center;padding:11px 14px;margin:10px 0 13px;
+  background:linear-gradient(110deg,#effaf8,#f5fbff);border:1px solid #b2d7df;
+  border-left:5px solid #198f80;border-radius:10px;
+  box-shadow:0 5px 15px rgba(20,85,100,.09);
+}
+.hsd-balance-strip.hsd-balance-unverified{background:linear-gradient(110deg,#fff7e5,#fffef7);border-color:#edd6a2;border-left-color:#d3a34e}
+.hsd-balance-main{display:flex;flex-direction:column;gap:2px;min-width:0}
+.hsd-balance-main>span,.hsd-balance-metric>span{font-size:10px;letter-spacing:.01em;font-weight:700;color:#466779}
+.hsd-balance-main>strong{font-size:23px;line-height:1.2;color:#0b6d58;white-space:normal}
+.hsd-balance-unverified .hsd-balance-main>strong{font-size:17px;color:#946422}
+.hsd-balance-main>small{font-size:10px;line-height:1.3;color:#5b7581}
+.hsd-balance-metric{display:flex;flex-direction:column;gap:4px;border-left:1px solid #cae4e1;padding-left:13px}
+.hsd-balance-metric>b{font-size:15px;font-weight:800;color:#204d67}
+.hsd-balance-refresh{border:1px solid #a9d6ce;background:#fff;border-radius:7px;color:#115c65;font-size:11px;font-weight:750;padding:9px 11px;cursor:pointer;white-space:nowrap}
+.hsd-balance-refresh:focus-visible{outline:2px solid #087c71;outline-offset:2px}
+.hsd-receipt-card{border:1px solid #c4e0dc;background:#fff;border-radius:11px;box-shadow:0 3px 11px rgba(18,87,75,.07);padding:15px 17px;margin-bottom:13px}
+.hsd-receipt-head{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:14px;flex-wrap:wrap}
+.hsd-receipt-head>div{display:flex;flex-direction:column;gap:3px}
+.hsd-receipt-head b{font-size:16px;color:#135b6a}
+.hsd-receipt-head span,.hsd-receipt-head small{font-size:10px;color:#647e88}
+.hsd-receipt-form{display:grid;grid-template-columns:1.05fr .85fr 1.5fr .9fr 1.1fr auto;align-items:end;gap:10px 12px}
+.hsd-receipt-form>label{display:grid;gap:6px;min-width:0}
+.hsd-receipt-form>label span{font-size:10px;color:#41616d;font-weight:750}
+.hsd-receipt-form input,.hsd-receipt-form select{width:100%;height:36px;padding:6px 9px;border:1px solid #aec7ce;border-radius:7px;background:#fff;min-width:0;font-size:12px}
+.hsd-receipt-form input:focus,.hsd-receipt-form select:focus{outline:2px solid #35a999;outline-offset:1px}
+.hsd-receipt-actions{display:flex;gap:7px;align-items:center}
+.hsd-receipt-actions button{height:36px;white-space:nowrap;padding:7px 12px;font-size:11px}
+.hsd-receipt-form .draft-state{grid-column:1/-1;font-size:10px;color:#56826f}
+.hsd-entry-feedback{font-size:11px;min-height:16px;margin-top:5px;color:#54798a}
+.hsd-entry-feedback.error{color:#ad3d33}.hsd-entry-feedback.success{color:#148360}
+@media(max-width:1250px){.hsd-receipt-form{grid-template-columns:repeat(3,minmax(0,1fr))}.hsd-receipt-actions{grid-column:span 2}}
+@media(max-width:850px){.hsd-balance-strip{grid-template-columns:1fr 1fr;top:68px}.hsd-balance-main{grid-column:1/-1}.hsd-balance-refresh{justify-self:start}.hsd-receipt-form{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:510px){.hsd-balance-strip{position:static;grid-template-columns:1fr 1fr}.hsd-receipt-form{grid-template-columns:1fr}.hsd-receipt-actions{grid-column:1}}
