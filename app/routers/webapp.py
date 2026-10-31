@@ -52,6 +52,7 @@ from app.services.tiom_erp import (
 from app.services.tiom_location_erp import canonicalize_wb_rows, location_options, ensure_location_master_roles
 from app.services.tiom_manual_material import canonical_manual_45_material
 from app.services.tiom_wb_truth import canonical_wb_product, repair_saved_wb_linked_mis
+from app.services.wb_quarantine import WbGmailQuarantine
 from app.site_models import (
     TiomSourceDeployment, TiomSourceContext, TiomRouteMaster, TiomDrillSet, TiomDrillingShift,
     TiomMisReport, TiomMisTripRow, TiomMisTripDetail, TiomTripFactor,
@@ -62,6 +63,50 @@ from app.site_models import (
 
 router = APIRouter(prefix='/api/web', tags=['webapp'])
 log = logging.getLogger('nmtpl.webapp')
+
+@router.get('/wb-gmail-errors')
+def wb_gmail_errors(request: Request, db: Session = Depends(get_db)):
+    """Management review of rejected Gmail workbooks, without reading their bytes."""
+    user = get_user(db, request)
+    require(user, 'WB')
+    rows = db.execute(
+        select(
+            WbGmailQuarantine.file_hash,
+            WbGmailQuarantine.gmail_message_id,
+            WbGmailQuarantine.file_name,
+            WbGmailQuarantine.reason,
+            WbGmailQuarantine.file_size,
+            WbGmailQuarantine.received_at,
+        ).order_by(WbGmailQuarantine.received_at.desc()).limit(50)
+    ).all()
+    return {'ok': True, 'files': [{
+        'fileHash': x.file_hash, 'messageId': x.gmail_message_id,
+        'fileName': x.file_name, 'reason': x.reason,
+        'bytes': x.file_size, 'receivedAt': x.received_at.isoformat() if x.received_at else '',
+        'downloadUrl': '/api/web/wb-gmail-errors/' + x.file_hash,
+    } for x in rows]}
+
+
+@router.get('/wb-gmail-errors/{file_hash}')
+def wb_gmail_error_download(file_hash: str, request: Request, db: Session = Depends(get_db)):
+    """Only signed-in WB users may retrieve the original unchanged attachment."""
+    user = get_user(db, request)
+    require(user, 'WB')
+    if not re.fullmatch(r'[a-f0-9]{64}', file_hash):
+        raise HTTPException(404, 'Rejected WB file not found.')
+    item = db.get(WbGmailQuarantine, file_hash)
+    if item is None:
+        raise HTTPException(404, 'Rejected WB file not found.')
+    filename = re.sub(r'[^A-Za-z0-9._ -]+', '_', item.file_name or 'WB-rejected.xlsx')[:120]
+    return Response(
+        content=item.file_data,
+        media_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        headers={
+            'Content-Disposition': 'attachment; filename="' + filename + '"',
+            'Cache-Control': 'no-store',
+        },
+    )
+
 
 
 def lock(db):
