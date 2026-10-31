@@ -1164,6 +1164,106 @@ def report_summary(site_id:str,request:Request,from_date:date|None=None,to_date:
 
 
 
+def _fuel_balance_as_of(db: Session, site_id: str, end: date) -> dict:
+    """Conservative posted-stock ledger for HSD. No database mutations.
+
+    Fails closed on missing/duplicate opening, backdated older movements,
+    unclassified adjustments or a negative ledger balance.
+    """
+    # Initial fuel stock is one verified baseline per site. Closing inventory
+    # is derived from ALL posted receipts/issues since that baseline (not only
+    # the dashboard's selected period); adjustments require separate review.
+    openings = list(db.scalars(select(SiteHsdTransaction).where(
+        SiteHsdTransaction.site_id == site_id,
+        SiteHsdTransaction.status == "POSTED",
+        SiteHsdTransaction.transaction_type == "OPENING",
+    ).order_by(SiteHsdTransaction.operating_date, SiteHsdTransaction.entered_at).limit(2)))
+    opening = openings[0] if len(openings) == 1 else None
+    opening_info = ({
+        "date": opening.operating_date.isoformat(),
+        "litres": _fmt_decimal(opening.litres),
+        "reference": opening.reference_no,
+        "transactionId": opening.transaction_id,
+    } if opening else None)
+    stock_balance = None
+    stock_note = "Enter the first verified opening balance under Fuel / HSD → Opening Balance."
+    if len(openings) > 1:
+        stock_note = "Multiple opening records found; stock must be reconciled before calculating a balance."
+    elif opening and opening.operating_date > end:
+        stock_note = "Opening balance is dated after the selected period; stock is unavailable."
+    elif opening:
+        earlier_count = db.scalar(select(func.count()).select_from(SiteHsdTransaction).where(
+            SiteHsdTransaction.site_id == site_id,
+            SiteHsdTransaction.status == "POSTED",
+            SiteHsdTransaction.transaction_type.in_(["RECEIPT", "ISSUE", "ADJUSTMENT"]),
+            SiteHsdTransaction.operating_date < opening.operating_date,
+        )) or 0
+        adjustments = db.scalar(select(func.count()).select_from(SiteHsdTransaction).where(
+            SiteHsdTransaction.site_id == site_id,
+            SiteHsdTransaction.status == "POSTED",
+            SiteHsdTransaction.transaction_type == "ADJUSTMENT",
+            SiteHsdTransaction.operating_date >= opening.operating_date,
+            SiteHsdTransaction.operating_date <= end,
+        )) or 0
+        if earlier_count or adjustments:
+            stock_note = "Stock calculation withheld: earlier movements or unclassified adjustments require reconciliation."
+        else:
+            stock_moves = db.execute(select(
+                SiteHsdTransaction.transaction_type,
+                func.coalesce(func.sum(SiteHsdTransaction.litres), 0),
+            ).where(
+                SiteHsdTransaction.site_id == site_id,
+                SiteHsdTransaction.status == "POSTED",
+                SiteHsdTransaction.transaction_type.in_(["RECEIPT", "ISSUE"]),
+                SiteHsdTransaction.operating_date >= opening.operating_date,
+                SiteHsdTransaction.operating_date <= end,
+            ).group_by(SiteHsdTransaction.transaction_type)).all()
+            by_type = {kind: Decimal(str(quantity)) for kind, quantity in stock_moves}
+            expected = Decimal(str(opening.litres)) + by_type.get("RECEIPT", Decimal("0")) - by_type.get("ISSUE", Decimal("0"))
+            if expected < 0:
+                stock_note = "Fuel ledger is negative; check missing receipts/issues before relying on stock."
+            else:
+                stock_balance = _fmt_decimal(expected)
+                stock_note = "Calculated ledger balance as of period end; verify against physical stock. Excludes unposted transactions."
+    return {"openingBalance": opening_info,
+            "stockBalance": stock_balance, "stockNote": stock_note}
+
+
+@router.get("/{site_id}/fuel/balance")
+def fuel_live_balance(
+    site_id: str,
+    request: Request,
+    as_of_date: date | None = None,
+    db: Session = Depends(get_db),
+):
+    """Lightweight live balance refreshed after every successful HSD posting."""
+    user = get_user(db, request)
+    site_id = require_site(db, user, site_id)
+    if not user.admin and not any(
+        has_permission(db, user, site_id, module, action)
+        for module in ("HSD", "DASHBOARD")
+        for action in ("VIEW", "CREATE", "EDIT", "APPROVE")
+    ):
+        raise HTTPException(403, f"HSD or Dashboard permission is required for {site_id}.")
+    day = as_of_date or resolve_site_context(db, site_id).operating_date
+    if day > date.today() + timedelta(days=1):
+        raise HTTPException(422, "Fuel balance cannot be projected to a distant future date.")
+    stock = _fuel_balance_as_of(db, site_id, day)
+    today_rows = db.execute(select(
+        SiteHsdTransaction.transaction_type,
+        func.coalesce(func.sum(SiteHsdTransaction.litres), 0),
+    ).where(
+        SiteHsdTransaction.site_id == site_id,
+        SiteHsdTransaction.status == "POSTED",
+        SiteHsdTransaction.operating_date == day,
+        SiteHsdTransaction.transaction_type.in_(["ISSUE", "RECEIPT"]),
+    ).group_by(SiteHsdTransaction.transaction_type)).all()
+    quantities = {kind: _fmt_decimal(qty) for kind, qty in today_rows}
+    return {"siteId": site_id, "asOfDate": day.isoformat(),
+            **stock, "todayReceiptL": quantities.get("RECEIPT", 0.0),
+            "todayIssueL": quantities.get("ISSUE", 0.0)}
+
+
 @router.get("/{site_id}/fuel/summary")
 def fuel_summary(
     site_id: str,
@@ -1266,61 +1366,11 @@ def fuel_summary(
         SiteTrip.status != "VOID",
     )).one()
     mt, cum = _fmt_decimal(total_mt), _fmt_decimal(total_cum)
-    # Initial fuel stock is one verified baseline per site. Closing inventory
-    # is derived from ALL posted receipts/issues since that baseline (not only
-    # the dashboard's selected period); adjustments require separate review.
-    openings = list(db.scalars(select(SiteHsdTransaction).where(
-        SiteHsdTransaction.site_id == site_id,
-        SiteHsdTransaction.status == "POSTED",
-        SiteHsdTransaction.transaction_type == "OPENING",
-    ).order_by(SiteHsdTransaction.operating_date, SiteHsdTransaction.entered_at).limit(2)))
-    opening = openings[0] if len(openings) == 1 else None
-    opening_info = ({
-        "date": opening.operating_date.isoformat(),
-        "litres": _fmt_decimal(opening.litres),
-        "reference": opening.reference_no,
-        "transactionId": opening.transaction_id,
-    } if opening else None)
-    stock_balance = None
-    stock_note = "Enter the first verified opening balance under Fuel / HSD → Opening Balance."
-    if len(openings) > 1:
-        stock_note = "Multiple opening records found; stock must be reconciled before calculating a balance."
-    elif opening and opening.operating_date > end:
-        stock_note = "Opening balance is dated after the selected period; stock is unavailable."
-    elif opening:
-        earlier_count = db.scalar(select(func.count()).select_from(SiteHsdTransaction).where(
-            SiteHsdTransaction.site_id == site_id,
-            SiteHsdTransaction.status == "POSTED",
-            SiteHsdTransaction.transaction_type.in_(["RECEIPT", "ISSUE", "ADJUSTMENT"]),
-            SiteHsdTransaction.operating_date < opening.operating_date,
-        )) or 0
-        adjustments = db.scalar(select(func.count()).select_from(SiteHsdTransaction).where(
-            SiteHsdTransaction.site_id == site_id,
-            SiteHsdTransaction.status == "POSTED",
-            SiteHsdTransaction.transaction_type == "ADJUSTMENT",
-            SiteHsdTransaction.operating_date >= opening.operating_date,
-            SiteHsdTransaction.operating_date <= end,
-        )) or 0
-        if earlier_count or adjustments:
-            stock_note = "Stock calculation withheld: earlier movements or unclassified adjustments require reconciliation."
-        else:
-            stock_moves = db.execute(select(
-                SiteHsdTransaction.transaction_type,
-                func.coalesce(func.sum(SiteHsdTransaction.litres), 0),
-            ).where(
-                SiteHsdTransaction.site_id == site_id,
-                SiteHsdTransaction.status == "POSTED",
-                SiteHsdTransaction.transaction_type.in_(["RECEIPT", "ISSUE"]),
-                SiteHsdTransaction.operating_date >= opening.operating_date,
-                SiteHsdTransaction.operating_date <= end,
-            ).group_by(SiteHsdTransaction.transaction_type)).all()
-            by_type = {kind: Decimal(str(quantity)) for kind, quantity in stock_moves}
-            expected = Decimal(str(opening.litres)) + by_type.get("RECEIPT", Decimal("0")) - by_type.get("ISSUE", Decimal("0"))
-            if expected < 0:
-                stock_note = "Fuel ledger is negative; check missing receipts/issues before relying on stock."
-            else:
-                stock_balance = _fmt_decimal(expected)
-                stock_note = "Calculated ledger balance as of period end; verify against physical stock. Excludes unposted transactions."
+    # Use the exact same ledger guardrails as the lightweight live balance API.
+    balance = _fuel_balance_as_of(db, site_id, end)
+    opening_info = balance["openingBalance"]
+    stock_balance = balance["stockBalance"]
+    stock_note = balance["stockNote"]
     return {
         "siteId": site_id, "today": today.isoformat(),
         "fromDate": start.isoformat(), "toDate": end.isoformat(),
