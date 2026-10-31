@@ -37,7 +37,7 @@ function box(store,selector){
  }
 }
 const tripBody=box(tripRows,'.simple-trip-row'),hsdBody=box(hsdRows,'.simple-hsd-row');
-const nodes={simpleTripRows:tripBody,simpleHsdRows:hsdBody,stRowCount:{textContent:''},shRowCount:{textContent:''},stRows:{value:'10'},shRows:{value:'10'}};
+const nodes={simpleTripRows:tripBody,simpleHsdRows:hsdBody,stRowCount:{textContent:''},shRowCount:{textContent:''},stRows:{value:'10',dataset:{}},shRows:{value:'10',dataset:{}}};
 const $=id=>nodes[id],toast=()=>{},bindLookups=()=>{},saveDraft=()=>{},draftKey=()=> 'TRIP',hsdDraftKey=()=> 'HSD_ISSUE_V2';
 function tripGridRows(kind,count,start){return Array.from({length:count},(_,i)=>'<tr data-i="'+(start+i)+'"></tr>').join('')}
 function hsdGridRows(count,start){return Array.from({length:count},(_,i)=>'<tr data-i="'+(start+i)+'"></tr>').join('')}
@@ -86,7 +86,7 @@ def test_read_only_fuel_summary_separates_receipts_issues_and_opening(monkeypatc
     monkeypatch.setattr(site_ops,"resolve_site_context",lambda db,site_id:SimpleNamespace(operating_date=operating_day))
     with Session(engine) as db:
         db.add(Site(site_id="KOCP",site_name="KOCP",short_name="KOCP",active=True))
-        db.add(Equipment(machine_id="T001",door_no="42",vehicle_no="OD-05CK-6249",active=True))
+        db.add(Equipment(machine_id="T001",door_no="42",vehicle_no="OD-05CK-6249",type="EICHER TIPPER",group="KOCP",ownership="NMTPL",active=True))
         for i,(day,kind,litres) in enumerate([
             (date(2026,10,30),"ISSUE",20),
             (operating_day,"ISSUE",5),
