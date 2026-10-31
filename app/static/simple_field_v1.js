@@ -1007,6 +1007,53 @@ async function saveHsdOpening(){
   }catch(e){toast(e.message,'bad')}
   finally{if(btn.isConnected)btn.disabled=false}
 }
+function clearCompactHsdReceipt(){
+  const date=$('rcDate')?.value,shift=$('rcShift')?.value;
+  localStorage.removeItem(hsdReceiptDraftKey());
+  for(const id of ['rcSupplier','rcLitres','rcReference','rcUid'])if($(id))$(id).value='';
+  if($('rcDate'))$('rcDate').value=date||state.ctx.operatingDate;
+  if($('rcShift')&&shift)$('rcShift').value=shift;
+  if($('rcSaveStatus'))$('rcSaveStatus').textContent='';
+  $('rcSupplier')?.focus();
+}
+async function saveCompactHsdReceipt(){
+  const btn=$('rcSave'),date=$('rcDate')?.value,shift=$('rcShift')?.value,
+        supplier=$('rcSupplier')?.value.trim(),litres=$('rcLitres')?.value,
+        ref=$('rcReference')?.value.trim(),uid=$('rcUid'),
+        status=$('rcSaveStatus');
+  if(!date)return toast('Select the receipt date','bad');
+  if(!shift)return toast('Select a shift','bad');
+  if(!supplier)return toast('Enter the fuel supplier','bad');
+  if(litres===''||!Number.isFinite(Number(litres))||Number(litres)<=0)return toast('Enter received litres above zero','bad');
+  if(!uid.value){uid.value='HSD-'+siteId+'-RECEIPT-'+Date.now()+'-'+Math.random().toString(36).slice(2,12)}
+  // Preserve the exact request identity before posting. If the network times
+  // out, retry cannot create a second transaction for the same receipt.
+  saveDraft('simpleHsdReceiptForm',hsdReceiptDraftKey());
+  btn.disabled=true;
+  if(status){status.textContent='Saving receipt…';status.className='hsd-entry-feedback'}
+  let posted=false;
+  try{
+    const payload={operatingDate:date,shift,transactionType:'RECEIPT',
+      supplier,litres,referenceNo:ref||null,
+      sourceType:'PORTAL',sourceRecordUid:uid.value};
+    await api(`/api/sites/${siteId}/hsd`,{method:'POST',
+      headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
+    posted=true;
+  }catch(e){
+    if(status){status.textContent='Receipt not confirmed: '+e.message+'. Retry with this saved draft; do not re-enter it as a new receipt.';
+      status.className='hsd-entry-feedback error'}
+    toast(e.message||'Receipt not confirmed','bad');
+  }finally{if(btn.isConnected)btn.disabled=false}
+  if(!posted)return;
+  localStorage.removeItem(hsdReceiptDraftKey());
+  if(status){status.textContent='Receipt saved. Updating balance…';status.className='hsd-entry-feedback success'}
+  // Clear the receipt only after the server confirms the POST.
+  for(const id of ['rcSupplier','rcLitres','rcReference','rcUid'])if($(id))$(id).value='';
+  await refreshHsdBalance();
+  toast('Fuel receipt posted · balance refreshed');
+  // Reload the recent receipts list and the server-confirmed fuel totals.
+  try{await render()}catch(e){if(status)status.textContent='Receipt saved. Use Refresh to load the latest records.'}
+}
 function toggleHsdRow(i){
   const receipt=$('shType'+i)?.value==='RECEIPT',asset=$('shAssetBox'+i),supplier=$('shSupplier'+i);
   if(asset)asset.style.display=receipt?'none':'';
@@ -1068,6 +1115,9 @@ async function saveSimpleHsd(){
         await api(`/api/sites/${siteId}/hsd`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
         st.textContent='Saved ✓';st.className='simple-status good';done++;row.dataset.saved='1';
         row.querySelectorAll('input,select').forEach(input=>{input.disabled=true});
+        // Confirm the remaining fuel after EVERY posted issue, not only after
+        // the last row in a batch. Do not rerender/erase unsaved issue rows.
+        await refreshHsdBalance();
       }catch(e){st.textContent=e.message;st.className='simple-status bad'}
     }
     if(!used){
@@ -1147,7 +1197,14 @@ async function saveSimpleMeters(){
 }
 function clearSimpleMeterDraft(){localStorage.removeItem(draftKey('HMR_KMR'));render()}
 window.NMTPLClearActiveDrafts=function(){NMTPLNet.clearUserDrafts(simpleUser())};
-function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module)){restoreDraft('simpleTripForm',draftKey(state.module));syncKocpRoutes()}if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){restoreDraft('simpleHsdForm',hsdDraftKey());document.querySelectorAll('.simple-hsd-row').forEach(r=>toggleHsdRow(r.dataset.i))}if(state.module==='HMR_KMR'){restoreDraft('simpleMeterForm',draftKey('HMR_KMR'));document.querySelectorAll('.simple-meter-row').forEach(r=>calcMeterRow(r.dataset.i))}refreshEntryRowCounts();const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
+function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module)){restoreDraft('simpleTripForm',draftKey(state.module));syncKocpRoutes()}if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){
+  if(activeHsdEntryType==='RECEIPT'&&$('simpleHsdReceiptForm')){
+    restoreDraft('simpleHsdReceiptForm',hsdReceiptDraftKey());
+  }else if($('simpleHsdForm')){
+    restoreDraft('simpleHsdForm',hsdDraftKey());
+    document.querySelectorAll('.simple-hsd-row').forEach(r=>toggleHsdRow(r.dataset.i));
+  }
+}if(state.module==='HMR_KMR'){restoreDraft('simpleMeterForm',draftKey('HMR_KMR'));document.querySelectorAll('.simple-meter-row').forEach(r=>calcMeterRow(r.dataset.i))}refreshEntryRowCounts();const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
 async function simpleRender(){
   const cfg=SIMPLE[siteId]||{entry:[],setup:[],review:[],control:[]};
   const visible=new Set(['DASHBOARD',...(cfg.entry||[]),...(cfg.setup||[]),...(cfg.review||[]),...(cfg.control||[])]);
@@ -1171,7 +1228,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
