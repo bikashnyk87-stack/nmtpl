@@ -120,7 +120,15 @@ def init_sync_source(engine, force_local: bool = False) -> int:
             $$ LANGUAGE plpgsql
         """))
 
+        # A restart must not DROP/CREATE 80+ healthy sync triggers.
+        # Updating the shared trigger function above automatically updates
+        # behavior for existing triggers, without rebuilding their catalog rows.
+        existing_triggers = set(conn.execute(text("""
+            SELECT tgname FROM pg_trigger
+            WHERE NOT tgisinternal AND tgname LIKE 'trg_nmtpl_sync_%'
+        """)).scalars())
         installed = 0
+        added = 0
         for table_name in SYNC_TABLES:
             if not _NAME_RE.fullmatch(table_name):
                 continue
@@ -131,15 +139,15 @@ def init_sync_source(engine, force_local: bool = False) -> int:
             if not exists:
                 continue
             trigger_name = f"trg_nmtpl_sync_{table_name}"[:60]
-            conn.execute(text(
-                f'DROP TRIGGER IF EXISTS "{trigger_name}" ON "{table_name}"'
-            ))
-            conn.execute(text(
-                f'CREATE TRIGGER "{trigger_name}" '
-                f'AFTER INSERT OR UPDATE OR DELETE ON "{table_name}" '
-                f'FOR EACH ROW EXECUTE FUNCTION nmtpl_capture_sync_change()'
-            ))
+            if trigger_name not in existing_triggers:
+                conn.execute(text(
+                    f'CREATE TRIGGER "{trigger_name}" '
+                    f'AFTER INSERT OR UPDATE OR DELETE ON "{table_name}" '
+                    f'FOR EACH ROW EXECUTE FUNCTION nmtpl_capture_sync_change()'
+                ))
+                added += 1
             installed += 1
+        logger.info("Sync trigger installation: %s active, %s newly created", installed, added)
 
     logger.info(
         "Render-to-PC sync source enabled; change tracking active on %s tables.",

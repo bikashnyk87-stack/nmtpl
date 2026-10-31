@@ -1,5 +1,5 @@
 /* Volvo dashboard is intentionally isolated from TIOM operational writes. */
-var VOLVO={data:null,map:null,route:null,routeSession:null,routeTripId:null,selectedVin:null,popupVin:null,timer:null,live:true,lastRouteLoad:0,drag:null,labels:false,zoneEditor:false,mapStyle:'street',showFleetMarkers:true};
+var VOLVO={data:null,map:null,route:null,routeSession:null,routeTripId:null,selectedVin:null,popupVin:null,timer:null,live:true,lastRouteLoad:0,drag:null,labels:false,zoneEditor:false,mapStyle:'street',showFleetMarkers:true,collectionEnabled:null,canManageCollection:false};
 
 async function volvoRequest(path,body){
   const opts={};
@@ -19,7 +19,7 @@ function renderVolvo(){
   if(VOLVO.timer){clearInterval(VOLVO.timer);VOLVO.timer=null;}
   VOLVO.route=null;VOLVO.routeSession=null;VOLVO.routeTripId=null;VOLVO.selectedVin=null;VOLVO.map=null;
   html('app','<div class="volvo-shell">'+
-    '<div class="panel volvo-hero"><div><div class="eyebrow">VOLVO / GPS</div><h2>Fleet Live Status</h2><p>Operational status · moving trucks · GPS · fuel · route</p><div class="volvo-sync-pill"><span class="volvo-sync-dot"></span><span id="volvo_sync_text">Loading latest telemetry…</span></div></div></div>'+
+    '<div class="panel volvo-hero"><div><div class="eyebrow">VOLVO / GPS</div><h2>Fleet Live Status</h2><p>Operational status · moving trucks · GPS · fuel · route</p><div class="volvo-sync-pill"><span class="volvo-sync-dot"></span><span id="volvo_sync_text">Loading latest telemetry…</span></div><div class="volvo-collector-control"><span id="volvo_collection_status" role="status">Checking cloud collection…</span><button id="volvo_collection_toggle" class="btn secondary small" type="button" onclick="toggleVolvoCloudCollection()" disabled hidden>Stop Volvo Sync</button></div></div></div>'+
     '<div class="panel volvo-filters">'+
       '<label>From date<input id="volvo_from" type="date" value="'+esc(from)+'"></label>'+
       '<label>To date<input id="volvo_to" type="date" value="'+esc(today)+'"></label>'+
@@ -31,7 +31,44 @@ function renderVolvo(){
       '<div class="volvo-filter-actions"><button class="btn primary" onclick="loadVolvoDashboard()">Apply</button><button id="volvo_live_btn" class="btn secondary" onclick="toggleVolvoLive()">Live 30s: ON</button><button class="btn secondary" onclick="resetVolvoFilters()">Reset</button></div>'+
     '</div><div id="volvo_body"><div class="panel"><div class="loading">Loading Volvo dashboard…</div></div></div></div>');
   loadVolvoDashboard(true);
+  loadVolvoCollectionStatus();
   VOLVO.timer=setInterval(function(){if(S.screen==='VOLVO'&&VOLVO.live)refreshVolvoLive();},30000);
+}
+function updateVolvoCollectionUI(){
+  const enabled=VOLVO.collectionEnabled;
+  const status=document.getElementById('volvo_collection_status');
+  const button=document.getElementById('volvo_collection_toggle');
+  if(status)status.textContent=enabled===null?'Collection status unavailable':
+    (enabled?'Cloud Volvo collection: RUNNING':'Cloud Volvo collection: PAUSED · existing data preserved');
+  if(button){
+    button.hidden=!VOLVO.canManageCollection;
+    button.disabled=enabled===null;
+    button.textContent=enabled?'Stop Volvo Sync':'Resume Volvo Sync';
+    button.classList.toggle('volvo-stop',!!enabled);
+    button.classList.toggle('volvo-resume',enabled===false);
+  }
+}
+async function loadVolvoCollectionStatus(){
+  try{
+    const data=await volvoRequest('collection-status');
+    VOLVO.collectionEnabled=!!data.enabled;
+    VOLVO.canManageCollection=!!data.canManage;
+    updateVolvoCollectionUI();
+  }catch(e){VOLVO.collectionEnabled=null;updateVolvoCollectionUI()}
+}
+async function toggleVolvoCloudCollection(){
+  if(!VOLVO.canManageCollection||VOLVO.collectionEnabled===null)return;
+  const next=!VOLVO.collectionEnabled;
+  if(!next&&!confirm('Stop automatic Volvo API collection? Existing Volvo data and other TIOM operations remain available.'))return;
+  const b=document.getElementById('volvo_collection_toggle');
+  if(b)b.disabled=true;
+  try{
+    const state=await volvoRequest('collection-control',{enabled:next});
+    VOLVO.collectionEnabled=!!state.enabled;
+    updateVolvoCollectionUI();
+    toast(VOLVO.collectionEnabled?'Volvo automatic collection resumed':'Volvo automatic collection paused');
+  }catch(e){toast('Volvo sync setting was not changed: '+e.message,true);await loadVolvoCollectionStatus()}
+  finally{if(b&&b.isConnected)b.disabled=VOLVO.collectionEnabled===null}
 }
 function resetVolvoFilters(){const t=(S.boot&&S.boot.today)||new Date().toISOString().slice(0,10);document.getElementById('volvo_from').value=volvoDay(t,-6);document.getElementById('volvo_to').value=t;document.getElementById('volvo_machine').value='ALL';document.getElementById('volvo_state').value='ALL';document.getElementById('volvo_location').value='ALL';document.getElementById('volvo_shift').value='ALL';document.getElementById('volvo_mapping').value='ALL';VOLVO.route=null;VOLVO.routeSession=null;VOLVO.routeTripId=null;VOLVO.selectedVin=null;loadVolvoDashboard();}
 function toggleVolvoLive(){VOLVO.live=!VOLVO.live;const b=document.getElementById('volvo_live_btn');if(b)b.textContent='Live 30s: '+(VOLVO.live?'ON':'OFF');}

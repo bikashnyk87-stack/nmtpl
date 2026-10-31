@@ -206,14 +206,57 @@ def run_overdue_cycle():
         return total
 
 
+def _attendance_check_times() -> list:
+    """Compute check clock times from the active shift master, not hardcoded hours."""
+    cfg = load_config()
+    grace = max(0,int(cfg.get("attendance_auto_close_grace_minutes",30)))
+    with SessionLocal() as db:
+        shifts = list(db.scalars(select(ShiftMaster).where(ShiftMaster.active.is_(True))))
+    boundaries = set()
+    for shift in shifts:
+        base = datetime.combine(datetime.now(TZ).date(),shift.end_time,TZ)
+        check = base + timedelta(minutes=grace+2)
+        boundaries.add(check.time().replace(tzinfo=None))
+    return sorted(boundaries)
+
+
+def next_attendance_check(now: datetime, times: list) -> datetime:
+    """Next post-grace event; handles C shift ending next calendar day."""
+    here = now.astimezone(TZ)
+    for offset in range(3):
+        date_value = here.date()+timedelta(days=offset)
+        for slot in times:
+            point = datetime.combine(date_value,slot,TZ)
+            if point >= here:
+                return point
+    raise RuntimeError("No active attendance close event found")
+
+
 async def automation_loop():
+    """Check at active shift end + grace, not every five minutes all day."""
+    # Run once on startup to recover any overdue late-arriving attendance.
+    try:
+        await asyncio.to_thread(run_overdue_cycle)
+    except asyncio.CancelledError:
+        raise
+    except Exception:
+        logger.exception("Startup attendance recovery check failed")
     while True:
-        cfg = load_config()
-        delay = max(60, int(cfg.get("attendance_check_seconds", 300)))
         try:
+            slots = await asyncio.to_thread(_attendance_check_times)
+            if not slots:
+                logger.warning("No active shift for attendance; retrying tomorrow")
+                await asyncio.sleep(3600)
+                continue
+            due = next_attendance_check(datetime.now(TZ)+timedelta(seconds=1),slots)
+            while True:
+                wait = (due-datetime.now(TZ)).total_seconds()
+                if wait <= 0:
+                    break
+                await asyncio.sleep(min(300,max(1,wait)))
             await asyncio.to_thread(run_overdue_cycle)
         except asyncio.CancelledError:
             raise
         except Exception:
-            logger.exception("Attendance automation cycle failed")
-        await asyncio.sleep(delay)
+            logger.exception("Attendance post-shift auto-close check failed")
+            await asyncio.sleep(900)

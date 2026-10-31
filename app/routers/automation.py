@@ -6,13 +6,17 @@ import json
 import logging
 import os
 import time
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 from pathlib import Path
+from sqlalchemy import select
 
 from fastapi import APIRouter, Header, HTTPException
 
 from app.db import SessionLocal
 from app.services.volvo_client import VolvoClient, VolvoError, credential
 from app.services.volvo_store import collect as collect_volvo
+from app.services.volvo_control import collection_enabled
 
 router = APIRouter(prefix="/api/automation", tags=["automation"])
 logger = logging.getLogger("nmtpl.automation")
@@ -211,6 +215,9 @@ def _volvo_credentials() -> tuple[str, str]:
 
 
 def volvo_once():
+    with SessionLocal() as status_db:
+        if not collection_enabled(status_db):
+            return {"ok": True, "state": "PAUSED", "message": "Volvo sync paused in Volvo tab"}
     username, password = _volvo_credentials()
     if not username or not password:
         raise RuntimeError(
@@ -270,62 +277,127 @@ def run_volvo(
         raise HTTPException(503, f"Volvo automation failed: {exc}") from exc
 
 
-async def automation_loop():
-    """Zero-cost Render test loop.
+IST = ZoneInfo("Asia/Kolkata")
+# Shift C ends at 05:00 the next calendar day; A ends 13:00, B ends 21:00.
+# Times below are cloud Gmail *search* windows, not operating shift starts.
+WB_WINDOWS = ((5, "C", -1), (13, "A", 0), (21, "B", 0))
+WB_SEARCH_MINUTES = 120
+WB_RETRY_SECONDS = 900
+DESPATCH_RETRY_SECONDS = 900
 
-    Runs inside the single web-service instance. It restarts automatically with
-    the Render service. On Render free tier it pauses when the web service sleeps.
+
+def wb_search_window(now: datetime) -> tuple[str, datetime.date, str] | None:
+    """Return (window key, operating date, shift) for a 2-hour IST slot."""
+    local = now.astimezone(IST)
+    for hour, shift, day_offset in WB_WINDOWS:
+        start = local.replace(hour=hour, minute=0, second=0, microsecond=0)
+        if start <= local < start + timedelta(minutes=WB_SEARCH_MINUTES):
+            operating_date = local.date() + timedelta(days=day_offset)
+            return (f"{local.date()}:{shift}", operating_date, shift)
+    return None
+
+
+def confirmed_wb_shift(operating_date, shift: str) -> bool:
+    # Indexed, bounded check. The importer is the source of truth:
+    # an email 'seen' or a quarantined file is not a successful WB import.
+    from app.models import WbImportBatch
+    with SessionLocal() as db:
+        return db.scalar(select(WbImportBatch.batch_id).where(
+            WbImportBatch.operating_date == operating_date,
+            WbImportBatch.shift == shift,
+            WbImportBatch.status == "CONFIRMED",
+            WbImportBatch.valid_rows > 0,
+        ).limit(1)) is not None
+
+
+def confirmed_despatch_day(operating_date) -> bool:
+    # The report is considered found only once at least one dated E-Pass
+    # trip has been imported. Mailbox success without dated data is not enough.
+    from app.routers.tiom_despatch import DespatchTrip
+    with SessionLocal() as db:
+        return db.scalar(select(DespatchTrip.epass_no).where(
+            DespatchTrip.report_date == operating_date
+        ).limit(1)) is not None
+
+
+async def automation_loop():
+    """IST-window cloud polling; outside the windows makes NO Gmail DB calls.
+
+    WB 05:00-07:00 for prior C, 13:00-15:00 for current A, 21:00-23:00
+    for current B. Every 15 min until that shift is confirmed, max two hours.
+    Despatch 06:00 onward for previous day's report, every 15 min until
+    that date has E-Pass trips, then no more Despatch scans that day.
     """
-    gmail_interval = max(60, int(os.getenv("WB_GMAIL_POLL_SECONDS", "180")))
-    volvo_interval = max(60, int(os.getenv("VOLVO_POLL_SECONDS", "300")))
-    gmail_due = 0.0
-    # Stagger despatch behind the existing WB Gmail fetch to protect Gmail's per-user quota.
-    despatch_due = time.monotonic() + 90
+    wb_checked: dict[str, float] = {}
+    wb_done: set[str] = set()
+    dispatch_checked: dict[str, float] = {}
+    dispatch_done: set[str] = set()
+    volvo_interval = max(1800, int(os.getenv("VOLVO_POLL_SECONDS", "1800")))
     volvo_due = 0.0
     gmail_missing_logged = False
     volvo_missing_logged = False
-
     await asyncio.sleep(5)
-    logger.info(
-        "Cloud automation loop started gmail_interval=%ss volvo_interval=%ss",
-        gmail_interval,
-        volvo_interval,
-    )
-
+    logger.info("Cloud low-compute schedule started: WB 05/13/21 IST (2h cap), Despatch from 06 IST, Volvo %ds (pauseable)", volvo_interval)
     while True:
-        now = time.monotonic()
-
-        if now >= gmail_due:
-            gmail_due = now + gmail_interval
-            if _gmail_token_raw():
-                try:
-                    await asyncio.to_thread(gmail_once)
+        local = datetime.now(IST)
+        monotonic = time.monotonic()
+        today_key = local.date().isoformat()
+        # Retain only today's completion flags; restart rechecks confirmed data.
+        wb_done = {x for x in wb_done if x.startswith(today_key + ":")}
+        wb_checked = {k:v for k,v in wb_checked.items() if k.startswith(today_key + ":")}
+        dispatch_done = {x for x in dispatch_done if x == today_key}
+        dispatch_checked = {k:v for k,v in dispatch_checked.items() if k == today_key}
+        window = wb_search_window(local)
+        if window and os.getenv("WB_GMAIL_ENABLED", "true").strip().lower() not in {"0","no","off","false"}:
+            key, operating_date, shift = window
+            if key not in wb_done and monotonic >= wb_checked.get(key, -1) + WB_RETRY_SECONDS:
+                wb_checked[key] = monotonic
+                if _gmail_token_raw():
+                    try:
+                        if await asyncio.to_thread(confirmed_wb_shift, operating_date, shift):
+                            wb_done.add(key)
+                        else:
+                            await asyncio.to_thread(gmail_once)
+                            if await asyncio.to_thread(confirmed_wb_shift, operating_date, shift):
+                                wb_done.add(key)
+                                logger.info("WB %s %s confirmed; stopping this shift's Gmail polls", operating_date, shift)
+                    except Exception:
+                        logger.exception("Scheduled WB Gmail scan failed for %s shift %s", operating_date, shift)
                     gmail_missing_logged = False
-                except Exception:
-                    logger.exception("Automatic WB Gmail poll failed")
-            elif not gmail_missing_logged:
-                logger.warning("WB Gmail auto-poll waiting for Gmail token environment variable or Secret File")
-                gmail_missing_logged = True
+                elif not gmail_missing_logged:
+                    logger.warning("WB Gmail scheduled scan waiting for Gmail token")
+                    gmail_missing_logged = True
 
-        if now >= despatch_due:
-            despatch_due = now + max(600, int(os.getenv("TIOM_DESPATCH_GMAIL_POLL_SECONDS", "600")))
-            if _gmail_token_raw() and os.getenv("TIOM_DESPATCH_GMAIL_ENABLED", "true").strip().lower() not in {"0", "no", "off", "false"}:
-                try:
-                    await asyncio.to_thread(despatch_gmail_once)
-                except Exception:
-                    logger.exception("Automatic despatch Gmail poll failed")
+        if local.hour >= 6 and today_key not in dispatch_done and monotonic >= dispatch_checked.get(today_key,-1) + DESPATCH_RETRY_SECONDS:
+            if os.getenv("TIOM_DESPATCH_GMAIL_ENABLED", "true").strip().lower() not in {"0","no","off","false"}:
+                dispatch_checked[today_key] = monotonic
+                if _gmail_token_raw():
+                    report_date = local.date() - timedelta(days=1)
+                    try:
+                        if await asyncio.to_thread(confirmed_despatch_day, report_date):
+                            dispatch_done.add(today_key)
+                        else:
+                            await asyncio.to_thread(despatch_gmail_once)
+                            if await asyncio.to_thread(confirmed_despatch_day, report_date):
+                                dispatch_done.add(today_key)
+                                logger.info("Despatch %s imported; stopping today's Gmail scans", report_date)
+                    except Exception:
+                        logger.exception("Scheduled Despatch Gmail scan failed for %s", report_date)
 
-        if now >= volvo_due:
-            volvo_due = now + volvo_interval
-            username, password = _volvo_credentials()
-            if username and password:
-                try:
-                    await asyncio.to_thread(volvo_once)
-                    volvo_missing_logged = False
-                except Exception:
-                    logger.exception("Automatic Volvo sync failed")
-            elif not volvo_missing_logged:
-                logger.warning("Volvo auto-sync waiting for Render Volvo API credentials or .env Secret File")
-                volvo_missing_logged = True
-
-        await asyncio.sleep(15)
+        if monotonic >= volvo_due:
+            volvo_due = monotonic + volvo_interval
+            # Cached flag avoids a Neon read every 30min while paused.
+            with SessionLocal() as db:
+                enabled = collection_enabled(db)
+            if enabled:
+                username, password = _volvo_credentials()
+                if username and password:
+                    try:
+                        await asyncio.to_thread(volvo_once)
+                        volvo_missing_logged = False
+                    except Exception:
+                        logger.exception("Scheduled Volvo collection failed")
+                elif not volvo_missing_logged:
+                    logger.warning("Volvo cloud collection waiting for API credentials")
+                    volvo_missing_logged = True
+        await asyncio.sleep(30)

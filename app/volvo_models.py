@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import String, DateTime, JSON, ForeignKey, Float
+from sqlalchemy import String, DateTime, JSON, ForeignKey, Float, Boolean, Integer
 from sqlalchemy.orm import Mapped, mapped_column
 from app.db import Base
 
@@ -55,8 +55,18 @@ class VolvoLocationZone(Base):
     changed_by: Mapped[str] = mapped_column(String(60))
     changed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
+class VolvoSyncControl(Base):
+    """Cloud collection pause state, persisted across Render restarts."""
+    __tablename__ = "volvo_sync_control"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    changed_by: Mapped[str | None] = mapped_column(String(60), nullable=True)
+    changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 
 TABLES = [
     VolvoVehicle.__table__, VolvoReport.__table__, VolvoMapping.__table__,
     VolvoAudit.__table__, VolvoSync.__table__, VolvoLocationZone.__table__,
+    VolvoSyncControl.__table__,
 ]
