@@ -32,7 +32,33 @@ function reqKey(module,slot='single'){return `NMTPL_SIMPLE_REQ:${siteId}:${simpl
 function getReq(module,payload={},slot='single'){const key=reqKey(module,slot),fp=fastHash(stablePayload(payload));let saved=null;try{saved=JSON.parse(localStorage.getItem(key)||'null')}catch{};if(!saved||saved.fingerprint!==fp||!saved.requestId){saved={fingerprint:fp,requestId:`WEB-${siteId}-${module}-${fp}-${uuid().slice(0,12)}`};localStorage.setItem(key,JSON.stringify(saved))}return saved.requestId}
 function clearReq(module,slot=null){if(slot!==null){localStorage.removeItem(reqKey(module,slot));return}const prefix=`NMTPL_SIMPLE_REQ:${siteId}:${simpleUser()}:${simpleDate()}:${module}:`;const keys=[];for(let i=0;i<localStorage.length;i++){const k=localStorage.key(i)||'';if(k.startsWith(prefix))keys.push(k)}keys.forEach(k=>localStorage.removeItem(k))}
 function saveDraft(containerId,key){const root=$(containerId);if(!root)return;const o={};root.querySelectorAll('input[id],select[id],textarea[id]').forEach(el=>{if(el.type!=='file')o[el.id]=el.type==='checkbox'?el.checked:el.value});localStorage.setItem(key,JSON.stringify(o));const x=root.querySelector('.draft-state');if(x){x.textContent='Draft saved ✓';x.classList.add('ok')}}
-function restoreDraft(containerId,key){const root=$(containerId);if(!root)return;let o={};try{o=JSON.parse(localStorage.getItem(key)||'{}')}catch{};Object.entries(o).forEach(([id,v])=>{const el=$(id);if(el){if(el.type==='checkbox')el.checked=!!v;else el.value=v}});root.querySelectorAll('input,select,textarea').forEach(el=>{if(el.type==='file'||el.dataset.noDraft)return;el.addEventListener('input',()=>saveDraft(containerId,key));el.addEventListener('change',()=>saveDraft(containerId,key))})}
+function restoreDraft(containerId,key){
+  const root=$(containerId);if(!root)return;
+  let o={};try{o=JSON.parse(localStorage.getItem(key)||'{}')}catch{}
+  // KOCP/SOCP can now append >30 rows. Rebuild missing draft rows
+  // BEFORE assigning saved fields; otherwise reopening loses the extra rows.
+  if(containerId==='simpleTripForm'){
+    const parent=$('simpleTripRows');
+    const indexes=Object.keys(o).map(k=>/^stVehicle(\\d+)$/.exec(k)).filter(Boolean).map(x=>Number(x[1]));
+    const count=indexes.length?Math.min(200,Math.max(...indexes)+1):0;
+    const current=parent?.querySelectorAll('.simple-trip-row').length||0;
+    if(parent&&count>current){
+      parent.insertAdjacentHTML('beforeend',tripGridRows('TRIP',count-current,current));
+      bindLookups(parent);
+    }
+    const hmr=$('kocpHmrRows');
+    const hmrIndices=Object.keys(o).map(k=>/^khMachine(\\d+)$/.exec(k)).filter(Boolean).map(x=>Number(x[1]));
+    const n=hmrIndices.length?Math.min(200,Math.max(...hmrIndices)+1):0;
+    const existing=hmr?.querySelectorAll('.kocp-hmr-row').length||0;
+    if(hmr&&n>existing){hmr.insertAdjacentHTML('beforeend',kocpHmrRows(n-existing,existing));bindLookups(hmr)}
+  }
+  Object.entries(o).forEach(([id,v])=>{const el=$(id);if(el){if(el.type==='checkbox')el.checked=!!v;else el.value=v}});
+  root.querySelectorAll('input,select,textarea').forEach(el=>{
+    if(el.type==='file'||el.dataset.noDraft)return;
+    el.addEventListener('input',()=>saveDraft(containerId,key));
+    el.addEventListener('change',()=>saveDraft(containerId,key));
+  })
+}
 function clearDraft(containerId,key){localStorage.removeItem(key);const root=$(containerId),x=root?.querySelector('.draft-state');if(x){x.textContent='Saved';x.classList.add('ok')}}
 function lookupMarkup(hiddenId,kind,placeholder,groups=''){
   return `<div class="lookup" data-kind="${kind}" data-hidden="${hiddenId}" data-groups="${groups}"><input id="${hiddenId}Text" type="text" autocomplete="off" placeholder="${esc(placeholder)}"><input id="${hiddenId}" type="hidden"><div class="lookup-menu"></div></div>`
@@ -274,6 +300,11 @@ function syncKocpHmrMachines(){
       parent.insertAdjacentHTML('beforeend',kocpHmrRows(1,i));
       bindLookups(parent);
       row=parent.lastElementChild;
+      const key=draftKey(state.module);
+      row.querySelectorAll('input,select,textarea').forEach(el=>{
+        el.addEventListener('input',()=>saveDraft('simpleTripForm',key));
+        el.addEventListener('change',()=>saveDraft('simpleTripForm',key));
+      });
     }
     const i=row.dataset.i,h=$(`khMachine${i}`),t=$(`khMachine${i}Text`);
     h.value=m.id;
@@ -447,7 +478,14 @@ function addSimpleTripRows(amount){
   // Append without recreating earlier rows: unsaved field entries are retained.
   parent.insertAdjacentHTML('beforeend',tripGridRows('TRIP',amount,start));
   bindLookups(parent);
-  saveDraft('simpleTripForm',draftKey(state.module));
+  const key=draftKey(state.module);
+  [...parent.querySelectorAll('.simple-trip-row')].slice(start).forEach(row=>
+    row.querySelectorAll('input,select,textarea').forEach(el=>{
+      el.addEventListener('input',()=>saveDraft('simpleTripForm',key));
+      el.addEventListener('change',()=>saveDraft('simpleTripForm',key));
+    })
+  );
+  saveDraft('simpleTripForm',key);
 }
 function rebuildSimpleTripRows(){
   const n=+$('stRows').value||10;
