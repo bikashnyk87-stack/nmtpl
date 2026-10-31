@@ -610,8 +610,15 @@ def dashboard_desk(db, user, p):
     )) if wb_keys_all else []
     wb_canonical_all = {x.movement_key: x for x in canonical_rows}
     missing_canonical = [w for w in wb_all if w.movement_key not in wb_canonical_all]
+    # getDashboard is a read method. Do not write canonical WB or route records
+    # on a dashboard refresh: concurrent readers can otherwise race with an
+    # importer and create duplicate primary keys. Missing mappings remain
+    # visible through the existing reconciliation workflow.
     if missing_canonical:
-        wb_canonical_all.update(canonicalize_wb_rows(db, missing_canonical))
+        log.warning(
+            'Dashboard canonical WB gaps: %d of %d active movements; import/reconciliation required',
+            len(missing_canonical), len(wb_all),
+        )
     source_options = location_options(db, 'SOURCE')
     destination_options = location_options(db, 'DESTINATION')
     available_materials = sorted({material_label(w) for w in wb_all})
