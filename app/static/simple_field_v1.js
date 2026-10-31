@@ -601,6 +601,7 @@ async function renderSimpleTrips(kind='TRIP'){
         <button class="btn outline apply-defaults-btn" onclick="applyTripDefaults()">Apply Defaults to Blank Rows</button>
         <button class="btn outline" type="button" onclick="addSimpleTripRows(10)">+10 Rows</button>
         <button class="btn outline" type="button" onclick="addSimpleTripRows(20)">+20 Rows</button>
+        <span class="row-count-badge" id="stRowCount">10 rows</span>
       </div>`;
   const heads=isSocp
     ?'<th>#</th><th>Shift</th><th>Vehicle</th><th>Loader</th><th>Unloading Point</th><th>GP / Ref</th><th>Qty MT</th><th>Status</th>'
@@ -617,6 +618,14 @@ async function renderSimpleTrips(kind='TRIP'){
     <div class="simple-actions"><button id="stSave" class="btn primary" onclick="saveSimpleTrips('TRIP')">Save ${siteId==='KOCP'?(obMode?'OB':'Coal'):'Production'} Sheet</button><button class="btn outline" onclick="clearSimpleTripDraft()">Clear</button><span class="draft-state">Draft autosaves on this PC</span></div>
   </div>`+panel('Today’s Entries',recentTable(recentHeads,rows),`${viewRec.length} recent records`)
 }
+function refreshEntryRowCounts(){
+  for(const [bodyId,countId,klass] of [
+    ['simpleTripRows','stRowCount','.simple-trip-row'],
+    ['simpleHsdRows','shRowCount','.simple-hsd-row']]){
+    const body=$(bodyId),label=$(countId);
+    if(body&&label)label.textContent=body.querySelectorAll(klass).length+' rows';
+  }
+}
 function addSimpleTripRows(amount){
   const parent=$('simpleTripRows'),start=parent.querySelectorAll('.simple-trip-row').length;
   if(start+amount>200){toast('Maximum 200 entry rows per sheet. Save this sheet first.','bad');return}
@@ -626,6 +635,7 @@ function addSimpleTripRows(amount){
   const rowsSelect=$('stRows');
   if(rowsSelect)rowsSelect.dataset.actualRows=String(start+amount);
   bindLookups(parent);
+  refreshEntryRowCounts();
   const key=draftKey(state.module);
   [...parent.querySelectorAll('.simple-trip-row')].slice(start).forEach(row=>
     row.querySelectorAll('input,select,textarea').forEach(el=>{
@@ -653,6 +663,7 @@ function rebuildSimpleTripRows(){
     extra.forEach(row=>row.remove());
   }
   saveDraft('simpleTripForm',draftKey(state.module));
+  refreshEntryRowCounts();
 }
 function copyLookupDefault(srcId,dstId){
   const src=$(srcId),dst=$(dstId),srcText=$(srcId+'Text'),dstText=$(dstId+'Text');
@@ -867,6 +878,7 @@ async async function renderSimpleHsd(){
       <div class="field"><span>Rows</span><select id="shRows" onchange="rebuildSimpleHsdRows()"><option>5</option><option selected>10</option><option>20</option><option>30</option></select></div>
       <button type="button" class="btn outline" onclick="addSimpleHsdRows(10)">+10 Rows</button>
       <button type="button" class="btn outline" onclick="addSimpleHsdRows(20)">+20 Rows</button>
+      <span class="row-count-badge" id="shRowCount">10 rows</span>
       <div class="batch-hint"><b>${esc(modeLabel)} entry</b><span>${activeHsdEntryType==='RECEIPT'?'Supplier, litres and challan reference.':'Select equipment, fill litres and reference. Tab completes vehicle selections.'}</span></div>
     </div>
     <div class="simple-table-wrap"><table class="simple-grid-table software-entry-grid hsd-entry-grid">
@@ -890,6 +902,7 @@ function addSimpleHsdRows(amount){
   if(start+amount>200){toast('Maximum 200 HSD rows per sheet. Save this sheet first.','bad');return}
   parent.insertAdjacentHTML('beforeend',hsdGridRows(amount,start));
   bindLookups(parent);
+  refreshEntryRowCounts();
   const key=hsdDraftKey();
   [...parent.querySelectorAll('.simple-hsd-row')].slice(start).forEach(row=>
     row.querySelectorAll('input,select,textarea').forEach(el=>{
@@ -913,6 +926,7 @@ function rebuildSimpleHsdRows(){
     removed.forEach(row=>row.remove());
   }
   saveDraft('simpleHsdForm',hsdDraftKey());
+  refreshEntryRowCounts();
 }
 async function saveSimpleHsd(){
   const btn=$('shSave'),rows=[...document.querySelectorAll('.simple-hsd-row')];
@@ -1017,7 +1031,7 @@ async function saveSimpleMeters(){
 }
 function clearSimpleMeterDraft(){localStorage.removeItem(draftKey('HMR_KMR'));render()}
 window.NMTPLClearActiveDrafts=function(){NMTPLNet.clearUserDrafts(simpleUser())};
-function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module)){restoreDraft('simpleTripForm',draftKey(state.module));syncKocpRoutes()}if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){restoreDraft('simpleHsdForm',hsdDraftKey());document.querySelectorAll('.simple-hsd-row').forEach(r=>toggleHsdRow(r.dataset.i))}if(state.module==='HMR_KMR'){restoreDraft('simpleMeterForm',draftKey('HMR_KMR'));document.querySelectorAll('.simple-meter-row').forEach(r=>calcMeterRow(r.dataset.i))}const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
+function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module)){restoreDraft('simpleTripForm',draftKey(state.module));syncKocpRoutes()}if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){restoreDraft('simpleHsdForm',hsdDraftKey());document.querySelectorAll('.simple-hsd-row').forEach(r=>toggleHsdRow(r.dataset.i))}if(state.module==='HMR_KMR'){restoreDraft('simpleMeterForm',draftKey('HMR_KMR'));document.querySelectorAll('.simple-meter-row').forEach(r=>calcMeterRow(r.dataset.i))}refreshEntryRowCounts();const f=document.querySelector('.sidebar-foot b');if(f)f.textContent='v1.0 RC3 · Simple Field UX';if($('centralBtn'))$('centralBtn').style.display=isMgmt()?'':'none';if(!isMgmt()&&$('siteSwitcher')){const c=[...$('siteSwitcher').options].find(o=>o.value==='CENTRAL');if(c)c.remove()}}
 async function simpleRender(){
   const cfg=SIMPLE[siteId]||{entry:[],setup:[],review:[],control:[]};
   const visible=new Set(['DASHBOARD',...(cfg.entry||[]),...(cfg.setup||[]),...(cfg.review||[]),...(cfg.control||[])]);
