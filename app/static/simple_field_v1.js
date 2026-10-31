@@ -39,7 +39,7 @@ function restoreDraft(containerId,key){
   // BEFORE assigning saved fields; otherwise reopening loses the extra rows.
   if(containerId==='simpleTripForm'){
     const parent=$('simpleTripRows');
-    const indexes=Object.keys(o).map(k=>/^stVehicle(\\d+)$/.exec(k)).filter(Boolean).map(x=>Number(x[1]));
+    const indexes=Object.keys(o).map(k=>/^stVehicle(\d+)$/.exec(k)).filter(Boolean).map(x=>Number(x[1]));
     const count=indexes.length?Math.min(200,Math.max(...indexes)+1):0;
     const current=parent?.querySelectorAll('.simple-trip-row').length||0;
     if(parent&&count>current){
@@ -47,7 +47,7 @@ function restoreDraft(containerId,key){
       bindLookups(parent);
     }
     const hmr=$('kocpHmrRows');
-    const hmrIndices=Object.keys(o).map(k=>/^khMachine(\\d+)$/.exec(k)).filter(Boolean).map(x=>Number(x[1]));
+    const hmrIndices=Object.keys(o).map(k=>/^khMachine(\d+)$/.exec(k)).filter(Boolean).map(x=>Number(x[1]));
     const n=hmrIndices.length?Math.min(200,Math.max(...hmrIndices)+1):0;
     const existing=hmr?.querySelectorAll('.kocp-hmr-row').length||0;
     if(hmr&&n>existing){hmr.insertAdjacentHTML('beforeend',kocpHmrRows(n-existing,existing));bindLookups(hmr)}
