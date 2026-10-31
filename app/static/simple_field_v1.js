@@ -37,9 +37,31 @@ function clearDraft(containerId,key){localStorage.removeItem(key);const root=$(c
 function lookupMarkup(hiddenId,kind,placeholder,groups=''){
   return `<div class="lookup" data-kind="${kind}" data-hidden="${hiddenId}" data-groups="${groups}"><input id="${hiddenId}Text" type="text" autocomplete="off" placeholder="${esc(placeholder)}"><input id="${hiddenId}" type="hidden"><div class="lookup-menu"></div></div>`
 }
-function itemAllowed(w,item){if(siteId==='KOCP'&&w.dataset.kind==='MATERIAL'&&['TRIP','OB'].includes(state.module)){const name=String([item.label,item.sub,item.group,item.type,item.id].join(' ')).toUpperCase();const isOB=/OVERBURDEN|(^|[^A-Z])OB([^A-Z]|$)/.test(name);if((state.module==='OB')!==isOB)return false;}const g=(w.dataset.groups||'').split(',').map(x=>x.trim().toUpperCase()).filter(Boolean);if(!g.length)return true;const hay=`${item.group||''} ${item.type||''}`.toUpperCase();return g.some(x=>hay.includes(x))}
+function itemAllowed(w,item){
+  if(siteId==='KOCP'&&w.dataset.kind==='MATERIAL'&&['TRIP','OB'].includes(state.module)){
+    const name=String([item.label,item.sub,item.group,item.type,item.id].join(' ')).toUpperCase();
+    const isOB=/OVERBURDEN|(^|[^A-Z])OB([^A-Z]|$)/.test(name);
+    if((state.module==='OB')!==isOB)return false;
+  }
+  // KOCP activity + machine role are now checked on the server against the
+  // approved equipment master. Do not re-filter by vague model words here:
+  // "TATA HITACHI-3200" is a valid excavator without the word EXCAVATOR.
+  if(siteId==='KOCP'&&w.dataset.kind==='ASSET'&&['TRIP','OB'].includes(state.module))return true;
+  const g=(w.dataset.groups||'').split(',').map(x=>x.trim().toUpperCase()).filter(Boolean);
+  if(!g.length)return true;
+  const hay=`${item.group||''} ${item.type||''}`.toUpperCase();
+  return g.some(x=>hay.includes(x));
+}
 function bindLookups(root=document){root.querySelectorAll('.lookup:not([data-bound])').forEach(w=>{w.dataset.bound='1';const input=w.querySelector('input[type=text]'),hidden=w.querySelector('input[type=hidden]'),menu=w.querySelector('.lookup-menu');let timer=null,items=[],active=-1;
-  async function search(){const q=input.value.trim();menu.innerHTML='<div class="lookup-empty">Searching…</div>';w.classList.add('open');try{let data=await api(`/api/site-ops/${siteId}/lookups?kind=${encodeURIComponent(w.dataset.kind)}&q=${encodeURIComponent(q)}&limit=40`);data=(data||[]).filter(x=>itemAllowed(w,x));items=data;active=-1;menu.innerHTML=data.length?data.map((x,i)=>`<div class="lookup-item" data-i="${i}"><b>${esc(x.label)}</b><small>${esc(x.sub||x.id)}</small></div>`).join(''):'<div class="lookup-empty">No matching active master record</div>';menu.querySelectorAll('.lookup-item').forEach(el=>el.onclick=()=>choose(items[+el.dataset.i]))}catch(e){menu.innerHTML=`<div class="lookup-empty">${esc(e.message)}</div>`}}
+  async function search(){const q=input.value.trim();menu.innerHTML='<div class="lookup-empty">Searching…</div>';w.classList.add('open');try{
+    const groups=String(w.dataset.groups||'').toUpperCase();
+    const isKocpTrip=siteId==='KOCP'&&['TRIP','OB'].includes(state.module);
+    const activity=isKocpTrip&&w.dataset.kind==='ASSET'?(state.module==='OB'?'OB':'COAL'):'';
+    const role=activity?(/TRIPPER|TIPPER|DUMPER|TRANSPORT|VEHICLE/.test(groups)?'TRANSPORT':'LOADING'):'';
+    const params=new URLSearchParams({kind:w.dataset.kind,q,limit:activity?'200':'40'});
+    if(activity){params.set('activity',activity);params.set('role',role)}
+    let data=await api(`/api/site-ops/${siteId}/lookups?${params.toString()}`);
+    data=(data||[]).filter(x=>itemAllowed(w,x));items=data;active=-1;menu.innerHTML=data.length?data.map((x,i)=>`<div class="lookup-item" data-i="${i}"><b>${esc(x.label)}</b><small>${esc(x.sub||x.id)}</small></div>`).join(''):'<div class="lookup-empty">No matching active master record</div>';menu.querySelectorAll('.lookup-item').forEach(el=>el.onclick=()=>choose(items[+el.dataset.i]))}catch(e){menu.innerHTML=`<div class="lookup-empty">${esc(e.message)}</div>`}}
   function choose(x){hidden.value=x.id;input.value=x.label;input.dataset.selected=x.id;input.dataset.vehicleNo=x.vehicleNo||'';input.dataset.doorNo=x.doorNo||'';w.classList.remove('open');input.dispatchEvent(new Event('change',{bubbles:true}))}
   input.addEventListener('focus',search);input.addEventListener('input',()=>{hidden.value='';input.dataset.selected='';clearTimeout(timer);timer=setTimeout(search,160)});input.addEventListener('keydown',e=>{if(!w.classList.contains('open'))return;if(e.key==='ArrowDown'){e.preventDefault();active=Math.min(active+1,items.length-1)}else if(e.key==='ArrowUp'){e.preventDefault();active=Math.max(active-1,0)}else if(e.key==='Enter'&&active>=0){e.preventDefault();choose(items[active])}else if(e.key==='Escape'){w.classList.remove('open')}else return;menu.querySelectorAll('.lookup-item').forEach((el,i)=>el.classList.toggle('active',i===active))})
 })}
@@ -212,9 +234,9 @@ async function renderTiomProduction(){const [acts,recent]=await Promise.all([api
 async function saveTiomSimpleProduction(){const btn=$('spSave');try{for(const id of ['spMachine','spVehicle','spSource','spDest','spMaterial'])if(!$(id).value)throw new Error(`Choose a valid ${id.replace('sp','').toLowerCase()} from search`);if(!$('spUnload').value)throw new Error('Enter unloading time');btn.disabled=true;const body={operatingDate:$('spDate').value,shift:$('spShift').value,loadingAt:$('spLoad').value,unloadingAt:$('spUnload').value,machineId:$('spMachine').value,vehicleId:$('spVehicle').value,sourceLocationId:$('spSource').value,destinationLocationId:$('spDest').value,materialId:$('spMaterial').value,activity:$('spActivity').value};body.requestId=getReq('PRODUCTION',body,'single');const r=await api('/api/site-ops/TIOM/production/simple',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});clearDraft('tiomSimpleForm',draftKey('PRODUCTION'));clearReq('PRODUCTION');toast(r.idempotent?'Entry already saved — no duplicate created':'Production entry saved');await render()}catch(e){toast(e.message,'bad')}finally{if(btn)btn.disabled=false}}
 function clearTiomSimpleDraft(){localStorage.removeItem(draftKey('PRODUCTION'));clearReq('PRODUCTION');render()}
 
-function kocpHmrRows(count=5){
+function kocpHmrRows(count=5,start=0){
   if(siteId!=='KOCP')return'';
-  return Array.from({length:count},(_,i)=>`<tr class="kocp-hmr-row" data-i="${i}">
+  return Array.from({length:count},(_,index)=>{const i=start+index;return `<tr class="kocp-hmr-row" data-i="${i}">
     <td>${i+1}</td>
     <td>${lookupMarkup(`khMachine${i}`,'ASSET','Loader / Excavator','LOADING,LOADER,EXCAVATOR')}</td>
     <td><select id="khShift${i}">${shiftOpts(simpleShift())}</select></td>
@@ -222,12 +244,13 @@ function kocpHmrRows(count=5){
     <td><input id="khClose${i}" type="number" step="0.01" inputmode="decimal" oninput="calcKocpHmr(${i})" placeholder="Close"></td>
     <td><input id="khRun${i}" class="simple-readonly" readonly></td>
     <td><span id="khStatus${i}" class="simple-status muted">Ready</span></td>
-  </tr>`).join('')
+  </tr>`}).join('')
 }
 function calcKocpHmr(i){
-  const a=Number($(`khOpen${i}`)?.value),b=Number($(`khClose${i}`)?.value),u=$(`khRun${i}`),st=$(`khStatus${i}`);
+  const open=$(`khOpen${i}`)?.value,close=$(`khClose${i}`)?.value;
+  const a=Number(open),b=Number(close),u=$(`khRun${i}`),st=$(`khStatus${i}`);
   if(!u)return;
-  if(!Number.isFinite(a)||!Number.isFinite(b)){u.value='';return}
+  if(open===''||close===''||!Number.isFinite(a)||!Number.isFinite(b)){u.value='';return}
   if(b<a){u.value='';st.textContent='Close < Open';st.className='simple-status bad';return}
   u.value=(b-a).toFixed(2);
   if(!st.classList.contains('good')){st.textContent='Ready';st.className='simple-status info'}
@@ -237,17 +260,28 @@ function syncKocpHmrMachines(){
   const used=[];
   document.querySelectorAll('.simple-trip-row').forEach(row=>{
     const i=row.dataset.i,id=$(`stLoader${i}`)?.value,text=$(`stLoader${i}Text`);
-    if(id&&!used.some(x=>x.id===id))used.push({id,label:text?.value||id,data:{...(text?.dataset||{})},shift:row.querySelector('.stShift')?.value||simpleShift()});
+    const shift=row.querySelector('.stShift')?.value||simpleShift();
+    if(id&&!used.some(x=>x.id===id&&x.shift===shift))
+      used.push({id,label:text?.value||id,data:{...(text?.dataset||{})},shift});
   });
-  const slots=[...document.querySelectorAll('.kocp-hmr-row')];
   used.forEach(m=>{
-    if(slots.some(r=>$(`khMachine${r.dataset.i}`)?.value===m.id))return;
-    const row=slots.find(r=>!$(`khMachine${r.dataset.i}`)?.value);if(!row)return;
+    if([...document.querySelectorAll('.kocp-hmr-row')].some(r=>
+        $(`khMachine${r.dataset.i}`)?.value===m.id && $(`khShift${r.dataset.i}`)?.value===m.shift))return;
+    let row=[...document.querySelectorAll('.kocp-hmr-row')].find(r=>!$(`khMachine${r.dataset.i}`)?.value);
+    if(!row){
+      const parent=$('kocpHmrRows');
+      const i=parent.querySelectorAll('.kocp-hmr-row').length;
+      parent.insertAdjacentHTML('beforeend',kocpHmrRows(1,i));
+      bindLookups(parent);
+      row=parent.lastElementChild;
+    }
     const i=row.dataset.i,h=$(`khMachine${i}`),t=$(`khMachine${i}Text`);
-    h.value=m.id;if(t){t.value=m.label;for(const k of ['vehicleNo','doorNo','group','type'])if(m.data[k])t.dataset[k]=m.data[k]}
+    h.value=m.id;
+    if(t){t.value=m.label;for(const k of ['vehicleNo','doorNo','group','type'])if(m.data[k])t.dataset[k]=m.data[k]}
     $(`khShift${i}`).value=m.shift;
   });
 }
+
 async function saveKocpHmrRows(){
   if(siteId!=='KOCP')return{used:0,done:0};
   syncKocpHmrMachines();
@@ -335,9 +369,9 @@ function applyKocpRoute(i){
 function syncKocpRoutes(){
   if(siteId==='KOCP')document.querySelectorAll('.simple-trip-row').forEach(row=>applyKocpRoute(row.dataset.i));
 }
-function tripGridRows(kind,count=10){
+function tripGridRows(kind,count=10,start=0){
   const isSocp=siteId==='SOCP';
-  return Array.from({length:count},(_,i)=>`<tr class="simple-trip-row" data-i="${i}">
+  return Array.from({length:count},(_,index)=>{const i=start+index;return `<tr class="simple-trip-row" data-i="${i}">
     <td>${i+1}</td>
     <td><select class="stShift">${shiftOpts(simpleShift())}</select></td>
     <td>${lookupMarkup(`stVehicle${i}`,'ASSET','Vehicle','TRANSPORT,VEHICLE,TIPPER,DUMPER')}</td>
@@ -349,7 +383,7 @@ function tripGridRows(kind,count=10){
     <td><input class="stGp" id="stGp${i}" placeholder="GP / ref"></td>
     <td>${isSocp?`<input class="stQty qty" id="stQty${i}" type="number" inputmode="decimal" min="0" step="0.001" placeholder="MT">`:'<span class="simple-status muted">Auto by MCL rule</span>'}</td>
     <td><span id="stStatus${i}" class="simple-status muted">Ready</span></td>
-  </tr>`).join('')
+  </tr>`}).join('')
 }
 function defaultLookupBox(id,label,groups=''){return `<div class="field"><span>${label}</span>${lookupMarkup(id,groups==='MATERIAL'?'MATERIAL':groups==='LOCATION'?'LOCATION':'ASSET','Search '+label,groups==='MATERIAL'||groups==='LOCATION'?'':groups)}</div>`}
 async function renderSimpleTrips(kind='TRIP'){
@@ -389,6 +423,8 @@ async function renderSimpleTrips(kind='TRIP'){
         ${defaultLookupBox('stDefaultMaterial','Default Material','MATERIAL')}
         <div class="field"><span>Rows</span><select id="stRows" onchange="rebuildSimpleTripRows()"><option>5</option><option selected>10</option><option>20</option><option>30</option></select></div>
         <button class="btn outline apply-defaults-btn" onclick="applyTripDefaults()">Apply Defaults to Blank Rows</button>
+        <button class="btn outline" type="button" onclick="addSimpleTripRows(10)">+10 Rows</button>
+        <button class="btn outline" type="button" onclick="addSimpleTripRows(20)">+20 Rows</button>
       </div>`;
   const heads=isSocp
     ?'<th>#</th><th>Shift</th><th>Vehicle</th><th>Loader</th><th>Unloading Point</th><th>GP / Ref</th><th>Qty MT</th><th>Status</th>'
@@ -405,12 +441,32 @@ async function renderSimpleTrips(kind='TRIP'){
     <div class="simple-actions"><button id="stSave" class="btn primary" onclick="saveSimpleTrips('TRIP')">Save ${siteId==='KOCP'?(obMode?'OB':'Coal'):'Production'} Sheet</button><button class="btn outline" onclick="clearSimpleTripDraft()">Clear</button><span class="draft-state">Draft autosaves on this PC</span></div>
   </div>`+panel('Today’s Entries',recentTable(recentHeads,rows),`${viewRec.length} recent records`)
 }
+function addSimpleTripRows(amount){
+  const parent=$('simpleTripRows'),start=parent.querySelectorAll('.simple-trip-row').length;
+  if(start+amount>200){toast('Maximum 200 entry rows per sheet. Save this sheet first.','bad');return}
+  // Append without recreating earlier rows: unsaved field entries are retained.
+  parent.insertAdjacentHTML('beforeend',tripGridRows('TRIP',amount,start));
+  bindLookups(parent);
+  saveDraft('simpleTripForm',draftKey(state.module));
+}
 function rebuildSimpleTripRows(){
   const n=+$('stRows').value||10;
-  $('simpleTripRows').innerHTML=tripGridRows('TRIP',n);
-  bindLookups($('simpleTripForm'));
-  restoreDraft('simpleTripForm',draftKey(state.module));
-  syncKocpRoutes();
+  const parent=$('simpleTripRows');
+  const previous=parent.querySelectorAll('.simple-trip-row').length;
+  if(n>previous){addSimpleTripRows(n-previous);return}
+  if(n<previous){
+    // Only remove entirely untouched blank trailing rows.
+    const rows=[...parent.querySelectorAll('.simple-trip-row')];
+    const extra=rows.slice(n);
+    if(extra.some(row=>[...row.querySelectorAll('input:not([type=hidden]),select')].some(x=>
+      x.classList.contains('stShift')?false:!!x.value))){
+      toast('Rows already contain entries. Save or Clear before reducing the row count.','bad');
+      $('stRows').value=String(previous);
+      return;
+    }
+    extra.forEach(row=>row.remove());
+  }
+  saveDraft('simpleTripForm',draftKey(state.module));
 }
 function copyLookupDefault(srcId,dstId){
   const src=$(srcId),dst=$(dstId),srcText=$(srcId+'Text'),dstText=$(dstId+'Text');
