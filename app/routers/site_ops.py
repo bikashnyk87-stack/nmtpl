@@ -322,46 +322,8 @@ def _parse_simple_dt(raw, field_name: str):
         raise HTTPException(422, f"Invalid {field_name}")
 
 
-@router.post("/{site_id}/trips/simple")
-def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Session = Depends(get_db)):
-    csrf(request)
-    user = get_user(db, request)
-    site_id = require_site(db, user, site_id)
-    if site_id not in {"SOCP", "KOCP"}:
-        raise HTTPException(409, "Simple site trip entry is configured for SOCP/KOCP")
-    kind = str(payload.get("kind") or "TRIP").strip().upper()
-    # KOCP uses one Production Entry. Material determines Coal vs OB logic.
-    require_permission(db, user, site_id, "TRIP", "CREATE")
-    try:
-        operating_day = date.fromisoformat(str(payload.get("operatingDate") or ''))
-    except Exception:
-        raise HTTPException(422, "Operating date is required")
-    shift = str(payload.get("shift") or '').strip().upper()
-    shift_row = db.get(SiteShift, {"site_id": site_id, "shift": shift})
-    if not shift_row or not shift_row.active:
-        raise HTTPException(422, "Choose a valid shift")
-    request_id = str(payload.get("requestId") or '').strip()
-    if not request_id:
-        raise HTTPException(422, "Request ID is required")
-    route_id = str(payload.get("routeId") or "").strip() or None
-    existing = db.scalar(select(SiteTrip).where(SiteTrip.site_id == site_id, SiteTrip.source_type == "PORTAL_SIMPLE", SiteTrip.source_record_uid == request_id))
-    if existing:
-        same = (
-            existing.operating_date == operating_day and existing.shift == shift and
-            (existing.route_id or None) == route_id and
-            (existing.vehicle_id or None) == (str(payload.get("vehicleId") or '').strip() or None) and
-            (existing.loading_equipment_id or None) == (str(payload.get("loadingEquipmentId") or '').strip() or None) and
-            (existing.destination_location_id or None) == (str(payload.get("destinationLocationId") or '').strip() or None) and
-            (existing.material_id or None) == (str(payload.get("materialId") or '').strip() or None) and
-            (existing.gp_no or None) == (str(payload.get("gpNo") or '').strip() or None)
-        )
-        qmt = payload.get("quantityMt"); qcum = payload.get("quantityCum")
-        if qmt not in (None, ''): same = same and existing.quantity_mt == Decimal(str(qmt))
-        if qcum not in (None, ''): same = same and existing.quantity_cum == Decimal(str(qcum))
-        if not same:
-            raise HTTPException(409, "This retry ID belongs to a different trip. The new row was NOT saved; refresh and save again.")
-        return {"ok": True, "tripId": existing.trip_id, "idempotent": True}
-
+def _validated_simple_trip_fields(db: Session, site_id: str, payload: dict, operating_day: date, shift: str, route_id: str | None):
+    """Shared master/route/MCL validation for new entries and corrections."""
     vehicle = str(payload.get("vehicleId") or '').strip() or None
     loader = str(payload.get("loadingEquipmentId") or '').strip() or None
     source = str(payload.get("sourceLocationId") or '').strip() or None
@@ -473,6 +435,53 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
             mt = factor.factor_value
             basis = "MCL_SHIFT_AVERAGE"
 
+    return vehicle, loader, source, destination, material, gp_no, mt, cum, factor, basis
+
+
+@router.post("/{site_id}/trips/simple")
+def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Session = Depends(get_db)):
+    csrf(request)
+    user = get_user(db, request)
+    site_id = require_site(db, user, site_id)
+    if site_id not in {"SOCP", "KOCP"}:
+        raise HTTPException(409, "Simple site trip entry is configured for SOCP/KOCP")
+    kind = str(payload.get("kind") or "TRIP").strip().upper()
+    # KOCP uses one Production Entry. Material determines Coal vs OB logic.
+    require_permission(db, user, site_id, "TRIP", "CREATE")
+    try:
+        operating_day = date.fromisoformat(str(payload.get("operatingDate") or ''))
+    except Exception:
+        raise HTTPException(422, "Operating date is required")
+    shift = str(payload.get("shift") or '').strip().upper()
+    shift_row = db.get(SiteShift, {"site_id": site_id, "shift": shift})
+    if not shift_row or not shift_row.active:
+        raise HTTPException(422, "Choose a valid shift")
+    request_id = str(payload.get("requestId") or '').strip()
+    if not request_id:
+        raise HTTPException(422, "Request ID is required")
+    route_id = str(payload.get("routeId") or "").strip() or None
+    existing = db.scalar(select(SiteTrip).where(SiteTrip.site_id == site_id, SiteTrip.source_type == "PORTAL_SIMPLE", SiteTrip.source_record_uid == request_id))
+    if existing:
+        if existing.status == "VOID":
+            raise HTTPException(409, "This trip has been voided. Refresh the production register.")
+        same = (
+            existing.operating_date == operating_day and existing.shift == shift and
+            (existing.route_id or None) == route_id and
+            (existing.vehicle_id or None) == (str(payload.get("vehicleId") or '').strip() or None) and
+            (existing.loading_equipment_id or None) == (str(payload.get("loadingEquipmentId") or '').strip() or None) and
+            (existing.destination_location_id or None) == (str(payload.get("destinationLocationId") or '').strip() or None) and
+            (existing.material_id or None) == (str(payload.get("materialId") or '').strip() or None) and
+            (existing.gp_no or None) == (str(payload.get("gpNo") or '').strip() or None)
+        )
+        qmt = payload.get("quantityMt"); qcum = payload.get("quantityCum")
+        if qmt not in (None, ''): same = same and existing.quantity_mt == Decimal(str(qmt))
+        if qcum not in (None, ''): same = same and existing.quantity_cum == Decimal(str(qcum))
+        if not same:
+            raise HTTPException(409, "This retry ID belongs to a different trip. The new row was NOT saved; refresh and save again.")
+        return {"ok": True, "tripId": existing.trip_id, "idempotent": True}
+
+    vehicle, loader, source, destination, material, gp_no, mt, cum, factor, basis = _validated_simple_trip_fields(db, site_id, payload, operating_day, shift, route_id)
+
     if site_id == "SOCP" and mt is None:
         raise HTTPException(422, "Quantity MT is required")
     event_at = datetime.combine(operating_day, shift_row.start_time)
@@ -492,6 +501,97 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
     })
     db.commit()
     return {"ok": True, "tripId": trip_id, "operatingDate": operating_day, "shift": shift, "quantityMt": mt, "quantityCum": cum, "weightBasis": basis}
+
+
+
+@router.post("/KOCP/trips/{trip_id}/correct")
+def correct_kocp_trip(trip_id: str, payload: dict, request: Request, db: Session = Depends(get_db)):
+    """Audited field correction. No physical deletion; MCL factor is recalculated."""
+    csrf(request)
+    user = get_user(db, request)
+    site_id = require_site(db, user, "KOCP")
+    if not user.admin and not has_permission(db, user, site_id, "TRIP", "EDIT"):
+        raise HTTPException(403, "Trip correction permission is required.")
+    row = db.scalar(select(SiteTrip).where(
+        SiteTrip.trip_id == trip_id, SiteTrip.site_id == site_id).with_for_update())
+    if not row:
+        raise HTTPException(404, "KOCP trip not found.")
+    if row.source_type != "PORTAL_SIMPLE":
+        raise HTTPException(409, "Only field-entered KOCP trips can be changed here.")
+    if row.status != "POSTED":
+        raise HTTPException(409, "Only posted trips can be corrected. This trip is already voided or closed.")
+    try:
+        expected_version = int(payload.get("expectedVersion"))
+    except (TypeError, ValueError):
+        raise HTTPException(422, "Reload the trip before correcting it.")
+    if expected_version != row.version:
+        raise HTTPException(409, "Another user changed this trip. Refresh the register and review the latest record.")
+    reason = str(payload.get("reason") or "").strip()
+    if len(reason) < 5 or len(reason) > 500:
+        raise HTTPException(422, "Enter a correction reason (5–500 characters).")
+    action = str(payload.get("action") or "").strip().upper()
+    if action not in {"EDIT", "VOID"}:
+        raise HTTPException(422, "Choose Edit or Void.")
+    # An approved billing period is locked against retrospective quantity changes.
+    approved = db.scalar(select(SiteBillingReconciliation.billing_id).where(
+        SiteBillingReconciliation.site_id == site_id,
+        SiteBillingReconciliation.status == "APPROVED",
+        SiteBillingReconciliation.period_start <= row.operating_date,
+        SiteBillingReconciliation.period_end >= row.operating_date,
+    ).limit(1))
+    if approved:
+        raise HTTPException(409, "This trip belongs to an approved billing period. Request a billing revision first.")
+    before = {
+        "version": row.version, "status": row.status, "date": str(row.operating_date),
+        "shift": row.shift, "vehicleId": row.vehicle_id,
+        "loadingEquipmentId": row.loading_equipment_id,
+        "routeId": row.route_id, "sourceLocationId": row.source_location_id,
+        "destinationLocationId": row.destination_location_id,
+        "materialId": row.material_id, "gpNo": row.gp_no,
+        "quantityMt": str(row.quantity_mt) if row.quantity_mt is not None else None,
+        "quantityCum": str(row.quantity_cum) if row.quantity_cum is not None else None,
+        "factorId": row.factor_id,
+    }
+    if action == "VOID":
+        row.status = "VOID"
+    else:
+        shift = str(payload.get("shift") or "").strip().upper()
+        shift_row = db.get(SiteShift, {"site_id": site_id, "shift": shift})
+        if not shift_row or not shift_row.active:
+            raise HTTPException(422, "Choose a valid shift.")
+        route_id = str(payload.get("routeId") or "").strip() or None
+        fields = _validated_simple_trip_fields(db, site_id, payload, row.operating_date, shift, route_id)
+        vehicle, loader, source, destination, material, gp_no, mt, cum, factor, basis = fields
+        if not all((vehicle, loader, source, destination, material)):
+            raise HTTPException(422, "Vehicle, loader, source, destination and material are required.")
+        row.shift = shift
+        row.event_at = datetime.combine(row.operating_date, shift_row.start_time)
+        row.vehicle_id = vehicle
+        row.loading_equipment_id = loader
+        row.route_id = route_id
+        row.source_location_id = source
+        row.destination_location_id = destination
+        row.material_id = material
+        row.gp_no = gp_no
+        row.quantity_mt = mt
+        row.quantity_cum = cum
+        row.weight_basis = basis
+        row.factor_id = factor.factor_id if factor else None
+    row.version = (row.version or 1) + 1
+    row.updated_at = datetime.now(timezone.utc)
+    after = {
+        "version": row.version, "status": row.status, "shift": row.shift,
+        "vehicleId": row.vehicle_id, "loadingEquipmentId": row.loading_equipment_id,
+        "routeId": row.route_id, "sourceLocationId": row.source_location_id,
+        "destinationLocationId": row.destination_location_id, "materialId": row.material_id,
+        "gpNo": row.gp_no, "quantityMt": str(row.quantity_mt) if row.quantity_mt is not None else None,
+        "quantityCum": str(row.quantity_cum) if row.quantity_cum is not None else None,
+        "factorId": row.factor_id,
+    }
+    _audit(db, user, site_id, action + "_KOCP_TRIP", "site_trip", row.trip_id,
+           before=before, after=after, reason=reason)
+    db.commit()
+    return {"ok": True, "tripId": row.trip_id, "status": row.status, "version": row.version}
 
 
 @router.get("/TIOM/production/simple")
