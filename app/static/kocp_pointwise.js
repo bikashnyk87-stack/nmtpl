@@ -159,4 +159,5 @@ window.koPointChangeDestination=koPointChangeDestination;
 window.koPointChangeRoute=koPointChangeRoute;
 window.koPointSaveRule=koPointSaveRule;
 window.koPointReloadReport=koPointReloadReport;
+window.renderKocpPointReport=renderKocpPointReport;
 window.renderFactor=renderKocpPointFactors;
