@@ -274,7 +274,7 @@ def list_routes(site_id:str,request:Request,kind:str|None=None,db:Session=Depend
     if site_id!="KOCP":
         raise HTTPException(404,"KOCP movement routes only.")
     if not user.admin and not any(has_permission(db,user,site_id,module,action)
-        for module in ("MASTERS","TRIP","OB") for action in ("VIEW","CREATE","EDIT","APPROVE")):
+        for module in ("MASTERS","TRIP","OB","MCL_FACTOR") for action in ("VIEW","CREATE","EDIT","APPROVE")):
         raise HTTPException(403,"Route lookup permission is required.")
     stmt=select(SiteMovementRoute).where(SiteMovementRoute.site_id=="KOCP")
     if kind:stmt=stmt.where(SiteMovementRoute.movement_kind==_kind(kind))

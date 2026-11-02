@@ -351,6 +351,8 @@ class SiteWeightFactor(Base):
     operating_date: Mapped[date | None] = mapped_column(Date, index=True)
     shift: Mapped[str | None] = mapped_column(String(20), index=True)
     material_id: Mapped[str | None] = mapped_column(ForeignKey("site_material.site_material_id"), index=True)
+    destination_location_id: Mapped[str | None] = mapped_column(ForeignKey("site_location.site_location_id"), index=True)
+    route_id: Mapped[str | None] = mapped_column(ForeignKey("site_movement_route.route_id"), index=True)
     vehicle_class: Mapped[str | None] = mapped_column(String(80), index=True)
     factor_value: Mapped[Decimal] = mapped_column(Numeric(16, 6))
     factor_unit: Mapped[str] = mapped_column(String(30))
@@ -1064,6 +1066,10 @@ def ensure_tiom_entry_columns(engine) -> None:
     targets = {
         'tiom_source_deployment': {'operator_id': 'VARCHAR(60)'},
         'site_trip': {'route_id': 'VARCHAR(80)'},
+        'site_weight_factor': {
+            'destination_location_id': 'VARCHAR(80)',
+            'route_id': 'VARCHAR(80)',
+        },
         'tiom_drilling_shift': {
             'rom_ob_holes': 'INTEGER',
             'bhj_bhq_holes': 'INTEGER',

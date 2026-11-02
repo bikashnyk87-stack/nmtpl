@@ -155,7 +155,7 @@ def material_types(site_id:str,request:Request,db:Session=Depends(get_db)):
     site_id=require_site(db,user,site_id)
     if site_id!="KOCP":raise HTTPException(404,"KOCP material catalog only.")
     if not user.admin and not any(has_permission(db,user,site_id,module,action)
-        for module in ("MASTERS","TRIP","OB") for action in ("VIEW","CREATE","EDIT","APPROVE")):
+        for module in ("MASTERS","TRIP","OB","MCL_FACTOR") for action in ("VIEW","CREATE","EDIT","APPROVE")):
         raise HTTPException(403,"Material lookup permission required.")
     return _catalog(db)
 

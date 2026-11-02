@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse, StreamingResponse
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.auth import WebUser, csrf, get_user
@@ -53,6 +53,7 @@ from app.site_models import (
     TiomMisTripRow,
     TiomMisReconciliation,
 )
+from app.services.kocp_factor_rules import resolve_kocp_point_factor
 from app.services.kocp_equipment import (
     kocp_asset_allowed, kocp_role_allowed, kocp_asset_display,
 )
@@ -415,17 +416,13 @@ def _validated_simple_trip_fields(db: Session, site_id: str, payload: dict, oper
             SiteMovementRoute.active.is_(True)).limit(1)):
             raise HTTPException(422, f"Select a {movement_kind} master route for this entry.")
         factor_type = "OB_CUM_PER_TRIP" if is_ob else "COAL_AVG_MT_PER_TRIP"
-        stmt = select(SiteWeightFactor).where(
-            SiteWeightFactor.site_id == site_id, SiteWeightFactor.factor_type == factor_type,
-            SiteWeightFactor.status == "APPROVED", SiteWeightFactor.effective_from <= operating_day,
-            or_(SiteWeightFactor.effective_to.is_(None), SiteWeightFactor.effective_to >= operating_day),
-            or_(SiteWeightFactor.operating_date.is_(None), SiteWeightFactor.operating_date == operating_day),
-            or_(SiteWeightFactor.shift.is_(None), SiteWeightFactor.shift == shift),
-        ).order_by(SiteWeightFactor.operating_date.desc(), SiteWeightFactor.effective_from.desc(), SiteWeightFactor.version.desc())
-        factor = db.scalars(stmt).first()
-        if not factor:
-            friendly = "OB CuM/trip" if is_ob else "Coal average MT/trip"
-            raise HTTPException(409, f"No approved MCL {friendly} rule is configured for {operating_day} Shift {shift}. Ask the supervisor to set it first.")
+        selected_vehicle = db.get(Equipment, vehicle) if vehicle else None
+        factor = resolve_kocp_point_factor(
+            db, factor_type=factor_type, operating_day=operating_day,
+            shift=shift, destination_id=destination, route_id=route_id,
+            material_id=material, vehicle_type=selected_vehicle.type if selected_vehicle else None,
+            vehicle_group=selected_vehicle.group if selected_vehicle else None,
+        )
         if is_ob:
             mt = None
             cum = factor.factor_value
@@ -592,6 +589,93 @@ def correct_kocp_trip(trip_id: str, payload: dict, request: Request, db: Session
            before=before, after=after, reason=reason)
     db.commit()
     return {"ok": True, "tripId": row.trip_id, "status": row.status, "version": row.version}
+
+
+
+@router.get("/KOCP/reports/point-wise")
+def kocp_point_wise_report(
+    request: Request, from_date: date, to_date: date,
+    db: Session = Depends(get_db),
+):
+    user = get_user(db, request)
+    require_site(db, user, "KOCP")
+    if not user.admin and not has_permission(db, user, "KOCP", "REPORTS", "VIEW"):
+        raise HTTPException(403, "KOCP reports permission required.")
+    if to_date < from_date or (to_date - from_date).days > 92:
+        raise HTTPException(422, "Choose a date range of up to 93 days.")
+    groups = db.execute(select(
+        SiteTrip.operating_date, SiteTrip.shift,
+        SiteTrip.material_id, SiteTrip.destination_location_id, SiteTrip.route_id,
+        func.count(SiteTrip.trip_id),
+        func.coalesce(func.sum(SiteTrip.quantity_mt), 0),
+        func.coalesce(func.sum(SiteTrip.quantity_cum), 0),
+        func.sum(case((SiteTrip.factor_id.is_(None), 1), else_=0)),
+        func.count(func.distinct(SiteTrip.factor_id)),
+    ).where(
+        SiteTrip.site_id == "KOCP", SiteTrip.status == "POSTED",
+        SiteTrip.operating_date >= from_date, SiteTrip.operating_date <= to_date,
+    ).group_by(
+        SiteTrip.operating_date, SiteTrip.shift,
+        SiteTrip.material_id, SiteTrip.destination_location_id, SiteTrip.route_id,
+    ).order_by(
+        SiteTrip.operating_date, SiteTrip.shift, SiteTrip.destination_location_id,
+        SiteTrip.route_id,
+    )).all()
+    if len(groups) > 5000:
+        raise HTTPException(422, "Report is too large. Select a shorter date range.")
+    materials = {m.site_material_id: m for m in db.scalars(select(SiteMaterial).where(SiteMaterial.site_id == "KOCP"))}
+    destinations = {x.site_location_id: x for x in db.scalars(select(SiteLocation).where(SiteLocation.site_id == "KOCP"))}
+    routes = {x.route_id: x for x in db.scalars(select(SiteMovementRoute).where(SiteMovementRoute.site_id == "KOCP"))}
+    summary = {}
+    daily = []
+    overall = {"COAL": {"trips": 0, "quantity": Decimal("0")},
+               "OB": {"trips": 0, "quantity": Decimal("0")}}
+    for day, shift, mid, dest, route_id, count, mt, cum, missing, factors in groups:
+        material = materials.get(mid)
+        route = routes.get(route_id)
+        ob = bool(material and str(material.default_unit or "").upper() in {"CUM", "M3", "M³"})
+        kind = "OB" if ob else "COAL"
+        unit = "CuM" if ob else "MT"
+        qty = Decimal(str(cum if ob else mt))
+        trips = int(count or 0)
+        item = {
+            "date": day.isoformat(), "shift": shift,
+            "materialId": mid, "material": material.name if material else "Unknown material",
+            "destinationLocationId": dest,
+            "destination": destinations[dest].name if dest in destinations else "Unknown destination",
+            "routeId": route_id,
+            "movement": route.route_group if route else "Unclassified movement",
+            "distance": route.distance_range if route else "—",
+            "kind": kind, "unit": unit, "trips": trips, "quantity": str(qty),
+            "weightedAverage": str(qty / trips) if trips else None,
+            "missingFactorTrips": int(missing or 0),
+            "distinctFactors": int(factors or 0),
+        }
+        daily.append(item)
+        key = (kind, mid, dest, route_id)
+        if key not in summary:
+            summary[key] = {k: v for k, v in item.items() if k not in {
+                "date", "shift", "weightedAverage"
+            }}
+            summary[key]["trips"] = 0
+            summary[key]["quantity"] = "0"
+            summary[key]["missingFactorTrips"] = 0
+            summary[key]["distinctFactors"] = None  # varied dates can use different versions
+        rec = summary[key]
+        rec["trips"] += trips
+        rec["quantity"] = str(Decimal(rec["quantity"]) + qty)
+        rec["missingFactorTrips"] += int(missing or 0)
+        overall[kind]["trips"] += trips
+        overall[kind]["quantity"] += qty
+    summaries = []
+    for rec in summary.values():
+        rec["weightedAverage"] = str(Decimal(rec["quantity"]) / rec["trips"]) if rec["trips"] else None
+        summaries.append(rec)
+    totals = {kind: {"trips": vals["trips"], "quantity": str(vals["quantity"]),
+                     "weightedAverage": str(vals["quantity"] / vals["trips"]) if vals["trips"] else None,
+                     "unit": "CuM" if kind == "OB" else "MT"} for kind, vals in overall.items()}
+    return {"fromDate": from_date, "toDate": to_date,
+            "pointSummary": summaries, "dailyShift": daily, "totals": totals}
 
 
 @router.get("/TIOM/production/simple")
@@ -1836,7 +1920,7 @@ def operations_dashboard(
         ).order_by(SiteWeightFactor.factor_type,SiteWeightFactor.shift,SiteWeightFactor.version.desc()).limit(20)).all()
         seen=set()
         for r in rows:
-            key=(r.factor_type,r.shift or "ALL")
+            key=(r.factor_type,r.shift or "ALL",r.destination_location_id,r.route_id,r.material_id,r.vehicle_class)
             if key in seen: continue
             seen.add(key)
             current_factors.append({
@@ -1845,6 +1929,9 @@ def operations_dashboard(
                 "value":_fmt_decimal(r.factor_value),
                 "unit":r.factor_unit,
                 "reference":r.reference_no,
+                "destinationLocationId": r.destination_location_id,
+                "routeId": r.route_id,
+                "materialId": r.material_id,
             })
 
     latest_survey=None
