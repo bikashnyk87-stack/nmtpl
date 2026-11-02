@@ -65,9 +65,9 @@ async function renderKocpPointFactors(){
     <div class="form-grid">
       <div class="field"><span>Material type</span><select id="pfKind" onchange="koPointChangeKind()">
         <option value="COAL">Coal / Reject (MT)</option><option value="OB">OB (CuM)</option></select></div>
-      <div class="field"><span>Unloading point *</span><select id="pfDest" onchange="koPointChangeDestination()"></select></div>
+      <div class="field"><span>Unloading point *</span><select id="pfDest" onchange="koPointChangeDestination()">${koPointOpts(koPointDestinations("COAL"),"id","name","Choose unloading point")}</select></div>
       <div class="field"><span>Route / distance (optional)</span><select id="pfRoute" onchange="koPointChangeRoute()"></select></div>
-      <div class="field"><span>Material *</span><select id="pfMaterial"></select></div>
+      <div class="field"><span>Material *</span><select id="pfMaterial">${koPointOpts(koPointMaterials("COAL"),"materialId","name","Choose material")}</select></div>
       <div class="field"><span>Approved average / trip *</span><input id="pfValue" type="number" step="0.000001" min="0.000001" placeholder="Enter MCL-approved value"></div>
       <div class="field"><span>Unit</span><strong id="pfUnit">MT/TRIP</strong></div>
       <div class="field"><span>Effective from *</span><input id="pfFrom" type="date" value="${date}"></div>
@@ -97,8 +97,6 @@ async function renderKocpPointFactors(){
   const html=pageHead('MCL Quantity Rules','Destination-specific Coal MT/trip and OB CuM/trip averages with optional route, shift and vehicle class.')+
     context()+panel('Create MCL average',form,'Approval required')+
     panel('Approved & draft rule register',recentTable(['Type','Material','Unloading','Route / Distance','Average','Shift / Class','Effective','MCL Ref','Status','Action'],items),rules.length+' rules');
-  // Called after the page has mounted; populate dependant master dropdowns.
-  queueMicrotask(()=>{if($('pfKind'))koPointChangeKind()});
   return html;
 }
 async function koPointSaveRule(){
