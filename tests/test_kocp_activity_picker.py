@@ -82,7 +82,10 @@ def test_ui_keeps_unsaved_rows_and_expands_hmr_for_used_machines():
     ui=(Path(__file__).resolve().parents[1]/"app/static/simple_field_v1.js").read_text("utf8")
     assert "function addSimpleTripRows(amount)" in ui
     assert "parent.insertAdjacentHTML('beforeend',tripGridRows('TRIP',amount,start))" in ui
-    assert "parent.insertAdjacentHTML('beforeend',kocpHmrRows(1,i))" in ui
+    assert "function addKocpHmrRows(amount)" in ui
+    assert "parent.insertAdjacentHTML('beforeend',kocpHmrRows(amount,start))" in ui
+    assert 'onclick="addKocpHmrRows(5)"' in ui
+    assert 'onclick="addKocpHmrRows(10)"' in ui
     assert "params.set('activity',activity)" in ui
     assert "limit:kocpAsset?'200':'40'" in ui
     assert "if(activity){params.set('activity',activity);params.set('role',role)}" in ui
