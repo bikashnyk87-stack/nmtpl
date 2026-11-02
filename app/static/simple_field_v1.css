@@ -1766,3 +1766,19 @@ body.field-mode{
 @media(max-width:1250px){.hsd-receipt-form{grid-template-columns:repeat(3,minmax(0,1fr))}.hsd-receipt-actions{grid-column:span 2}}
 @media(max-width:850px){.hsd-balance-strip{grid-template-columns:1fr 1fr;top:68px}.hsd-balance-main{grid-column:1/-1}.hsd-balance-refresh{justify-self:start}.hsd-receipt-form{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:510px){.hsd-balance-strip{position:static;grid-template-columns:1fr 1fr}.hsd-receipt-form{grid-template-columns:1fr}.hsd-receipt-actions{grid-column:1}}
+
+
+/* KOCP production corrections: compact master-backed editing, expandable HMR. */
+.kocp-hmr-head{flex-wrap:wrap;row-gap:7px}
+.kocp-hmr-head .row-count-badge{white-space:nowrap}
+.kocp-trip-correction[hidden]{display:none!important}
+.kocp-trip-correction{margin:14px 0;border:1px solid #97c9c6}
+.kocp-correction-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
+.kocp-correction-grid>label{font-size:11px;color:#365966;font-weight:700;min-width:0}
+.kocp-correction-grid>label>input,.kocp-correction-grid>label>select,
+.kocp-correction-grid>label>textarea{display:block;width:100%;margin-top:4px;border:1px solid #cbdce2;padding:9px;border-radius:7px;min-height:38px;font:inherit}
+.kocp-correction-grid .lookup{margin-top:4px}
+.kocp-correction-reason{grid-column:span 4}
+.kocp-correction-reason textarea{min-height:66px}
+@media(max-width:960px){.kocp-correction-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.kocp-correction-reason{grid-column:span 2}}
+@media(max-width:600px){.kocp-correction-grid{grid-template-columns:1fr}.kocp-correction-reason{grid-column:span 1}}
