@@ -53,6 +53,7 @@ from app.site_models import (
     TiomMisTripRow,
     TiomMisReconciliation,
 )
+from app.services.kocp_factor_rules import resolve_kocp_point_factor
 from app.services.kocp_equipment import (
     kocp_asset_allowed, kocp_role_allowed, kocp_asset_display,
 )
@@ -415,17 +416,13 @@ def _validated_simple_trip_fields(db: Session, site_id: str, payload: dict, oper
             SiteMovementRoute.active.is_(True)).limit(1)):
             raise HTTPException(422, f"Select a {movement_kind} master route for this entry.")
         factor_type = "OB_CUM_PER_TRIP" if is_ob else "COAL_AVG_MT_PER_TRIP"
-        stmt = select(SiteWeightFactor).where(
-            SiteWeightFactor.site_id == site_id, SiteWeightFactor.factor_type == factor_type,
-            SiteWeightFactor.status == "APPROVED", SiteWeightFactor.effective_from <= operating_day,
-            or_(SiteWeightFactor.effective_to.is_(None), SiteWeightFactor.effective_to >= operating_day),
-            or_(SiteWeightFactor.operating_date.is_(None), SiteWeightFactor.operating_date == operating_day),
-            or_(SiteWeightFactor.shift.is_(None), SiteWeightFactor.shift == shift),
-        ).order_by(SiteWeightFactor.operating_date.desc(), SiteWeightFactor.effective_from.desc(), SiteWeightFactor.version.desc())
-        factor = db.scalars(stmt).first()
-        if not factor:
-            friendly = "OB CuM/trip" if is_ob else "Coal average MT/trip"
-            raise HTTPException(409, f"No approved MCL {friendly} rule is configured for {operating_day} Shift {shift}. Ask the supervisor to set it first.")
+        selected_vehicle = db.get(Equipment, vehicle) if vehicle else None
+        factor = resolve_kocp_point_factor(
+            db, factor_type=factor_type, operating_day=operating_day,
+            shift=shift, destination_id=destination, route_id=route_id,
+            material_id=material, vehicle_type=selected_vehicle.type if selected_vehicle else None,
+            vehicle_group=selected_vehicle.group if selected_vehicle else None,
+        )
         if is_ob:
             mt = None
             cum = factor.factor_value
@@ -1836,7 +1833,7 @@ def operations_dashboard(
         ).order_by(SiteWeightFactor.factor_type,SiteWeightFactor.shift,SiteWeightFactor.version.desc()).limit(20)).all()
         seen=set()
         for r in rows:
-            key=(r.factor_type,r.shift or "ALL")
+            key=(r.factor_type,r.shift or "ALL",r.destination_location_id,r.route_id,r.material_id,r.vehicle_class)
             if key in seen: continue
             seen.add(key)
             current_factors.append({
@@ -1845,6 +1842,9 @@ def operations_dashboard(
                 "value":_fmt_decimal(r.factor_value),
                 "unit":r.factor_unit,
                 "reference":r.reference_no,
+                "destinationLocationId": r.destination_location_id,
+                "routeId": r.route_id,
+                "materialId": r.material_id,
             })
 
     latest_survey=None
