@@ -110,7 +110,8 @@ def test_installer_never_overwrites_existing_wb_sync_code():
     assert "New-ScheduledTaskTrigger -Daily" in content
     assert "$triggers=@(6..22 | ForEach-Object {" in content
     assert "pythonw.exe" in content
-    assert "without popup windows" in content
+    assert "New-ScheduledTaskAction -Execute $pythonw" in content
+    assert "-MultipleInstances IgnoreNew" in content
     assert "wb sync" not in content.lower() or "unchanged" in content.lower()
     assert "git reset" not in content.lower()
     assert "git merge" not in content.lower()
