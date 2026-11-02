@@ -1079,6 +1079,7 @@ async function renderSimpleHsd(){
       <span class="row-count-badge" id="shRowCount">10 rows</span>
       <div class="batch-hint"><b>${esc(modeLabel)} entry</b><span>${activeHsdEntryType==='RECEIPT'?'Supplier, litres and challan reference.':'Select equipment, fill litres and reference. Tab completes vehicle selections.'}</span></div>
     </div>
+    ${siteId==='KOCP'?`<p class="simple-note">Choose any active KOCP-assigned vehicle or machine, including hired vehicles and LMVs. Search registration, Door No or party. Not listed? Add or activate the vehicle and its KOCP assignment in Equipment Masters. <button type="button" class="btn outline" onclick="openSiteModule(\'MASTERS\')">Open Equipment Masters</button></p>`:'' }
     <div class="simple-table-wrap"><table class="simple-grid-table software-entry-grid hsd-entry-grid">
       <thead><tr><th>#</th><th>Shift</th><th>Type</th><th>${activeHsdEntryType==='RECEIPT'?'Supplier':'Equipment / Supplier'}</th><th>Litres</th><th>Reference</th><th>Status</th></tr></thead>
       <tbody id="simpleHsdRows">${hsdGridRows(10)}</tbody>
