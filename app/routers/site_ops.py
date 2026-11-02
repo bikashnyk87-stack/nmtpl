@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile
 from fastapi.responses import RedirectResponse, StreamingResponse
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.auth import WebUser, csrf, get_user
@@ -589,6 +589,93 @@ def correct_kocp_trip(trip_id: str, payload: dict, request: Request, db: Session
            before=before, after=after, reason=reason)
     db.commit()
     return {"ok": True, "tripId": row.trip_id, "status": row.status, "version": row.version}
+
+
+
+@router.get("/KOCP/reports/point-wise")
+def kocp_point_wise_report(
+    request: Request, from_date: date, to_date: date,
+    db: Session = Depends(get_db),
+):
+    user = get_user(db, request)
+    require_site(db, user, "KOCP")
+    if not user.admin and not has_permission(db, user, "KOCP", "REPORTS", "VIEW"):
+        raise HTTPException(403, "KOCP reports permission required.")
+    if to_date < from_date or (to_date - from_date).days > 92:
+        raise HTTPException(422, "Choose a date range of up to 93 days.")
+    groups = db.execute(select(
+        SiteTrip.operating_date, SiteTrip.shift,
+        SiteTrip.material_id, SiteTrip.destination_location_id, SiteTrip.route_id,
+        func.count(SiteTrip.trip_id),
+        func.coalesce(func.sum(SiteTrip.quantity_mt), 0),
+        func.coalesce(func.sum(SiteTrip.quantity_cum), 0),
+        func.sum(case((SiteTrip.factor_id.is_(None), 1), else_=0)),
+        func.count(func.distinct(SiteTrip.factor_id)),
+    ).where(
+        SiteTrip.site_id == "KOCP", SiteTrip.status == "POSTED",
+        SiteTrip.operating_date >= from_date, SiteTrip.operating_date <= to_date,
+    ).group_by(
+        SiteTrip.operating_date, SiteTrip.shift,
+        SiteTrip.material_id, SiteTrip.destination_location_id, SiteTrip.route_id,
+    ).order_by(
+        SiteTrip.operating_date, SiteTrip.shift, SiteTrip.destination_location_id,
+        SiteTrip.route_id,
+    )).all()
+    if len(groups) > 5000:
+        raise HTTPException(422, "Report is too large. Select a shorter date range.")
+    materials = {m.site_material_id: m for m in db.scalars(select(SiteMaterial).where(SiteMaterial.site_id == "KOCP"))}
+    destinations = {x.site_location_id: x for x in db.scalars(select(SiteLocation).where(SiteLocation.site_id == "KOCP"))}
+    routes = {x.route_id: x for x in db.scalars(select(SiteMovementRoute).where(SiteMovementRoute.site_id == "KOCP"))}
+    summary = {}
+    daily = []
+    overall = {"COAL": {"trips": 0, "quantity": Decimal("0")},
+               "OB": {"trips": 0, "quantity": Decimal("0")}}
+    for day, shift, mid, dest, route_id, count, mt, cum, missing, factors in groups:
+        material = materials.get(mid)
+        route = routes.get(route_id)
+        ob = bool(material and str(material.default_unit or "").upper() in {"CUM", "M3", "M³"})
+        kind = "OB" if ob else "COAL"
+        unit = "CuM" if ob else "MT"
+        qty = Decimal(str(cum if ob else mt))
+        trips = int(count or 0)
+        item = {
+            "date": day.isoformat(), "shift": shift,
+            "materialId": mid, "material": material.name if material else "Unknown material",
+            "destinationLocationId": dest,
+            "destination": destinations[dest].name if dest in destinations else "Unknown destination",
+            "routeId": route_id,
+            "movement": route.route_group if route else "Unclassified movement",
+            "distance": route.distance_range if route else "—",
+            "kind": kind, "unit": unit, "trips": trips, "quantity": str(qty),
+            "weightedAverage": str(qty / trips) if trips else None,
+            "missingFactorTrips": int(missing or 0),
+            "distinctFactors": int(factors or 0),
+        }
+        daily.append(item)
+        key = (kind, mid, dest, route_id)
+        if key not in summary:
+            summary[key] = {k: v for k, v in item.items() if k not in {
+                "date", "shift", "weightedAverage"
+            }}
+            summary[key]["trips"] = 0
+            summary[key]["quantity"] = "0"
+            summary[key]["missingFactorTrips"] = 0
+            summary[key]["distinctFactors"] = None  # varied dates can use different versions
+        rec = summary[key]
+        rec["trips"] += trips
+        rec["quantity"] = str(Decimal(rec["quantity"]) + qty)
+        rec["missingFactorTrips"] += int(missing or 0)
+        overall[kind]["trips"] += trips
+        overall[kind]["quantity"] += qty
+    summaries = []
+    for rec in summary.values():
+        rec["weightedAverage"] = str(Decimal(rec["quantity"]) / rec["trips"]) if rec["trips"] else None
+        summaries.append(rec)
+    totals = {kind: {"trips": vals["trips"], "quantity": str(vals["quantity"]),
+                     "weightedAverage": str(vals["quantity"] / vals["trips"]) if vals["trips"] else None,
+                     "unit": "CuM" if kind == "OB" else "MT"} for kind, vals in overall.items()}
+    return {"fromDate": from_date, "toDate": to_date,
+            "pointSummary": summaries, "dailyShift": daily, "totals": totals}
 
 
 @router.get("/TIOM/production/simple")
