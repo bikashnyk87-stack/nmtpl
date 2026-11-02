@@ -653,13 +653,13 @@ function kocpTripCorrectionMarkup(){
     <div class="panel-body">
       <p id="keTripInfo" class="simple-note"></p>
       <div class="kocp-correction-grid">
-        <label>Shift<select id="keShift">${shiftOpts(simpleShift())</select></label>
-        <label>Vehicle / Door No${lookupMarkup('keVehicle','ASSET','Choose vehicle','TRANSPORT')</label>
-        <label>Loader / Excavator${lookupMarkup('keLoader','ASSET','Choose machine','LOADING')</label>
-        <label>Route / Distance<select id="keRoute" onchange="applyKocpEditRoute()">${kocpRouteOptions()</select></label>
-        <label>Source${lookupMarkup('keSource','LOCATION','Source')</label>
-        <label>Destination${lookupMarkup('keDest','LOCATION','Destination')</label>
-        <label>Material${lookupMarkup('keMaterial','MATERIAL','Coal / OB material')</label>
+        <label>Shift<select id="keShift">${shiftOpts(simpleShift())}</select></label>
+        <label>Vehicle / Door No${lookupMarkup('keVehicle','ASSET','Choose vehicle','TRANSPORT')}</label>
+        <label>Loader / Excavator${lookupMarkup('keLoader','ASSET','Choose machine','LOADING')}</label>
+        <label>Route / Distance<select id="keRoute" onchange="applyKocpEditRoute()">${kocpRouteOptions()}</select></label>
+        <label>Source${lookupMarkup('keSource','LOCATION','Source')}</label>
+        <label>Destination${lookupMarkup('keDest','LOCATION','Destination')}</label>
+        <label>Material${lookupMarkup('keMaterial','MATERIAL','Coal / OB material')}</label>
         <label>GP / Reference<input type="text" id="keGp" maxlength="80"></label>
         <label class="kocp-correction-reason">Reason for correction *<textarea id="keReason" rows="2" maxlength="500" placeholder="What was entered incorrectly?"></textarea></label>
       </div>
