@@ -1189,7 +1189,7 @@ def list_site_trips(site_id: str, request: Request, operating_date: date | None 
         "routeId": r.route_id, "sourceLocationId": r.source_location_id, "destinationLocationId": r.destination_location_id,
         "materialId": r.material_id, "gpNo": r.gp_no, "quantityMt": r.quantity_mt,
         "quantityCum": r.quantity_cum, "weightBasis": r.weight_basis, "status": r.status,
-        "enteredBy": r.entered_by, "enteredAt": r.entered_at,
+        "enteredBy": r.entered_by, "enteredAt": r.entered_at, "version": r.version,
     } for r in rows]
 
 

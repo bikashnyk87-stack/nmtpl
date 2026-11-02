@@ -58,20 +58,108 @@ async function renderRecon(){
 }
 async function runRecon(){try{await api(`/api/site-ops/${siteId}/reconciliation/run?operating_date=${qdate()}`,{method:'POST'});toast('Reconciliation completed');await render()}catch(e){toast(e.message,'bad')}}
 
-async function renderSurvey(){
-  const rows=await api(`/api/site-ops/${siteId}/surveys`).catch(()=>[]); const tr=rows.map(r=>`<tr><td>${esc(r.periodStart)} → ${esc(r.periodEnd)}</td><td>${esc(r.materialId||'—')}</td><td>${n(r.measuredCum,3)}</td><td>${r.measuredMt==null?'—':n(r.measuredMt,3)}</td><td>${esc(r.referenceNo||'—')}</td><td><span class="status ${r.status==='APPROVED'?'ok':'info'}">${esc(r.status)}</span></td><td>${r.status==='DRAFT'?`<button class="btn outline" onclick="decideSurvey('${r.measurementId}','APPROVE')">Approve</button>`:''}</td></tr>`);
-  const form=formGrid(field('Period Start','svFrom','date',qdate().slice(0,8)+'01')+field('Period End','svTo','date',qdate())+field('Material ID','svMaterial')+field('Measured CuM','svCum','number')+field('Measured MT','svMt','number')+field('MCL Reference','svRef')+field('Reference Date','svRefDate','date')+field('Notes','svNotes'),' <button class="btn primary" onclick="saveSurvey()">Create Survey Draft</button>');
-  return pageHead('MCL Survey CuM','Capture MCL/survey certified quantity used for monthly/final billing reconciliation.')+context()+moduleHero('MCL_SURVEY')+panel('Survey measurement',form,'KOCP billing control')+panel('Survey history',recentTable(['Period','Material','CuM','MT','Reference','Status','Action'],tr),`${rows.length} records`);
+
+const koObSurveyMaterials=new Set();
+const koMaterialName={};
+async function koMaterialOptions(){
+  if(siteId!=='KOCP')return '<option value="">Choose material</option>';
+  const data=await api('/api/sites/KOCP/material-types');
+  koObSurveyMaterials.clear();
+  const opts=['<option value="">Choose Coal or OB material</option>'],seen=new Set();
+  for(const kind of ['COAL','OB']){
+    const items=(data[kind]||[]).filter(x=>x.active&&x.materialId);
+    opts.push('<optgroup label="'+(kind==='OB'?'OB / Overburden (CuM)':'Coal / Reject (MT)')+'">');
+    for(const x of items){
+      if(seen.has(x.materialId))continue;
+      seen.add(x.materialId);
+      if(kind==='OB')koObSurveyMaterials.add(x.materialId);
+      koMaterialName[x.materialId]=x.name;
+      opts.push('<option value="'+esc(x.materialId)+'">'+esc(x.name)+'</option>');
+    }
+    opts.push('</optgroup>');
+  }
+  return opts.join('');
 }
-async function saveSurvey(){try{const body={periodStart:$('svFrom').value,periodEnd:$('svTo').value,materialId:$('svMaterial').value.trim()||null,measurementType:'MCL_SURVEY',measuredCum:$('svCum').value,measuredMt:$('svMt').value||null,sourceOrg:'MCL',referenceNo:$('svRef').value.trim()||null,referenceDate:$('svRefDate').value||null,notes:$('svNotes').value.trim()||null};await api(`/api/site-ops/${siteId}/surveys`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});toast('Survey draft created');await render()}catch(e){toast(e.message,'bad')}}
+function updateKoSurveyUnit(){
+  const material=$('svMaterial')?.value;
+  const unit=$('svUnit');
+  if(unit)unit.textContent=!material?'Select material':koObSurveyMaterials.has(material)?'CuM (Overburden)':'MT (Coal / Reject)';
+}
+window.updateKoSurveyUnit=updateKoSurveyUnit;
+function koMeasured(r){
+  const ob=koObSurveyMaterials.has(r.materialId);
+  const v=ob?r.measuredCum:r.measuredMt;
+  return v==null?'—':n(v,3)+' '+(ob?'CuM':'MT');
+}
+
+async function renderSurvey(){
+  const [rows,opts]=await Promise.all([api(`/api/site-ops/${siteId}/surveys`).catch(()=>[]),koMaterialOptions()]);
+  const tr=rows.map(r=>`<tr><td>${esc(r.periodStart)} → ${esc(r.periodEnd)}</td><td>${esc(koMaterialName[r.materialId]||r.materialId||'—')}</td><td>${koMeasured(r)}</td><td>${esc(r.referenceNo||'—')}</td><td><span class="status ${r.status==='APPROVED'?'ok':'info'}">${esc(r.status)}</span></td><td>${r.status==='DRAFT'?`<button class="btn outline" onclick="decideSurvey('${r.measurementId}','APPROVE')">Approve</button>`:''}</td></tr>`);
+  const form=formGrid(
+    field('Period Start','svFrom','date',qdate().slice(0,8)+'01')+
+    field('Period End','svTo','date',qdate())+
+    select('Coal / OB Material *','svMaterial',opts).replace('<select id="svMaterial">','<select id="svMaterial" onchange="updateKoSurveyUnit()">')+
+    field('Certified Quantity *','svQty','number')+
+    '<div class="field"><span>Unit</span><strong id="svUnit">Select material</strong></div>'+
+    field('MCL Reference','svRef')+field('Reference Date','svRefDate','date')+
+    field('Notes','svNotes'),
+    '<button class="btn primary" onclick="saveSurvey()">Create Survey Draft</button>'
+  );
+  return pageHead('MCL Certified Quantity','Choose a material by name. Enter OB in CuM OR Coal in MT, not both.')+
+    context()+moduleHero('MCL_SURVEY')+panel('Certified quantity entry',
+      '<p class="simple-note">Material ID comes from the existing KOCP Material Master. No manual code is required.</p>'+form,'Coal MT · OB CuM')+
+    panel('Survey history',recentTable(['Period','Material','Certified Quantity','Reference','Status','Action'],tr),`${rows.length} records`);
+}
+async function saveSurvey(){
+  try{
+    const material=$('svMaterial').value,ob=koObSurveyMaterials.has(material);
+    if(!material)throw new Error('Choose material');
+    const qty=Number($('svQty').value);
+    if(!Number.isFinite(qty)||qty<=0)throw new Error('Enter certified '+(ob?'OB CuM':'Coal MT')+' above zero');
+    const body={
+      periodStart:$('svFrom').value,periodEnd:$('svTo').value,materialId:material,
+      measurementType:'MCL_SURVEY',measuredCum:ob?qty:0,
+      measuredMt:ob?null:qty,sourceOrg:'MCL',
+      referenceNo:$('svRef').value.trim()||null,
+      referenceDate:$('svRefDate').value||null,notes:$('svNotes').value.trim()||null
+    };
+    await api(`/api/site-ops/${siteId}/surveys`,{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)
+    });
+    toast('Certified quantity draft created');await render();
+  }catch(e){toast(e.message,'bad')}
+}
+
 async function decideSurvey(id,action){try{await api(`/api/site-ops/${siteId}/surveys/${id}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,reason:'Reviewed in site workspace'})});toast(`Survey ${action.toLowerCase()}d`);await render()}catch(e){toast(e.message,'bad')}}
 
+
 async function renderBilling(){
-  const rows=await api(`/api/site-ops/${siteId}/billing`).catch(()=>[]); const tr=rows.map(r=>`<tr><td>${esc(r.periodStart)} → ${esc(r.periodEnd)}</td><td>${esc(r.materialId||'—')}</td><td>${n(r.operationalCum,3)}</td><td>${r.certifiedCum==null?'—':n(r.certifiedCum,3)}</td><td>${r.varianceCum==null?'—':n(r.varianceCum,3)}</td><td>${n(r.billableCum,3)}</td><td><span class="status ${r.status==='APPROVED'?'ok':'info'}">${esc(r.status)}</span></td><td>${r.status==='DRAFT'?`<button class="btn outline" onclick="decideBilling('${r.billingId}','APPROVE')">Approve</button>`:''}</td></tr>`);
-  const form=formGrid(field('Period Start','blFrom','date',qdate().slice(0,8)+'01')+field('Period End','blTo','date',qdate())+field('Material ID','blMaterial')+field('Approved Survey ID (optional)','blSurvey'),' <button class="btn primary" onclick="buildBilling()">Build Reconciliation</button>');
-  return pageHead('Billing Reconciliation','Operational KOCP CuM/MT versus MCL certified survey quantity; approved certified CuM becomes the billable control figure.')+context()+moduleHero('BILLING')+panel('Build billing period',form)+panel('Billing register',recentTable(['Period','Material','Operational CuM','Certified CuM','Variance','Billable CuM','Status','Action'],tr),`${rows.length} periods`);
+  const [rows,opts]=await Promise.all([api(`/api/site-ops/${siteId}/billing`).catch(()=>[]),koMaterialOptions()]);
+  const tr=rows.map(r=>{
+    const ob=koObSurveyMaterials.has(r.materialId),unit=ob?'CuM':'MT';
+    const shown=v=>v==null?'—':n(v,3);
+    return `<tr><td>${esc(r.periodStart)} → ${esc(r.periodEnd)}</td><td>${esc(koMaterialName[r.materialId]||r.materialId||'—')}</td><td>${unit}</td><td>${shown(ob?r.operationalCum:r.operationalMt)}</td><td>${shown(ob?r.certifiedCum:r.certifiedMt)}</td><td>${shown(ob?r.varianceCum:r.varianceMt)}</td><td>${shown(ob?r.billableCum:r.billableMt)}</td><td><span class="status ${r.status==='APPROVED'?'ok':'info'}">${esc(r.status)}</span></td><td>${r.status==='DRAFT'?`<button class="btn outline" onclick="decideBilling('${r.billingId}','APPROVE')" ${r.surveyId?'':'disabled title="Matching approved MCL survey required"'}>Approve</button>`:''}</td></tr>`;
+  });
+  const form=formGrid(field('Period Start','blFrom','date',qdate().slice(0,8)+'01')+
+    field('Period End','blTo','date',qdate())+
+    select('Coal / OB Material *','blMaterial',opts),
+    '<button class="btn primary" onclick="buildBilling()">Build Reconciliation</button>');
+  return pageHead('Billing Reconciliation','Coal MT and OB CuM are reconciled separately against the approved MCL survey for the same material and period.')+
+    context()+moduleHero('BILLING')+
+    panel('Build billing period','<p class="simple-note">Choose the material by name. The system finds its matching approved MCL survey automatically. No Survey ID required.</p>'+form)+
+    panel('Billing register',recentTable(['Period','Material','Unit','Operational','Certified','Variance','Billable','Status','Action'],tr),`${rows.length} periods`);
 }
-async function buildBilling(){try{const qs=new URLSearchParams({period_start:$('blFrom').value,period_end:$('blTo').value});if($('blMaterial').value.trim())qs.set('material_id',$('blMaterial').value.trim());if($('blSurvey').value.trim())qs.set('survey_id',$('blSurvey').value.trim());await api(`/api/site-ops/${siteId}/billing/build?${qs}`,{method:'POST'});toast('Billing reconciliation built');await render()}catch(e){toast(e.message,'bad')}}
+async function buildBilling(){
+  try{
+    const material=$('blMaterial').value;
+    if(!material)throw new Error('Choose Coal or OB material.');
+    const qs=new URLSearchParams({period_start:$('blFrom').value,period_end:$('blTo').value,material_id:material});
+    const response=await api(`/api/site-ops/${siteId}/billing/build?${qs}`,{method:'POST'});
+    toast(response.certified?'Billing draft built with approved survey':'Draft created; matching MCL survey must be approved before billing');
+    await render();
+  }catch(e){toast(e.message,'bad')}
+}
+
 async function decideBilling(id,action){try{await api(`/api/site-ops/${siteId}/billing/${id}/decision`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action,reason:'Reviewed in billing workspace'})});toast(`Billing ${action.toLowerCase()}d`);await render()}catch(e){toast(e.message,'bad')}}
 
 async function renderQuality(){
