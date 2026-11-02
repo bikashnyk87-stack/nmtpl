@@ -981,6 +981,9 @@ def get_weight_factors(site_id: str, request: Request, db: Session = Depends(get
         "operatingDate": r.operating_date,
         "shift": r.shift,
         "vehicleClass": r.vehicle_class,
+        "materialId": r.material_id,
+        "destinationLocationId": r.destination_location_id,
+        "routeId": r.route_id,
         "effectiveFrom": r.effective_from,
         "effectiveTo": r.effective_to,
         "sourceOrg": r.source_org,
@@ -998,6 +1001,34 @@ def create_weight_factor(site_id: str, p: WeightFactorIn, request: Request, db: 
     require_permission(db, user, site_id, "MCL_FACTOR", "CREATE")
     if site_id != "KOCP" and p.sourceOrg.upper() == "MCL":
         raise HTTPException(409, "MCL factor workflow is currently configured for KOCP.")
+    if site_id == "KOCP":
+        expected_unit = {"COAL_AVG_MT_PER_TRIP": "MT/TRIP", "OB_CUM_PER_TRIP": "CUM/TRIP"}
+        typ = p.factorType.upper()
+        if typ not in expected_unit:
+            raise HTTPException(422, "Choose Coal MT/trip or OB CuM/trip. Certified survey goes in MCL Certified Quantity.")
+        if p.factorUnit.upper() != expected_unit[typ]:
+            raise HTTPException(422, f"The correct unit for {typ} is {expected_unit[typ]}.")
+        if not p.destinationLocationId or not p.materialId:
+            raise HTTPException(422, "Select an unloading point and Coal/OB material.")
+        if not (p.referenceNo or "").strip():
+            raise HTTPException(422, "MCL reference is required for approved point-wise averages.")
+        destination = db.get(SiteLocation, p.destinationLocationId)
+        material = db.get(SiteMaterial, p.materialId)
+        if not destination or destination.site_id != site_id or not destination.active:
+            raise HTTPException(422, "Unloading point must belong to active KOCP locations.")
+        if not material or material.site_id != site_id or not material.active:
+            raise HTTPException(422, "Material must belong to the active KOCP master.")
+        is_ob = str(material.default_unit or "").upper() in {"CUM", "M3", "M³"}
+        kind = "OB" if is_ob else "COAL"
+        if (typ == "OB_CUM_PER_TRIP") != is_ob:
+            raise HTTPException(422, "Coal factors require MT materials; OB factors require CuM materials.")
+        if p.routeId:
+            route = db.get(SiteMovementRoute, p.routeId)
+            if not route or not route.active or route.site_id != site_id:
+                raise HTTPException(422, "Choose a valid active KOCP movement route.")
+            if route.movement_kind != kind or route.destination_location_id != p.destinationLocationId:
+                raise HTTPException(422, "The selected route does not match this material and unloading point.")
+
     factor_id = f"FAC-{site_id}-{uuid4().hex[:12].upper()}"
     row = SiteWeightFactor(
         factor_id=factor_id,
@@ -1010,7 +1041,9 @@ def create_weight_factor(site_id: str, p: WeightFactorIn, request: Request, db: 
         operating_date=p.operatingDate,
         shift=p.shift.upper() if p.shift else None,
         material_id=p.materialId,
-        vehicle_class=p.vehicleClass,
+        destination_location_id=p.destinationLocationId,
+        route_id=p.routeId,
+        vehicle_class=p.vehicleClass.strip() if p.vehicleClass else None,
         source_org=p.sourceOrg,
         reference_no=p.referenceNo,
         reference_date=p.referenceDate,
@@ -1033,6 +1066,29 @@ def decide_weight_factor(site_id: str, factor_id: str, p: WeightFactorDecisionIn
     row = db.get(SiteWeightFactor, factor_id)
     if not row or row.site_id != site_id:
         raise HTTPException(404, "Factor not found.")
+    if p.action == "APPROVE" and site_id == "KOCP":
+        if not row.destination_location_id or not row.material_id:
+            raise HTTPException(409, "This rule has no unloading point/material; create a scoped rule first.")
+        if row.status != "DRAFT":
+            raise HTTPException(409, "Only draft rules can be approved.")
+        # Same scope and same start date cannot produce two active candidates.
+        others = db.scalars(select(SiteWeightFactor).where(
+            SiteWeightFactor.site_id == site_id,
+            SiteWeightFactor.factor_id != row.factor_id,
+            SiteWeightFactor.factor_type == row.factor_type,
+            SiteWeightFactor.status == "APPROVED",
+            SiteWeightFactor.effective_from == row.effective_from,
+        )).all()
+        for other in others:
+            if (
+                other.destination_location_id == row.destination_location_id
+                and other.route_id == row.route_id
+                and other.material_id == row.material_id
+                and other.shift == row.shift
+                and (other.vehicle_class or "").upper() == (row.vehicle_class or "").upper()
+                and other.operating_date == row.operating_date
+            ):
+                raise HTTPException(409, "Duplicate approved point-wise rule for the same date and scope.")
     before = {"status": row.status, "approvedBy": row.approved_by}
     row.status = "APPROVED" if p.action == "APPROVE" else "REJECTED"
     row.approved_by = user.login_id if p.action == "APPROVE" else None
