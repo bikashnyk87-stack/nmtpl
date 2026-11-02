@@ -646,6 +646,93 @@ async function renderSimpleTrips(kind='TRIP'){
     <div class="simple-actions"><button id="stSave" class="btn primary" onclick="saveSimpleTrips('TRIP')">Save ${siteId==='KOCP'?(obMode?'OB':'Coal'):'Production'} Sheet</button><button class="btn outline" onclick="clearSimpleTripDraft()">Clear</button><span class="draft-state">Draft autosaves on this PC</span></div>
   </div>`+panel('Today’s Entries',recentTable(recentHeads,rows),`${viewRec.length} recent records`)+(siteId==='KOCP'?kocpTripCorrectionMarkup():'')
 }
+
+function kocpTripCorrectionMarkup(){
+  return `<section class="panel kocp-trip-correction" id="kocpTripCorrection" hidden>
+    <div class="panel-head"><h2>Correct saved KOCP trip</h2><button type="button" class="btn outline" onclick="closeKocpTripCorrection()">Cancel</button></div>
+    <div class="panel-body">
+      <p id="keTripInfo" class="simple-note"></p>
+      <div class="kocp-correction-grid">
+        <label>Shift<select id="keShift">${shiftOpts(simpleShift())</select></label>
+        <label>Vehicle / Door No${lookupMarkup('keVehicle','ASSET','Choose vehicle','TRANSPORT')</label>
+        <label>Loader / Excavator${lookupMarkup('keLoader','ASSET','Choose machine','LOADING')</label>
+        <label>Route / Distance<select id="keRoute" onchange="applyKocpEditRoute()">${kocpRouteOptions()</select></label>
+        <label>Source${lookupMarkup('keSource','LOCATION','Source')</label>
+        <label>Destination${lookupMarkup('keDest','LOCATION','Destination')</label>
+        <label>Material${lookupMarkup('keMaterial','MATERIAL','Coal / OB material')</label>
+        <label>GP / Reference<input type="text" id="keGp" maxlength="80"></label>
+        <label class="kocp-correction-reason">Reason for correction *<textarea id="keReason" rows="2" maxlength="500" placeholder="What was entered incorrectly?"></textarea></label>
+      </div>
+      <div class="simple-actions">
+        <button class="btn primary" id="keSave" onclick="saveKocpTripCorrection('EDIT')">Save Correction</button>
+        <button class="btn outline" id="keVoid" onclick="saveKocpTripCorrection('VOID')">Void Wrong Trip</button>
+        <span class="simple-note">Voided trips are excluded from totals but remain in audit history.</span>
+      </div>
+    </div>
+  </section>`;
+}
+function fillKocpEditLookup(id,value){
+  const hidden=$(id),text=$(id+'Text');
+  if(hidden)hidden.value=value||'';
+  if(text){text.value=value||'';text.dataset.selected=value||''}
+}
+function openKocpTripCorrection(tripId){
+  const r=kocpRecentTripRows.find(x=>x.tripId===tripId), panel=$('kocpTripCorrection');
+  if(!r||!panel||r.status==='VOID')return toast('Refresh the register and choose a posted trip.','bad');
+  panel.dataset.tripId=tripId;panel.dataset.version=String(r.version||1);
+  $('keTripInfo').textContent=r.operatingDate+' · '+tripId+' · '+(r.quantityCum!=null?'OB CuM':'Coal MT');
+  $('keShift').value=r.shift||simpleShift();
+  $('keRoute').value=r.routeId||'';
+  fillKocpEditLookup('keVehicle',r.vehicleId);
+  fillKocpEditLookup('keLoader',r.loadingEquipmentId);
+  fillKocpEditLookup('keSource',r.sourceLocationId);
+  fillKocpEditLookup('keDest',r.destinationLocationId);
+  fillKocpEditLookup('keMaterial',r.materialId);
+  $('keGp').value=r.gpNo||'';$('keReason').value='';
+  panel.hidden=false;
+  bindLookups(panel);
+  panel.scrollIntoView({behavior:'smooth',block:'center'});
+}
+function closeKocpTripCorrection(){
+  const panel=$('kocpTripCorrection');
+  if(panel)panel.hidden=true;
+}
+function applyKocpEditRoute(){
+  const kind=kocpRouteKind(),route=kocpRouteList[kind].find(x=>x.routeId===$('keRoute').value);
+  if(!route)return;
+  if(route.sourceLocationId)fillKocpEditLookup('keSource',route.sourceLocationId);
+  fillKocpEditLookup('keDest',route.destinationLocationId);
+  const words=String(route.group+' '+route.category).toUpperCase();
+  const code=kind==='COAL'?(words.includes('REJECT')?'REJECT':'COAL'):
+    (/RE.HAND/.test(words)?'REHANDLING_OB':words.includes('SOFT')?'SOFT_OB':
+    words.includes('HARD')?'HARD_OB':'');
+  const m=(kocpMaterialTypes[kind]||[]).find(x=>x.typeCode===code&&x.materialId&&x.active);
+  if(m)fillKocpEditLookup('keMaterial',m.materialId);
+}
+async function saveKocpTripCorrection(action){
+  const panel=$('kocpTripCorrection'),tripId=panel?.dataset.tripId,reason=$('keReason')?.value.trim();
+  if(!tripId||!reason||reason.length<5)return toast('Enter a reason (at least 5 characters).','bad');
+  const data={
+    action,expectedVersion:Number(panel.dataset.version),reason,
+    shift:$('keShift').value,vehicleId:$('keVehicle').value,
+    loadingEquipmentId:$('keLoader').value,routeId:$('keRoute').value,
+    sourceLocationId:$('keSource').value,destinationLocationId:$('keDest').value,
+    materialId:$('keMaterial').value,gpNo:$('keGp').value.trim()
+  };
+  if(action==='EDIT'&&(!data.vehicleId||!data.loadingEquipmentId||!data.routeId||!data.sourceLocationId||!data.destinationLocationId||!data.materialId))
+    return toast('Select vehicle, loader, route, source, destination and material.','bad');
+  if(action==='VOID'&&!confirm('Void this incorrect trip? It will be excluded from reports and audited.'))return;
+  for(const id of ['keSave','keVoid'])$(id).disabled=true;
+  try{
+    await api('/api/site-ops/KOCP/trips/'+encodeURIComponent(tripId)+'/correct',{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)
+    });
+    toast(action==='VOID'?'Trip voided and audited':'Trip corrected and quantities recalculated');
+    await render();
+  }catch(e){toast(e.message,'bad')}
+  finally{for(const id of ['keSave','keVoid'])if($(id))$(id).disabled=false}
+}
+
 function refreshEntryRowCounts(){
   for(const [bodyId,countId,klass] of [
     ['simpleTripRows','stRowCount','.simple-trip-row'],
@@ -1243,7 +1330,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,addKocpHmrRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
