@@ -418,6 +418,7 @@ async function renderTiomProduction(){const [acts,recent]=await Promise.all([api
 async function saveTiomSimpleProduction(){const btn=$('spSave');try{for(const id of ['spMachine','spVehicle','spSource','spDest','spMaterial'])if(!$(id).value)throw new Error(`Choose a valid ${id.replace('sp','').toLowerCase()} from search`);if(!$('spUnload').value)throw new Error('Enter unloading time');btn.disabled=true;const body={operatingDate:$('spDate').value,shift:$('spShift').value,loadingAt:$('spLoad').value,unloadingAt:$('spUnload').value,machineId:$('spMachine').value,vehicleId:$('spVehicle').value,sourceLocationId:$('spSource').value,destinationLocationId:$('spDest').value,materialId:$('spMaterial').value,activity:$('spActivity').value};body.requestId=getReq('PRODUCTION',body,'single');const r=await api('/api/site-ops/TIOM/production/simple',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});clearDraft('tiomSimpleForm',draftKey('PRODUCTION'));clearReq('PRODUCTION');toast(r.idempotent?'Entry already saved — no duplicate created':'Production entry saved');await render()}catch(e){toast(e.message,'bad')}finally{if(btn)btn.disabled=false}}
 function clearTiomSimpleDraft(){localStorage.removeItem(draftKey('PRODUCTION'));clearReq('PRODUCTION');render()}
 
+let kocpRecentTripRows=[];
 function kocpHmrRows(count=5,start=0){
   if(siteId!=='KOCP')return'';
   return Array.from({length:count},(_,index)=>{const i=start+index;return `<tr class="kocp-hmr-row" data-i="${i}">
@@ -604,8 +605,9 @@ async function renderSimpleTrips(kind='TRIP'){
   }
   const rec=await api(`/api/sites/${siteId}/records/trips?operating_date=${state.ctx.operatingDate}&limit=60`).catch(()=>[]);
   const viewRec=siteId==='KOCP'?rec.filter(r=>{const isOB=(r.quantityCum!==null&&r.quantityCum!==undefined)||kocpMaterialTypes.OB.some(x=>x.materialId===r.materialId);return obMode?isOB:!isOB}):rec;
+  if(siteId==='KOCP')kocpRecentTripRows=rec;
   const kocpRouteLabel=routeId=>{const r=[...kocpRouteList.COAL,...kocpRouteList.OB].find(x=>x.routeId===routeId);return r?r.group+' · '+r.distanceRange:'—'};
-  const rows=viewRec.map(r=>`<tr><td>${esc(r.shift)}</td><td>${esc(r.vehicleId||r.vehicleRaw||'—')}</td><td>${esc(r.loadingEquipmentId||'—')}</td>${isSocp?'':`<td>${esc(kocpRouteLabel(r.routeId))}</td><td>${esc(r.sourceLocationId||'—')}</td>`}<td>${esc(r.destinationLocationId||'—')}</td>${isSocp?'':`<td>${esc(r.materialId||'—')}</td>`}<td>${esc(r.gpNo||'—')}</td><td>${fmt(r.quantityMt,3)}</td><td>${fmt(r.quantityCum,3)}</td><td>${esc(r.weightBasis||'—')}</td></tr>`);
+  const rows=viewRec.map(r=>`<tr><td>${esc(r.shift)}</td><td>${esc(r.vehicleId||r.vehicleRaw||'—')}</td><td>${esc(r.loadingEquipmentId||'—')}</td>${isSocp?'':`<td>${esc(kocpRouteLabel(r.routeId))}</td><td>${esc(r.sourceLocationId||'—')}</td>`}<td>${esc(r.destinationLocationId||'—')}</td>${isSocp?'':`<td>${esc(r.materialId||'—')}</td>`}<td>${esc(r.gpNo||'—')}</td><td>${fmt(r.quantityMt,3)}</td><td>${fmt(r.quantityCum,3)}</td><td>${esc(r.weightBasis||'—')}</td>${isSocp?'':`<td>${esc(r.status||'POSTED')}</td><td>${r.status==='VOID'?'Voided':`<button type='button' class='btn outline' onclick="openKocpTripCorrection('${esc(r.tripId)}')">Edit / Void</button>`}</td>`}</tr>`);
   const defaults=isSocp
     ?`<div class="trip-default-grid">
         <div class="field"><span>Entry Date</span><input id="stDate" type="date" data-no-draft value="${state.ctx.operatingDate}"></div>
@@ -632,7 +634,7 @@ async function renderSimpleTrips(kind='TRIP'){
   const heads=isSocp
     ?'<th>#</th><th>Shift</th><th>Vehicle</th><th>Loader</th><th>Unloading Point</th><th>GP / Ref</th><th>Qty MT</th><th>Status</th>'
     :'<th>#</th><th>Shift</th><th>Vehicle</th><th>Loader / Excavator</th><th>Route / Distance</th><th>Source</th><th>Destination</th><th>Material</th><th>GP / Ref</th><th>Quantity</th><th>Status</th>';
-  const recentHeads=isSocp?['Shift','Vehicle','Loader','Destination','GP','MT','CuM','Basis']:['Shift','Vehicle','Loader/Excavator','Route / Distance','Source','Destination','Material','GP','MT','CuM','Basis'];
+  const recentHeads=isSocp?['Shift','Vehicle','Loader','Destination','GP','MT','CuM','Basis']:['Shift','Vehicle','Loader/Excavator','Route / Distance','Source','Destination','Material','GP','MT','CuM','Basis','Status','Correct'];
   return simplePageHead(title,desc)+`<div id="simpleTripForm" class="simple-form batch-entry-form">
     ${defaults}
     <div class="entry-grid-note"><b>Fast entry:</b> Set repeated values above, click <b>Apply Defaults</b>, then enter only the changing vehicle/GP/quantity fields.</div>
@@ -642,7 +644,7 @@ async function renderSimpleTrips(kind='TRIP'){
       <div class="simple-table-wrap"><table class="simple-grid-table software-entry-grid kocp-hmr-table"><thead><tr><th>#</th><th>Loader / Excavator</th><th>Shift</th><th>HMR Open</th><th>HMR Close</th><th>Run</th><th>Status</th></tr></thead><tbody id="kocpHmrRows">${kocpHmrRows(5)}</tbody></table></div>
     </div>`:''}
     <div class="simple-actions"><button id="stSave" class="btn primary" onclick="saveSimpleTrips('TRIP')">Save ${siteId==='KOCP'?(obMode?'OB':'Coal'):'Production'} Sheet</button><button class="btn outline" onclick="clearSimpleTripDraft()">Clear</button><span class="draft-state">Draft autosaves on this PC</span></div>
-  </div>`+panel('Today’s Entries',recentTable(recentHeads,rows),`${viewRec.length} recent records`)
+  </div>`+panel('Today’s Entries',recentTable(recentHeads,rows),`${viewRec.length} recent records`)+(siteId==='KOCP'?kocpTripCorrectionMarkup():'')
 }
 function refreshEntryRowCounts(){
   for(const [bodyId,countId,klass] of [
