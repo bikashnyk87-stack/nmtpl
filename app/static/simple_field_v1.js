@@ -439,6 +439,26 @@ function calcKocpHmr(i){
   u.value=(b-a).toFixed(2);
   if(!st.classList.contains('good')){st.textContent='Ready';st.className='simple-status info'}
 }
+
+function addKocpHmrRows(amount){
+  const parent=$('kocpHmrRows');
+  if(siteId!=='KOCP'||!parent)return;
+  const start=parent.querySelectorAll('.kocp-hmr-row').length;
+  if(start+amount>200){toast('Maximum 200 machine readings per sheet. Save first.','bad');return}
+  parent.insertAdjacentHTML('beforeend',kocpHmrRows(amount,start));
+  bindLookups(parent);
+  const key=draftKey(state.module);
+  [...parent.querySelectorAll('.kocp-hmr-row')].slice(start).forEach(row=>
+    row.querySelectorAll('input,select,textarea').forEach(el=>{
+      el.addEventListener('input',()=>saveDraft('simpleTripForm',key));
+      el.addEventListener('change',()=>saveDraft('simpleTripForm',key));
+    })
+  );
+  const badge=$('khRowCount');
+  if(badge)badge.textContent=(start+amount)+' machines';
+  saveDraft('simpleTripForm',key);
+}
+
 function syncKocpHmrMachines(){
   if(siteId!=='KOCP')return;
   const used=[];
@@ -454,15 +474,8 @@ function syncKocpHmrMachines(){
     let row=[...document.querySelectorAll('.kocp-hmr-row')].find(r=>!$(`khMachine${r.dataset.i}`)?.value);
     if(!row){
       const parent=$('kocpHmrRows');
-      const i=parent.querySelectorAll('.kocp-hmr-row').length;
-      parent.insertAdjacentHTML('beforeend',kocpHmrRows(1,i));
-      bindLookups(parent);
+      addKocpHmrRows(1);
       row=parent.lastElementChild;
-      const key=draftKey(state.module);
-      row.querySelectorAll('input,select,textarea').forEach(el=>{
-        el.addEventListener('input',()=>saveDraft('simpleTripForm',key));
-        el.addEventListener('change',()=>saveDraft('simpleTripForm',key));
-      });
     }
     const i=row.dataset.i,h=$(`khMachine${i}`),t=$(`khMachine${i}Text`);
     h.value=m.id;
@@ -590,7 +603,7 @@ async function renderSimpleTrips(kind='TRIP'){
     kocpMaterialTypes[kind]=catalog[kind]||[];
   }
   const rec=await api(`/api/sites/${siteId}/records/trips?operating_date=${state.ctx.operatingDate}&limit=60`).catch(()=>[]);
-  const viewRec=siteId==='KOCP'?rec.filter(r=>{const m=String(r.materialId||'').toUpperCase();const isOB=/OVERBURDEN|(^|[^A-Z])OB([^A-Z]|$)/.test(m);return obMode?isOB:!isOB}):rec;
+  const viewRec=siteId==='KOCP'?rec.filter(r=>{const isOB=(r.quantityCum!==null&&r.quantityCum!==undefined)||kocpMaterialTypes.OB.some(x=>x.materialId===r.materialId);return obMode?isOB:!isOB}):rec;
   const kocpRouteLabel=routeId=>{const r=[...kocpRouteList.COAL,...kocpRouteList.OB].find(x=>x.routeId===routeId);return r?r.group+' · '+r.distanceRange:'—'};
   const rows=viewRec.map(r=>`<tr><td>${esc(r.shift)}</td><td>${esc(r.vehicleId||r.vehicleRaw||'—')}</td><td>${esc(r.loadingEquipmentId||'—')}</td>${isSocp?'':`<td>${esc(kocpRouteLabel(r.routeId))}</td><td>${esc(r.sourceLocationId||'—')}</td>`}<td>${esc(r.destinationLocationId||'—')}</td>${isSocp?'':`<td>${esc(r.materialId||'—')}</td>`}<td>${esc(r.gpNo||'—')}</td><td>${fmt(r.quantityMt,3)}</td><td>${fmt(r.quantityCum,3)}</td><td>${esc(r.weightBasis||'—')}</td></tr>`);
   const defaults=isSocp
@@ -625,7 +638,7 @@ async function renderSimpleTrips(kind='TRIP'){
     <div class="entry-grid-note"><b>Fast entry:</b> Set repeated values above, click <b>Apply Defaults</b>, then enter only the changing vehicle/GP/quantity fields.</div>
     <div class="simple-table-wrap"><table class="simple-grid-table software-entry-grid trip-entry-grid"><thead><tr>${heads}</tr></thead><tbody id="simpleTripRows">${tripGridRows('TRIP',10)}</tbody></table></div>
     ${siteId==='KOCP'?`<div class="kocp-hmr-inline">
-      <div class="kocp-hmr-head"><div><b>Machine HMR</b><span>Enter once per Loader / Excavator used in this production sheet.</span></div><button class="btn outline" type="button" onclick="syncKocpHmrMachines()">Load Used Machines</button></div>
+      <div class="kocp-hmr-head"><div><b>Machine HMR</b><span>Enter readings for every machine used in this sheet.</span></div><button class="btn outline" type="button" onclick="syncKocpHmrMachines()">Load Used Machines</button><button class="btn outline" type="button" onclick="addKocpHmrRows(1)">+1 Row</button><button class="btn outline" type="button" onclick="addKocpHmrRows(5)">+5 Rows</button><button class="btn outline" type="button" onclick="addKocpHmrRows(10)">+10 Rows</button><span class="row-count-badge" id="khRowCount">5 machines</span></div>
       <div class="simple-table-wrap"><table class="simple-grid-table software-entry-grid kocp-hmr-table"><thead><tr><th>#</th><th>Loader / Excavator</th><th>Shift</th><th>HMR Open</th><th>HMR Close</th><th>Run</th><th>Status</th></tr></thead><tbody id="kocpHmrRows">${kocpHmrRows(5)}</tbody></table></div>
     </div>`:''}
     <div class="simple-actions"><button id="stSave" class="btn primary" onclick="saveSimpleTrips('TRIP')">Save ${siteId==='KOCP'?(obMode?'OB':'Coal'):'Production'} Sheet</button><button class="btn outline" onclick="clearSimpleTripDraft()">Clear</button><span class="draft-state">Draft autosaves on this PC</span></div>
@@ -1228,7 +1241,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,addKocpHmrRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
