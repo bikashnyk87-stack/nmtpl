@@ -133,7 +133,7 @@ def test_opening_entry_ui_and_dashboard_palette():
     assert "Calculated Stock" in js and "Opening Stock" in js
     assert ".ops-theme-kocp .ops-dashboard-top" in css
     assert "#15325b" in css and "#fff0cc" in css and "#d9f7e9" in css
-    assert "kocp-compact-receipt-live-r8" in html
+    assert "kocp-production-corrections-r9" in html
     p=subprocess.run(["node","--check",str(ROOT/"app/static/simple_field_v1.js")],
         capture_output=True,text=True,timeout=20)
     assert p.returncode == 0,p.stderr
