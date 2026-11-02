@@ -1300,7 +1300,7 @@ async function saveSimpleMeters(){
 }
 function clearSimpleMeterDraft(){localStorage.removeItem(draftKey('HMR_KMR'));render()}
 window.NMTPLClearActiveDrafts=function(){NMTPLNet.clearUserDrafts(simpleUser())};
-function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module)){restoreDraft('simpleTripForm',draftKey(state.module));syncKocpRoutes()}if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){
+function afterSimpleRender(){bindLookups($('workspace'));if(state.module==='PRODUCTION')restoreDraft('tiomSimpleForm',draftKey('PRODUCTION'));if(['TRIP','OB'].includes(state.module)){restoreDraft('simpleTripForm',draftKey(state.module));syncKocpRoutes();if($('khRowCount'))$('khRowCount').textContent=document.querySelectorAll('.kocp-hmr-row').length+' machines';document.querySelectorAll('.kocp-hmr-row').forEach(row=>calcKocpHmr(row.dataset.i))}if(state.module==='WB'){restoreDraft('simpleWbForm',draftKey('WB'));document.querySelectorAll('.simple-wb-row').forEach(r=>simpleCalcWbRow(r.dataset.i))}if(state.module==='HSD'){
   if(activeHsdEntryType==='RECEIPT'&&$('simpleHsdReceiptForm')){
     restoreDraft('simpleHsdReceiptForm',hsdReceiptDraftKey());
   }else if($('simpleHsdForm')){
