@@ -14,6 +14,8 @@ class WeightFactorIn(BaseModel):
     operatingDate: date | None = None
     shift: str | None = Field(default=None, max_length=20)
     materialId: str | None = Field(default=None, max_length=80)
+    destinationLocationId: str | None = Field(default=None, max_length=80)
+    routeId: str | None = Field(default=None, max_length=80)
     vehicleClass: str | None = Field(default=None, max_length=80)
     sourceOrg: str = Field(default="MCL", max_length=80)
     referenceNo: str | None = Field(default=None, max_length=120)
