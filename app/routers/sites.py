@@ -1029,6 +1029,15 @@ def create_weight_factor(site_id: str, p: WeightFactorIn, request: Request, db: 
                 raise HTTPException(422, "Choose a valid active KOCP movement route.")
             if route.movement_kind != kind or route.destination_location_id != p.destinationLocationId:
                 raise HTTPException(422, "The selected route does not match this material and unloading point.")
+            from app.routers.site_material_types import _classify
+            if kind == "OB":
+                route_material = _classify("OB", route.category + " " + route.route_group)
+            else:
+                words = (route.route_group + " " + route.category).upper()
+                route_material = "REJECT" if "REJECT" in words else "COAL"
+            chosen_material = _classify(kind, material.name)
+            if route_material and chosen_material and route_material != chosen_material:
+                raise HTTPException(422, "Route category and material differ; select the correct Coal/OB route.")
 
     factor_id = f"FAC-{site_id}-{uuid4().hex[:12].upper()}"
     row = SiteWeightFactor(
