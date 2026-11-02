@@ -1331,7 +1331,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
