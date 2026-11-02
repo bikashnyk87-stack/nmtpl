@@ -45,6 +45,7 @@ from app.site_schemas import (
     UserAccountCreateIn,
     UserAccountUpdateIn,
 )
+from app.services.kocp_factor_rules import resolve_kocp_point_factor
 from app.services.site_context import resolve_site_context
 from app.services.site_master_import import equipment_dimensions, equipment_row_errors
 
@@ -1182,6 +1183,22 @@ def create_site_trip(site_id: str, p: SiteTripIn, request: Request, db: Session 
             raise HTTPException(409, "Selected factor is for a different operating date.")
         if factor.shift and factor.shift != ctx.shift:
             raise HTTPException(409, "Selected factor is for a different shift.")
+        if site_id == "KOCP":
+            material_row = db.get(SiteMaterial, p.materialId) if p.materialId else None
+            dest_id = selected_route.destination_location_id if selected_route else p.destinationLocationId
+            vehicle = db.get(Equipment, p.vehicleId) if p.vehicleId else None
+            if not material_row or material_row.site_id != site_id or not dest_id:
+                raise HTTPException(422, "Choose an approved KOCP material and unloading point.")
+            type_name = "OB_CUM_PER_TRIP" if str(material_row.default_unit).upper() in {"CUM", "M3", "M³"} else "COAL_AVG_MT_PER_TRIP"
+            selected = resolve_kocp_point_factor(
+                db, factor_type=type_name, operating_day=ctx.operating_date,
+                shift=ctx.shift, destination_id=dest_id, route_id=p.routeId,
+                material_id=p.materialId,
+                vehicle_type=vehicle.type if vehicle else None,
+                vehicle_group=vehicle.group if vehicle else None,
+            )
+            if selected.factor_id != factor.factor_id:
+                raise HTTPException(409, "The chosen MCL factor does not match this route, unloading point and material.")
         if factor.factor_type == "COAL_AVG_MT_PER_TRIP":
             quantity_mt = factor.factor_value
             weight_basis = "MCL_SHIFT_AVERAGE"
@@ -1243,6 +1260,7 @@ def list_site_trips(site_id: str, request: Request, operating_date: date | None 
         "eventAt": r.event_at, "vehicleId": r.vehicle_id, "vehicleRaw": r.vehicle_raw,
         "driverId": r.driver_id, "loadingEquipmentId": r.loading_equipment_id,
         "routeId": r.route_id, "sourceLocationId": r.source_location_id, "destinationLocationId": r.destination_location_id,
+        "factorId": r.factor_id,
         "materialId": r.material_id, "gpNo": r.gp_no, "quantityMt": r.quantity_mt,
         "quantityCum": r.quantity_cum, "weightBasis": r.weight_basis, "status": r.status,
         "enteredBy": r.entered_by, "enteredAt": r.entered_at, "version": r.version,
