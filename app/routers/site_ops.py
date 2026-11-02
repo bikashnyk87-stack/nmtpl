@@ -924,10 +924,31 @@ def hsd_summary(site_id:str,request:Request,from_date:date|None=None,to_date:dat
 
 
 @router.post("/{site_id}/surveys")
-def create_survey(site_id:str,p:SiteSurveyMeasurementIn,request:Request,db:Session=Depends(get_db)):
-    csrf(request); user=get_user(db,request); site_id=require_site(db,user,site_id); require_permission(db,user,site_id,"MCL_SURVEY","CREATE")
-    mid=f"SUR-{site_id}-{uuid4().hex[:14].upper()}"; db.add(SiteSurveyMeasurement(measurement_id=mid,site_id=site_id,period_start=p.periodStart,period_end=p.periodEnd,material_id=p.materialId,measurement_type=p.measurementType.upper(),measured_cum=p.measuredCum,measured_mt=p.measuredMt,source_org=p.sourceOrg,reference_no=p.referenceNo,reference_date=p.referenceDate,status="DRAFT",notes=p.notes,entered_by=user.login_id)); _audit(db,user,site_id,"CREATE_SURVEY","site_survey_measurement",mid,after=p.model_dump()); db.commit(); return {"ok":True,"measurementId":mid,"status":"DRAFT"}
-
+def create_survey(site_id: str, p: SiteSurveyMeasurementIn, request: Request, db: Session = Depends(get_db)):
+    csrf(request)
+    user = get_user(db, request)
+    site_id = require_site(db, user, site_id)
+    require_permission(db, user, site_id, "MCL_SURVEY", "CREATE")
+    if site_id == "KOCP":
+        material = db.get(SiteMaterial, p.materialId) if p.materialId else None
+        if not material or material.site_id != site_id or not material.active:
+            raise HTTPException(422, "Choose a Coal or OB material from the master.")
+        is_ob = str(material.default_unit or "").upper() in {"CUM", "M3", "M³"}
+        if is_ob and p.measuredCum <= 0:
+            raise HTTPException(422, "Enter certified OB CuM above zero.")
+        if not is_ob and (p.measuredMt is None or p.measuredMt <= 0):
+            raise HTTPException(422, "Enter certified Coal MT above zero.")
+    mid = f"SUR-{site_id}-{uuid4().hex[:14].upper()}"
+    db.add(SiteSurveyMeasurement(
+        measurement_id=mid, site_id=site_id, period_start=p.periodStart,
+        period_end=p.periodEnd, material_id=p.materialId,
+        measurement_type=p.measurementType.upper(), measured_cum=p.measuredCum,
+        measured_mt=p.measuredMt, source_org=p.sourceOrg, reference_no=p.referenceNo,
+        reference_date=p.referenceDate, status="DRAFT", notes=p.notes, entered_by=user.login_id,
+    ))
+    _audit(db, user, site_id, "CREATE_SURVEY", "site_survey_measurement", mid, after=p.model_dump())
+    db.commit()
+    return {"ok": True, "measurementId": mid, "status": "DRAFT"}
 
 @router.get("/{site_id}/surveys")
 def list_surveys(site_id:str,request:Request,db:Session=Depends(get_db)):
@@ -946,16 +967,73 @@ def decide_survey(site_id:str,measurement_id:str,p:SiteDecisionIn,request:Reques
 
 
 @router.post("/{site_id}/billing/build")
-def build_billing(site_id:str,request:Request,period_start:date,period_end:date,material_id:str|None=None,survey_id:str|None=None,db:Session=Depends(get_db)):
-    csrf(request); user=get_user(db,request); site_id=require_site(db,user,site_id); require_permission(db,user,site_id,"BILLING","CREATE")
-    if period_end<period_start: raise HTTPException(422,"Invalid billing period")
-    trip_filters=[SiteTrip.site_id==site_id,SiteTrip.operating_date>=period_start,SiteTrip.operating_date<=period_end,SiteTrip.status!="VOID"]
-    if material_id: trip_filters.append(SiteTrip.material_id==material_id)
-    op_mt=db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_mt),0)).where(*trip_filters)) or 0; op_cum=db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_cum),0)).where(*trip_filters)) or 0
-    survey=db.get(SiteSurveyMeasurement,survey_id) if survey_id else db.scalar(select(SiteSurveyMeasurement).where(SiteSurveyMeasurement.site_id==site_id,SiteSurveyMeasurement.period_start<=period_start,SiteSurveyMeasurement.period_end>=period_end,SiteSurveyMeasurement.status=="APPROVED").order_by(SiteSurveyMeasurement.approved_at.desc()).limit(1))
-    cert_mt=_decimal(survey.measured_mt) if survey and survey.measured_mt is not None else None; cert_cum=_decimal(survey.measured_cum) if survey else None
-    bid=f"BILL-{site_id}-{uuid4().hex[:14].upper()}"; row=SiteBillingReconciliation(billing_id=bid,site_id=site_id,period_start=period_start,period_end=period_end,material_id=material_id,operational_mt=op_mt,operational_cum=op_cum,certified_mt=cert_mt,certified_cum=cert_cum,billable_mt=cert_mt if cert_mt is not None else op_mt,billable_cum=cert_cum if cert_cum is not None else op_cum,variance_mt=(cert_mt-_decimal(op_mt)) if cert_mt is not None else None,variance_cum=(cert_cum-_decimal(op_cum)) if cert_cum is not None else None,source_measurement_id=survey.measurement_id if survey else None,status="DRAFT",created_by=user.login_id); db.add(row); _audit(db,user,site_id,"BUILD_BILLING","site_billing_reconciliation",bid,after={"periodStart":period_start,"periodEnd":period_end,"operationalMt":str(op_mt),"operationalCum":str(op_cum),"surveyId":survey.measurement_id if survey else None}); db.commit(); return {"ok":True,"billingId":bid}
-
+def build_billing(site_id: str, request: Request, period_start: date, period_end: date,
+                  material_id: str | None = None, survey_id: str | None = None,
+                  db: Session = Depends(get_db)):
+    csrf(request)
+    user = get_user(db, request)
+    site_id = require_site(db, user, site_id)
+    require_permission(db, user, site_id, "BILLING", "CREATE")
+    if period_end < period_start:
+        raise HTTPException(422, "Invalid billing period.")
+    material = db.get(SiteMaterial, material_id) if material_id else None
+    if site_id == "KOCP" and (
+        not material or material.site_id != site_id or not material.active
+    ):
+        raise HTTPException(422, "Choose the Coal or OB material to reconcile.")
+    is_ob = bool(material and str(material.default_unit or "").upper() in {"CUM", "M3", "M³"})
+    trip_filters = [
+        SiteTrip.site_id == site_id,
+        SiteTrip.operating_date >= period_start,
+        SiteTrip.operating_date <= period_end,
+        SiteTrip.status != "VOID",
+    ]
+    if material_id:
+        trip_filters.append(SiteTrip.material_id == material_id)
+    op_mt = db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_mt), 0)).where(*trip_filters)) or 0
+    op_cum = db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_cum), 0)).where(*trip_filters)) or 0
+    survey = None
+    if survey_id:
+        survey = db.get(SiteSurveyMeasurement, survey_id)
+        if not survey or survey.site_id != site_id or survey.status != "APPROVED":
+            raise HTTPException(422, "Choose an approved MCL survey.")
+        if site_id == "KOCP" and (
+            survey.material_id != material_id or
+            survey.period_start > period_start or survey.period_end < period_end
+        ):
+            raise HTTPException(422, "Survey must match this Coal/OB material and cover the billing period.")
+    else:
+        stmt = select(SiteSurveyMeasurement).where(
+            SiteSurveyMeasurement.site_id == site_id,
+            SiteSurveyMeasurement.period_start <= period_start,
+            SiteSurveyMeasurement.period_end >= period_end,
+            SiteSurveyMeasurement.status == "APPROVED",
+        )
+        if site_id == "KOCP":
+            stmt = stmt.where(SiteSurveyMeasurement.material_id == material_id)
+        survey = db.scalars(stmt.order_by(SiteSurveyMeasurement.approved_at.desc()).limit(1)).first()
+    cert_mt = _decimal(survey.measured_mt) if survey and survey.measured_mt is not None and (site_id != "KOCP" or not is_ob) else None
+    cert_cum = _decimal(survey.measured_cum) if survey and (site_id != "KOCP" or is_ob) else None
+    bid = f"BILL-{site_id}-{uuid4().hex[:14].upper()}"
+    row = SiteBillingReconciliation(
+        billing_id=bid, site_id=site_id, period_start=period_start, period_end=period_end,
+        material_id=material_id, operational_mt=op_mt, operational_cum=op_cum,
+        certified_mt=cert_mt, certified_cum=cert_cum,
+        billable_mt=cert_mt if site_id == "KOCP" else (cert_mt if cert_mt is not None else op_mt),
+        billable_cum=cert_cum if site_id == "KOCP" else (cert_cum if cert_cum is not None else op_cum),
+        variance_mt=(cert_mt - _decimal(op_mt)) if cert_mt is not None else None,
+        variance_cum=(cert_cum - _decimal(op_cum)) if cert_cum is not None else None,
+        source_measurement_id=survey.measurement_id if survey else None,
+        status="DRAFT", created_by=user.login_id,
+    )
+    db.add(row)
+    _audit(db, user, site_id, "BUILD_BILLING", "site_billing_reconciliation", bid,
+           after={"periodStart": period_start, "periodEnd": period_end,
+                  "materialId": material_id, "operationalMt": str(op_mt),
+                  "operationalCum": str(op_cum),
+                  "surveyId": survey.measurement_id if survey else None})
+    db.commit()
+    return {"ok": True, "billingId": bid, "certified": survey is not None}
 
 @router.get("/{site_id}/billing")
 def list_billing(site_id:str,request:Request,db:Session=Depends(get_db)):
@@ -969,6 +1047,12 @@ def decide_billing(site_id:str,billing_id:str,p:SiteDecisionIn,request:Request,d
     csrf(request); user=get_user(db,request); site_id=require_site(db,user,site_id); require_permission(db,user,site_id,"BILLING","APPROVE")
     row=db.get(SiteBillingReconciliation,billing_id)
     if not row or row.site_id!=site_id: raise HTTPException(404,"Billing reconciliation not found")
+    if p.action == "APPROVE" and site_id == "KOCP":
+        if not row.source_measurement_id or (row.billable_mt is None and row.billable_cum is None):
+            raise HTTPException(409, "Cannot approve without matching MCL certified Coal MT or OB CuM.")
+        survey = db.get(SiteSurveyMeasurement, row.source_measurement_id)
+        if not survey or survey.status != "APPROVED" or survey.material_id != row.material_id:
+            raise HTTPException(409, "The MCL survey is missing, unapproved or belongs to another material.")
     if p.action not in {"APPROVE","REJECT"}: raise HTTPException(422,"Only APPROVE or REJECT is supported")
     row.status="APPROVED" if p.action=="APPROVE" else "REJECTED"; row.approved_by=user.login_id if p.action=="APPROVE" else None; row.approved_at=datetime.now(timezone.utc) if p.action=="APPROVE" else None; _audit(db,user,site_id,p.action+"_BILLING","site_billing_reconciliation",billing_id,reason=p.reason); db.commit(); return {"ok":True,"status":row.status}
 
