@@ -80,6 +80,12 @@ async function koMaterialOptions(){
   }
   return opts.join('');
 }
+function updateKoSurveyUnit(){
+  const material=$('svMaterial')?.value;
+  const unit=$('svUnit');
+  if(unit)unit.textContent=!material?'Select material':koObSurveyMaterials.has(material)?'CuM (Overburden)':'MT (Coal / Reject)';
+}
+window.updateKoSurveyUnit=updateKoSurveyUnit;
 function koMeasured(r){
   const ob=koObSurveyMaterials.has(r.materialId);
   const v=ob?r.measuredCum:r.measuredMt;
@@ -92,9 +98,9 @@ async function renderSurvey(){
   const form=formGrid(
     field('Period Start','svFrom','date',qdate().slice(0,8)+'01')+
     field('Period End','svTo','date',qdate())+
-    select('Coal / OB Material *','svMaterial',opts)+
-    field('Certified OB Quantity (CuM)','svCum','number')+
-    field('Certified Coal / Reject Quantity (MT)','svMt','number')+
+    select('Coal / OB Material *','svMaterial',opts).replace('<select id="svMaterial">','<select id="svMaterial" onchange="updateKoSurveyUnit()">')+
+    field('Certified Quantity *','svQty','number')+
+    '<div class="field"><span>Unit</span><strong id="svUnit">Select material</strong></div>'+
     field('MCL Reference','svRef')+field('Reference Date','svRefDate','date')+
     field('Notes','svNotes'),
     '<button class="btn primary" onclick="saveSurvey()">Create Survey Draft</button>'
@@ -108,7 +114,7 @@ async function saveSurvey(){
   try{
     const material=$('svMaterial').value,ob=koObSurveyMaterials.has(material);
     if(!material)throw new Error('Choose material');
-    const qty=ob?Number($('svCum').value):Number($('svMt').value);
+    const qty=Number($('svQty').value);
     if(!Number.isFinite(qty)||qty<=0)throw new Error('Enter certified '+(ob?'OB CuM':'Coal MT')+' above zero');
     const body={
       periodStart:$('svFrom').value,periodEnd:$('svTo').value,materialId:material,
