@@ -151,6 +151,55 @@ def destination_bucket_index(trip):
     return None
 
 
+def report_destination_buckets(trips):
+    """Client template categories first; append new verified parties automatically.
+
+    Existing customer/grade columns retain their original order. A new
+    buyer/destination/material combination gets a new pair of columns only
+    when E-Pass metadata is complete. Unknown fields are an explicit review
+    item, never guessed from the transporter or consignee.
+    """
+    categories = list(DESTINATION_BUCKETS)
+    seen = {(normalized(a), normalized(b), normalized(c)) for a,b,c in categories}
+    extensions = {}
+    for trip in trips:
+        if destination_bucket_index(trip) is not None:
+            continue
+        buyer = str(trip.buyer or "").strip()
+        destination = str(trip.destination or "").strip()
+        grade = str(trip.material_grade or "").strip()
+        if not (buyer and destination and grade):
+            continue
+        # Prevent accidentally interpreting placeholder words as new clients.
+        if any(normalized(x) in {"", "unknown", "na", "unverified", "tbd"}
+               for x in (buyer, destination, grade)):
+            continue
+        key = (normalized(buyer), normalized(destination),
+               material_normalized(grade, trip.report_date))
+        if key not in seen:
+            extensions.setdefault(key, (buyer, destination, grade))
+    for key, values in sorted(extensions.items(), key=lambda p: p[0]):
+        categories.append(values)
+        seen.add(key)
+    return categories
+
+
+def report_destination_bucket_index(trip, buckets):
+    """Use original aliases, then newly appended client-report columns."""
+    index = destination_bucket_index(trip)
+    if index is not None:
+        return index
+    key = (normalized(trip.buyer), normalized(trip.destination),
+           material_normalized(trip.material_grade, trip.report_date))
+    if not all(key):
+        return None
+    for i, category in enumerate(buckets):
+        if (normalized(category[0]), normalized(category[1]),
+                material_normalized(category[2], trip.report_date)) == key:
+            return i
+    return None
+
+
 def is_captive(trip):
     return normalized(trip.buyer) == "self"
 
