@@ -164,7 +164,7 @@
           card('Drill metres / hour', amount(k.drillMeterPerHour, 2, ' m/h'), 'HMR-based drilling rate'),
           card('Drill HSD issued', amount(k.drillHsdLitres, 1, ' L'), 'Drill + compressor'),
           card('Drill breakdown', amount(k.drillBreakdownHours, 1, ' h'), 'Recorded breakdown hours'),
-          card('Drill equipment', amount(rows(d.drilling && d.drilling.rows).length, 0), 'Report rows, not unique assets')
+          card('Drill HSD / metre', amount(k.drillMeterage > 0 && k.drillHsdLitres != null ? Number(k.drillHsdLitres) / Number(k.drillMeterage) : null, 3, ' L/m'), 'Issued HSD / measured meterage')
         ].join('') + '</div>') +
       section('Maintenance & month-to-date', 'MTD is a separate monthly view through the selected report date',
         '<div class="small-kpis">' + [
