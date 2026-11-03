@@ -70,7 +70,7 @@ def evaluate_hsd_stock(
         elif kind in {"RECEIPT", "ISSUE"}:
             by_day[day][kind] += amount
         elif kind == "ADJUSTMENT":
-            errors.append("Unclassified adjustment exists; reconcile it before issuing fuel.")
+            errors.append("Unclassified adjustments exist; reconcile them before issuing fuel.")
         else:
             errors.append(f"Unrecognized HSD transaction type {kind}.")
     if additional:
