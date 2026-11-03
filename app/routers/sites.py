@@ -53,6 +53,17 @@ from app.services.site_master_import import equipment_dimensions, equipment_row_
 
 router = APIRouter(prefix="/api/sites", tags=["multi-site"])
 
+# Despatch controls are permissions, not site navigation modules.
+# They are deliberately absent from MODULES_BY_SITE so they do not create
+# empty navigation pages in the TIOM, KOCP or SOCP workspaces.
+EXTRA_PERMISSIONS_BY_SITE = {
+    "TIOM": {
+        "DESPATCH_EVIDENCE": "CREATE",
+        "DESPATCH_IMPORT": "CREATE",
+        "DESPATCH_REVIEW": "EDIT",
+    },
+}
+
 
 MODULES_BY_SITE = {
     # v0.10 exposes the complete agreed workspace catalogue from day one.
@@ -279,7 +290,13 @@ def _normalise_access_plan(db: Session, sites_raw, permissions_raw, default_site
         if len(parts) != 3:
             raise HTTPException(422, f"Invalid permission: {raw}")
         site, module, action = parts
-        if site not in sites or module not in MODULES_BY_SITE.get(site, []) or action not in allowed_actions:
+        if site not in sites or action not in allowed_actions:
+            raise HTTPException(422, f"Permission is not valid for assigned site: {raw}")
+        extra = EXTRA_PERMISSIONS_BY_SITE.get(site, {})
+        if module in extra:
+            if action != extra[module]:
+                raise HTTPException(422, f"Invalid action for {module}: {action}")
+        elif module not in MODULES_BY_SITE.get(site, []):
             raise HTTPException(422, f"Permission is not valid for assigned site: {raw}")
         parsed.append((site, module, action, f"{site}.{module}.{action}"))
     return sites, known_sites, default_site, parsed
@@ -315,6 +332,15 @@ def _apply_access_plan(db: Session, actor, target: WebUser, sites_raw, permissio
             active=True,
             assigned_by=actor.login_id,
         ))
+    # TIOM legacy /tiom and the multi-site platform share this account.
+    # Keep Despatch legacy flags in step with site-specific permissions so
+    # a revoked permission cannot survive through an older checked flag.
+    existing_modules = {x for x in (target.modules or "").split(",") if x}
+    for module, action in EXTRA_PERMISSIONS_BY_SITE["TIOM"].items():
+        existing_modules.discard(module)
+        if f"TIOM.{module}.{action}" in {x[3] for x in parsed}:
+            existing_modules.add(module)
+    target.modules = ",".join(sorted(existing_modules))
     return sorted(sites), default_site, sorted({x[3] for x in parsed})
 
 
@@ -396,6 +422,7 @@ def get_access_matrix(request: Request, db: Session = Depends(get_db)):
             "sites": [r.site_id for r in site_rows],
             "defaultSite": next((r.site_id for r in site_rows if r.default_site), None),
             "permissions": permissions,
+            "legacyModules": sorted(x for x in (account.modules or "").split(",") if x),
         })
     return output
 
