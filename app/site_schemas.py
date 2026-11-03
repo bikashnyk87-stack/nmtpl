@@ -97,6 +97,19 @@ class SiteHsdTransactionIn(BaseModel):
     sourceRecordUid: str | None = Field(default=None, max_length=120)
 
 
+class SiteHsdCorrectionIn(BaseModel):
+    action: str = Field(pattern=r"^(EDIT|VOID)$")
+    expectedVersion: int = Field(ge=1)
+    reason: str = Field(min_length=5, max_length=500)
+    operatingDate: date | None = None
+    shift: str | None = Field(default=None, max_length=20)
+    litres: Decimal | None = Field(default=None, ge=0)
+    assetId: str | None = Field(default=None, max_length=80)
+    supplier: str | None = Field(default=None, max_length=120)
+    referenceNo: str | None = Field(default=None, max_length=120)
+    meterReading: Decimal | None = None
+
+
 class UserSitePermissionPlanIn(BaseModel):
     sites: list[str] = Field(default_factory=list)
     permissions: list[str] = Field(default_factory=list)
