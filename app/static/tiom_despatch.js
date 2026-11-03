@@ -290,7 +290,10 @@ window.tiomDDPanel=async function(which){
           '</div>').join('')+'</section>':
         '<section class="dd-box"><b>E-Pass categories present for '+h(mapping.reportDate)+'</b> · '+
         f(mapping.totalTrips,0)+' E-Passes classified. <small>AMNS permit verification is separate: use MIS Permit Entry.</small></section>';
-      $('dd_body').innerHTML=(issues.items.length?issuePanel:mapPanel)+'<section class="dd-box"><b>Five Client-Format Reports</b>'+
+      $('dd_body').innerHTML=(issues.items.length?issuePanel:
+        '<section class="dd-box"><b>Report classifications ready for '+h(issues.fromDate)+' to '+h(issues.toDate)+'</b> · '+
+        f(mapping.totalTrips,0)+' active E-Passes on the selected day. No month-to-date buyer, destination or material corrections are outstanding.</section>')+
+        '<section class="dd-box"><b>Five Client-Format Reports</b>'+
        '<p>Client report headings expand automatically for new verified buyers, destinations and transporters. Daily and monthly cumulative totals include every added category. FTM totals exclude cancelled trips.</p>'+
        '<div class="dd-tools"><label>Export basis <select id="dd_reportbasis"><option value="daily">Daily submission (To date + MTD)</option><option value="month">Month-to-date workbook (all daily sheets)</option></select></label>'+
        '<span>Reporting date: '+h(v('dd_to'))+' · Client submission next day</span></div>'+
