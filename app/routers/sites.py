@@ -1486,6 +1486,9 @@ def create_hsd_transaction(site_id: str, p: SiteHsdTransactionIn, request: Reque
     site_id = require_site(db, user, site_id)
     require_permission(db, user, site_id, "HSD", "CREATE")
     tx_type=str(p.transactionType or "").strip().upper()
+    if tx_type == "OPENING" and site_id == "KOCP":
+        if not (user.admin or has_permission(db, user, site_id, "HSD", "APPROVE")):
+            raise HTTPException(403, "Verified opening stock can be recorded only by administrator or HSD approver.")
     if tx_type=="OPENING" and site_id=="KOCP":
         # Opening stock is a one-time starting point, not a daily receipt.
         # It can legitimately be zero. All other HSD transactions need >0 L.
