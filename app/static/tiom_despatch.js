@@ -237,8 +237,40 @@ window.tiomDDPanel=async function(which){
         }catch(e){say('Not saved — '+e.message,true);}
       };
     } else if(tab==='reports'){
-      const mapping=await api('mapping-status?report_date='+encodeURIComponent(v('dd_to')));
+      const [mapping,issues]=await Promise.all([
+        api('mapping-status?report_date='+encodeURIComponent(v('dd_to'))),
+        api('mapping-issues?to_date='+encodeURIComponent(v('dd_to')))
+      ]);
       last.sourceMapping=mapping;
+      last.mappingIssues=issues;
+      const opts=(id,values)=>'<datalist id="'+id+'">'+(values||[]).map(x=>'<option value="'+h(x)+'">').join('')+'</datalist>';
+      const issuePanel='<section class="dd-box" id="dd_issue_panel">'+
+        '<h3>Fix missing report classifications · '+f(issues.totalMissingTrips,0)+' trips / '+f(issues.totalMissingPermits,0)+' permits</h3>'+
+        '<p>Showing unresolved permits for <b>'+h(issues.fromDate)+' to '+h(issues.toDate)+'</b>, not just the final day. Choose details from the approved AMNS report, then click Save for that permit. Original Gmail E-Pass weights, dates and trip counts are preserved.</p>'+
+        opts('dd_issue_buyers',issues.buyerOptions)+opts('dd_issue_destinations',issues.destinationOptions)+opts('dd_issue_materials',issues.materialOptions)+
+        issues.items.map((p,i)=>{
+          const source=p.samePermitSource;
+          const field=(key,label,value,datalist,placeholder)=>'<label>'+label+
+            ' <input id="dd_issue_'+key+'_'+i+'" value="'+h(value||'')+'" '+(datalist?'list="'+datalist+'" ':'')+
+            'placeholder="'+h(placeholder||label)+'" /></label>';
+          return '<div class="dd-report dd-mapping-fix" style="display:block">'+
+            '<div class="dd-tools" style="justify-content:space-between;align-items:center"><div><b>'+
+            h(p.reportDate)+' · '+h(p.permitNo)+'</b> · '+f(p.tripCount,0)+' E-Passes / '+f(p.netMt)+' MT'+
+            '<p><small>Needs correction: '+h(p.reason||'Unclassified source')+' · '+f(p.missingTrips,0)+' affected trips</small></p></div>'+
+            (source?'<button class="btn secondary small" onclick="tiomDDUseSamePermitSource('+i+')">Use '+h(source.reportDate)+' values (verify)</button>':'')+
+            '</div><div class="dd-tools dd-mapping-fields">'+
+            field('buyer','Buyer',p.buyer,'dd_issue_buyers','AMNS buyer')+
+            field('dest','Destination',p.destination,'dd_issue_destinations','AMNS destination')+
+            field('mat','Material / grade',p.material,'dd_issue_materials','e.g. C.Fines(60-62)')+
+            field('grade','Grade % (optional)',p.gradePercent,'','e.g. 60.79')+
+            (p.editable?'<button class="btn primary small" id="dd_issue_save_'+i+'" onclick="tiomDDSaveMappingIssue('+i+')">Save & verify permit</button>':
+              '<span>Historical record is read-only</span>')+
+            '</div>'+
+            (source?'<p class="dd-note">Exact permit has classified E-Passes on '+h(source.reportDate)+
+              '. Verify the same buyer, destination and grade against AMNS before reusing. Do not copy that date’s quantity.</p>':'')+
+            '</div>';
+        }).join('')+
+        '<p class="dd-note">Corrections are saved to the MIS permit register and audited. They are used in the five reports without editing the original E-Pass records. Refresh to confirm all outstanding permits are cleared.</p></section>';
       const mapPanel=mapping.unmappedTrips?
         '<section class="dd-box"><b>Source mapping · '+f(mapping.unmappedTrips,0)+' unclassified trips / '+mapping.permits.length+' permits</b>'+
         '<p>Only missing classifications are corrected. Existing E-Pass weights, trip counts and 1–26 October records remain unchanged.</p>'+
@@ -258,7 +290,7 @@ window.tiomDDPanel=async function(which){
           '</div>').join('')+'</section>':
         '<section class="dd-box"><b>E-Pass categories present for '+h(mapping.reportDate)+'</b> · '+
         f(mapping.totalTrips,0)+' E-Passes classified. <small>AMNS permit verification is separate: use MIS Permit Entry.</small></section>';
-      $('dd_body').innerHTML=mapPanel+'<section class="dd-box"><b>Five Client-Format Reports</b>'+
+      $('dd_body').innerHTML=(issues.items.length?issuePanel:mapPanel)+'<section class="dd-box"><b>Five Client-Format Reports</b>'+
        '<p>Client report headings expand automatically for new verified buyers, destinations and transporters. Daily and monthly cumulative totals include every added category. FTM totals exclude cancelled trips.</p>'+
        '<div class="dd-tools"><label>Export basis <select id="dd_reportbasis"><option value="daily">Daily submission (To date + MTD)</option><option value="month">Month-to-date workbook (all daily sheets)</option></select></label>'+
        '<span>Reporting date: '+h(v('dd_to'))+' · Client submission next day</span></div>'+
@@ -276,6 +308,38 @@ window.tiomDDPanel=async function(which){
 };
 window.tiomDDSearch=()=>{search=v('dd_search');page=1;window.tiomDDPanel('trips');};
 window.tiomDDPage=delta=>{page=Math.max(1,page+delta);window.tiomDDPanel('trips');};
+window.tiomDDUseSamePermitSource=i=>{
+  const p=last.mappingIssues?.items?.[i],source=p?.samePermitSource;
+  if(!source)return say('No matching complete same-permit source available.',true);
+  if(!confirm('Check the AMNS source first. Copy buyer, destination and material from '+source.reportDate+
+    ' for the SAME permit '+p.permitNo+'?\\nThis does not save anything or copy source-date quantities.'))return;
+  for(const [key,value] of [['buyer',source.buyer],['dest',source.destination],['mat',source.material]]){
+    const input=$('dd_issue_'+key+'_'+i);if(input)input.value=value;
+  }
+  say('Values filled for '+p.permitNo+'. Check against AMNS and click Save & verify permit.');
+};
+window.tiomDDSaveMappingIssue=async i=>{
+  const p=last.mappingIssues?.items?.[i];
+  if(!p)return say('Refresh Five Reports and select the permit again.',true);
+  const buyer=v('dd_issue_buyer_'+i).trim(),destination=v('dd_issue_dest_'+i).trim(),
+    material=v('dd_issue_mat_'+i).trim(),grade=v('dd_issue_grade_'+i).trim();
+  if(!buyer||!destination||!material)
+    return say('Buyer, destination and approved material / grade are required for '+p.permitNo+'.',true);
+  if(!confirm('Confirm that the approved AMNS record for '+p.permitNo+' on '+p.reportDate+
+    ' supports the entered buyer, destination and grade?\\nOnly MIS classification is saved. Original '+p.tripCount+
+    ' E-Passes and '+f(p.netMt)+' MT will not change.'))return;
+  const button=$('dd_issue_save_'+i);
+  if(button)button.disabled=true;
+  try{
+    const row={permit_no:p.permitNo,buyer,destination,material,grade_percent:grade,
+      permit_qty:p.permitQty,amns_trips:p.tripCount,amns_mt:p.netMt,balance_mt:p.balanceMt};
+    const result=await api('permit-entry-one',JSON.stringify({report_date:p.reportDate,permit:row}));
+    await window.tiomDDPanel('reports');
+    say('Saved '+result.permit+' · '+result.reportDate+' · '+f(result.tripsVerified,0)+
+        ' trips classified. Original E-Passes unchanged. Remaining issues are shown above.');
+  }catch(e){say('Permit not saved: '+e.message,true);}
+  finally{if(button?.isConnected)button.disabled=false;}
+};
 window.tiomDDRepairCategories=async()=>{
   const date=v('dd_to');if(!date)return say('Choose a Despatch reporting date',true);
   say('Reconciling categories against exact, previously verified permits…');
@@ -353,6 +417,12 @@ window.tiomDDExport=async type=>{
         fix.style.marginLeft='12px';
         fix.onclick=()=>window.tiomDDOpenPermitFix(ready.fixDate,ready.fixPermit);
         $('dd_notice')?.appendChild(fix);
+        return;
+      }
+      const issueList=$('dd_issue_panel');
+      if(issueList){
+        say((ready.message||'Source classification required')+' — correct the permits in the panel above.',true);
+        issueList.scrollIntoView({block:'start',behavior:'smooth'});
         return;
       }
       throw Error(ready.message||'Source data not ready');
