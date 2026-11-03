@@ -53,6 +53,7 @@ from app.site_models import (
     TiomMisTripRow,
     TiomMisReconciliation,
 )
+from app.services.kocp_hsd_stock import evaluate_hsd_stock
 from app.services.kocp_factor_rules import resolve_kocp_point_factor
 from app.services.kocp_equipment import (
     kocp_asset_allowed, kocp_role_allowed, kocp_asset_display,
@@ -1433,68 +1434,30 @@ def report_summary(site_id:str,request:Request,from_date:date|None=None,to_date:
 
 
 def _fuel_balance_as_of(db: Session, site_id: str, end: date) -> dict:
-    """Conservative posted-stock ledger for HSD. No database mutations.
-
-    Fails closed on missing/duplicate opening, backdated older movements,
-    unclassified adjustments or a negative ledger balance.
-    """
-    # Initial fuel stock is one verified baseline per site. Closing inventory
-    # is derived from ALL posted receipts/issues since that baseline (not only
-    # the dashboard's selected period); adjustments require separate review.
-    openings = list(db.scalars(select(SiteHsdTransaction).where(
+    """Stock is verified only if the full ledger passes the shared validation."""
+    opening = db.scalar(select(SiteHsdTransaction).where(
         SiteHsdTransaction.site_id == site_id,
         SiteHsdTransaction.status == "POSTED",
         SiteHsdTransaction.transaction_type == "OPENING",
-    ).order_by(SiteHsdTransaction.operating_date, SiteHsdTransaction.entered_at).limit(2)))
-    opening = openings[0] if len(openings) == 1 else None
+    ).order_by(SiteHsdTransaction.operating_date).limit(1))
     opening_info = ({
         "date": opening.operating_date.isoformat(),
         "litres": _fmt_decimal(opening.litres),
         "reference": opening.reference_no,
         "transactionId": opening.transaction_id,
     } if opening else None)
-    stock_balance = None
-    stock_note = "Enter the first verified opening balance under Fuel / HSD → Opening Balance."
-    if len(openings) > 1:
-        stock_note = "Multiple opening records found; stock must be reconciled before calculating a balance."
-    elif opening and opening.operating_date > end:
-        stock_note = "Opening balance is dated after the selected period; stock is unavailable."
-    elif opening:
-        earlier_count = db.scalar(select(func.count()).select_from(SiteHsdTransaction).where(
-            SiteHsdTransaction.site_id == site_id,
-            SiteHsdTransaction.status == "POSTED",
-            SiteHsdTransaction.transaction_type.in_(["RECEIPT", "ISSUE", "ADJUSTMENT"]),
-            SiteHsdTransaction.operating_date < opening.operating_date,
-        )) or 0
-        adjustments = db.scalar(select(func.count()).select_from(SiteHsdTransaction).where(
-            SiteHsdTransaction.site_id == site_id,
-            SiteHsdTransaction.status == "POSTED",
-            SiteHsdTransaction.transaction_type == "ADJUSTMENT",
-            SiteHsdTransaction.operating_date >= opening.operating_date,
-            SiteHsdTransaction.operating_date <= end,
-        )) or 0
-        if earlier_count or adjustments:
-            stock_note = "Stock calculation withheld: earlier movements or unclassified adjustments require reconciliation."
-        else:
-            stock_moves = db.execute(select(
-                SiteHsdTransaction.transaction_type,
-                func.coalesce(func.sum(SiteHsdTransaction.litres), 0),
-            ).where(
-                SiteHsdTransaction.site_id == site_id,
-                SiteHsdTransaction.status == "POSTED",
-                SiteHsdTransaction.transaction_type.in_(["RECEIPT", "ISSUE"]),
-                SiteHsdTransaction.operating_date >= opening.operating_date,
-                SiteHsdTransaction.operating_date <= end,
-            ).group_by(SiteHsdTransaction.transaction_type)).all()
-            by_type = {kind: Decimal(str(quantity)) for kind, quantity in stock_moves}
-            expected = Decimal(str(opening.litres)) + by_type.get("RECEIPT", Decimal("0")) - by_type.get("ISSUE", Decimal("0"))
-            if expected < 0:
-                stock_note = "Fuel ledger is negative; check missing receipts/issues before relying on stock."
-            else:
-                stock_balance = _fmt_decimal(expected)
-                stock_note = "Calculated ledger balance as of period end; verify against physical stock. Excludes unposted transactions."
-    return {"openingBalance": opening_info,
-            "stockBalance": stock_balance, "stockNote": stock_note}
+    state = evaluate_hsd_stock(db, site_id, as_of=end)
+    verified = state["verified"] and state["balance"] is not None
+    if verified:
+        balance = _fmt_decimal(state["balance"])
+        note = "Verified daily ledger balance; compare against physical dip/stock register."
+    elif state["verified"]:
+        balance = None
+        note = "Selected date is before the approved opening stock date."
+    else:
+        balance = None
+        note = state["reason"] or "HSD ledger needs reconciliation."
+    return {"openingBalance": opening_info, "stockBalance": balance, "stockNote": note}
 
 
 @router.get("/{site_id}/fuel/balance")
