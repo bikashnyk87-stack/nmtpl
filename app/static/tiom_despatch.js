@@ -242,6 +242,7 @@ window.tiomDDPanel=async function(which){
       const mapPanel=mapping.unmappedTrips?
         '<section class="dd-box"><b>Source mapping · '+f(mapping.unmappedTrips,0)+' unclassified trips / '+mapping.permits.length+' permits</b>'+
         '<p>Only missing classifications are corrected. Existing E-Pass weights, trip counts and 1–26 October records remain unchanged.</p>'+
+        '<p class="dd-evidence-note">Earlier AMNS reports remain available when the same permit continues on later E-Pass dates. Inspect the actual image and confirm its permit, buyer, destination and material. Its original trips and MT must not be copied to later dates.</p>'+
         '<button class="btn primary small" onclick="tiomDDRepairCategories()">Auto-fill from completed permit history</button>'+
         mapping.permits.map((p,i)=>
           '<div class="dd-report"><div><strong>'+h(p.permit_no)+'</strong> · '+f(p.tripCount,0)+' trips · '+f(p.netMt)+' MT'+
@@ -249,9 +250,11 @@ window.tiomDDPanel=async function(which){
           (p.sourceMapped?'<small>Auto-fill available</small>':
            '<div><select id="dd_bucket_'+i+'"><option value="">Choose verified buyer / destination / grade</option>'+
            mapping.categories.map(b=>'<option value="'+b.index+'">'+h(b.buyer)+' · '+h(b.destination)+' · '+h(b.material)+'</option>').join('')+
-           '</select><select id="dd_amns_'+i+'"><option value="">Choose the AMNS image</option>'+
-           mapping.images.map(img=>'<option value="'+h(img.id)+'">'+h(img.name)+'</option>').join('')+
-           '</select><button class="btn secondary small" onclick="tiomDDConfirmCategory('+i+')">Confirm one permit</button></div>')+
+           '</select><select id="dd_amns_'+i+'" aria-label="AMNS evidence for '+h(p.permit_no)+'" onchange="tiomDDEvidencePreview('+i+')"><option value="">Choose AMNS evidence (current or prior date)</option>'+
+           mapping.images.map(img=>'<option value="'+h(img.id)+'">'+h(img.name)+' · '+h(img.reportDate)+(img.earlierEvidence?' (earlier report)':' (same day)')+'</option>').join('')+
+           '</select><div id="dd_amns_preview_'+i+'" class="dd-evidence-preview">Choose an image to view its original report before confirming this permit.</div>'+
+           (p.relatedUnclassifiedTrips>p.tripCount?'<label class="dd-evidence-propagate"><input type="checkbox" id="dd_all_dates_'+i+'" checked> Fill missing classifications for this exact permit on '+h(p.relatedDates.join(', '))+' ('+f(p.relatedUnclassifiedTrips,0)+' trips)</label>':'')+
+           '<button class="btn secondary small" onclick="tiomDDConfirmCategory('+i+')">Confirm permit classification</button></div>')+
           '</div>').join('')+'</section>':
         '<section class="dd-box"><b>E-Pass categories present for '+h(mapping.reportDate)+'</b> · '+
         f(mapping.totalTrips,0)+' E-Passes classified. <small>AMNS permit verification is separate: use MIS Permit Entry.</small></section>';
@@ -283,25 +286,45 @@ window.tiomDDRepairCategories=async()=>{
         f(x.mapping?.unmappedTrips||0,0)+' trips still need confirmed permit classification.');
   }catch(e){say(e.message,true);}
 };
+window.tiomDDEvidencePreview=i=>{
+  const id=v('dd_amns_'+i),img=last.sourceMapping?.images?.find(x=>x.id===id);
+  const box=$('dd_amns_preview_'+i);
+  if(!box)return;
+  box.innerHTML=img
+    ? '<a target="_blank" rel="noopener noreferrer" href="/api/tiom/despatch/image/'+encodeURIComponent(img.id)+'">View original '+h(img.name)+'</a>'+
+      ' · AMNS report date '+h(img.reportDate)+(img.earlierEvidence?' · Earlier evidence for continuing permit':' · Same-date evidence')+
+      ' · '+h(img.status||'EVIDENCE_ONLY')
+    : 'Choose an image to view its original report before confirming this permit.';
+};
 window.tiomDDConfirmCategory=async i=>{
   const item=last.sourceMapping?.permits?.[i];
   if(!item)return say('Refresh source mappings before confirming.',true);
   const category=v('dd_bucket_'+i),image=v('dd_amns_'+i);
   if(category==='')return say('Select the matching buyer, destination and material from AMNS.',true);
-  if(!image)return say('Select the matching-date AMNS image for verification.',true);
+  if(!image)return say('Choose AMNS supporting evidence. Earlier dates are allowed for the same continuing permit.',true);
   const selected=last.sourceMapping.categories.find(c=>c.index===Number(category));
-  if(!selected)return say('Invalid category selection.',true);
-  if(!window.confirm('Confirm AMNS image shows permit '+item.permit_no+
+  const doc=last.sourceMapping.images.find(x=>x.id===image);
+  if(!selected||!doc)return say('Invalid category or evidence selection. Refresh the report.',true);
+  const applyRelatedDates=$('dd_all_dates_'+i)?.checked!==false;
+  const samePermitDates=(applyRelatedDates?(item.relatedDates||[]):[last.sourceMapping.reportDate])
+    .filter(d=>d>=doc.reportDate&&d<=last.sourceMapping.reportDate);
+  if(!window.confirm('Open the original image to verify first.\\n\\n'+
+    'Does '+doc.name+' (AMNS report '+doc.reportDate+') SHOW permit '+item.permit_no+
     ' as '+selected.buyer+' / '+selected.destination+' / '+selected.material+
-    '? This will fill missing classification fields for '+item.tripCount+' trips, without changing MT.'))return;
+    '?\\n\\nThe confirmed category will fill only missing source classifications for this exact permit'+
+    (samePermitDates.length?' on '+samePermitDates.join(', '):' for the selected E-Pass date')+
+    '. Existing E-Pass dates, weights, trip counts and cancelled rows will remain unchanged.'))return;
   try{
     const r=await api('mapping-confirm',JSON.stringify({
       report_date:last.sourceMapping.reportDate,permit_no:item.permit_no,
       category_index:Number(category),document_id:image,
-      expected_trips:item.tripCount,confirmed_against_amns:true
+      expected_trips:item.tripCount,confirmed_against_amns:true,
+      apply_to_related_dates:applyRelatedDates
     }));
     await window.tiomDDPanel('reports');
-    say('Confirmed '+r.tripsChecked+' trips for '+r.permit+'. Existing quantities were not changed.');
+    say('Confirmed permit '+r.permit+' using AMNS '+r.imageDate+'. Updated '+
+      (r.changedTripCount||0)+' E-Pass classifications across '+(r.changedDates||[]).join(', ')+
+      '. All E-Pass trips and quantities preserved.');
   }catch(e){say(e.message,true);}
 };
 window.tiomDDOpenPermitFix=async(date,permit)=>{

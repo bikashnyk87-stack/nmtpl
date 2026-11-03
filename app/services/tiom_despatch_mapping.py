@@ -92,18 +92,27 @@ def mapping_status(db, day: date):
     for permit, entries in pending.items():
         candidate = _group_candidate(by_permit.get(permit, []))
         compatible = bool(candidate and all(_matches_existing(x, candidate) for x in entries))
+        earlier = [x for x in by_permit.get(permit, []) if
+                   OPEN_DAY <= x.report_date < day and not _is_classified(x)]
         permits.append({
             "permit_no": permit,
             "tripCount": len(entries),
+            "relatedUnclassifiedTrips": len(earlier) + len(entries),
+            "relatedDates": sorted({x.report_date.isoformat() for x in earlier + entries}),
             "netMt": float(sum((Decimal(str(x.net_mt)) for x in entries), Decimal("0"))),
             "consignee": next((x.consignee for x in entries if x.consignee), ""),
             "sourceMapped": compatible,
             "candidate": {k: str(candidate[k]) for k in FIELDS} if compatible else None,
             "classification": "MATCHES_PREVIOUS_PERMIT" if compatible else "VERIFY_NEW_PERMIT",
         })
+    # AMNS permit authorization can precede subsequent days' E-Pass dispatches.
+    # Keep the original document date visible so operators must confirm the
+    # exact permit, buyer, destination and grade before reusing evidence.
     images = list(db.scalars(select(DespatchDocument).where(
-        DespatchDocument.report_date == day
-    ).order_by(DespatchDocument.created_at.desc())))
+        DespatchDocument.report_date >= OPEN_DAY,
+        DespatchDocument.report_date <= day,
+    ).order_by(DespatchDocument.report_date.desc(),
+               DespatchDocument.created_at.desc()).limit(150)))
     return {
         "reportDate": day.isoformat(), "closed": False, "totalTrips": len(trips),
         "unmappedTrips": sum(len(x) for x in pending.values()),
@@ -111,7 +120,10 @@ def mapping_status(db, day: date):
         "categories": [{"index": i, "buyer": x[0], "destination": x[1], "material": x[2]}
                        for i, x in enumerate(DESTINATION_BUCKETS)
                        if material_normalized(x[2], day) in VALID_MATERIALS],
-        "images": [{"id": i.id, "name": i.filename} for i in images],
+        "images": [{"id": i.id, "name": i.filename,
+                    "reportDate": i.report_date.isoformat(),
+                    "status": i.review_status,
+                    "earlierEvidence": i.report_date != day} for i in images],
     }
 
 
@@ -189,7 +201,8 @@ def reconcile_known_permits(db, *, actor: str = "DESPATCH_AUTOMATIC_PERMIT_MASTE
 
 
 def apply_confirmed_category(db, *, actor: str, report_date: date, permit_no: str,
-                             category_index: int, document_id: str, expected_trips: int):
+                             category_index: int, document_id: str, expected_trips: int,
+                             apply_to_related_dates: bool = True):
     """One verified AMNS classification for one permit/day; no weight edits."""
     from app.routers.tiom_despatch import (
         DespatchTrip, DespatchDocument, DespatchAudit,
@@ -199,15 +212,33 @@ def apply_confirmed_category(db, *, actor: str, report_date: date, permit_no: st
     if not 0 <= category_index < len(DESTINATION_BUCKETS):
         raise ValueError("Choose an approved client report category")
     doc = db.get(DespatchDocument, document_id)
-    if not doc or doc.report_date != report_date:
-        raise ValueError("Select the AMNS image for the correct reporting date")
-    rows = list(db.scalars(select(DespatchTrip).where(
+    if not doc or not doc.report_date or doc.report_date > report_date:
+        raise ValueError("Select an existing AMNS image dated on or before the E-Pass reporting date")
+    # The selected-day count must match the screen before touching anything.
+    selected = list(db.scalars(select(DespatchTrip).where(
         DespatchTrip.report_date == report_date,
         DespatchTrip.permit_no == permit_no,
         DespatchTrip.status == "ACTIVE",
     )))
-    if not rows or len(rows) != expected_trips:
+    if not selected or len(selected) != expected_trips:
         raise ValueError("Permit trip count changed; refresh before confirmation")
+    # An explicitly verified source image proves permit identity, not the
+    # quantities on subsequent dates. Reuse its classification for the exact
+    # same permit only, while preserving each E-Pass date, MT and status.
+    first_day = max(OPEN_DAY, doc.report_date) if apply_to_related_dates else report_date
+    rows = list(db.scalars(select(DespatchTrip).where(
+        DespatchTrip.report_date >= first_day,
+        DespatchTrip.report_date <= report_date,
+        DespatchTrip.permit_no == permit_no,
+        DespatchTrip.status == "ACTIVE",
+    ).order_by(DespatchTrip.report_date, DespatchTrip.epass_no)))
+    consignees = {normalized(x.consignee) for x in rows if x.consignee}
+    if len(consignees) > 1:
+        raise ValueError("This permit has inconsistent consignee data across dates; confirm each date separately")
+    positive_quantities = {Decimal(str(x.permit_qty)) for x in rows
+                           if x.permit_qty is not None and Decimal(str(x.permit_qty)) > 0}
+    if len(positive_quantities) > 1:
+        raise ValueError("This permit has inconsistent registered quantities across dates; confirm each date separately")
     choice = dict(zip(FIELDS, DESTINATION_BUCKETS[category_index]))
     from app.services.tiom_despatch_client_layout import material_normalized
     if material_normalized(choice["material_grade"], report_date) not in VALID_MATERIALS:
@@ -217,21 +248,36 @@ def apply_confirmed_category(db, *, actor: str, report_date: date, permit_no: st
         if not _matches_existing(row, choice):
             raise ValueError("Existing source classification conflicts with this category; preserve original")
     changed = 0
+    changed_epasses = []
+    changed_dates = set()
     for row in rows:
+        updated = False
         for key in FIELDS:
             if not str(getattr(row, key) or "").strip():
                 setattr(row, key, choice[key])
                 changed += 1
+                updated = True
+        if updated:
+            changed_epasses.append(row.epass_no)
+            changed_dates.add(row.report_date.isoformat())
     if changed:
         db.add(DespatchAudit(actor=actor, action="CONFIRM_AMNS_CATEGORY",
                             entity_key=permit_no,
-                            reason="User-confirmed category against AMNS image " + doc.id,
+                            reason="Operator-verified AMNS source category for exact permit " + doc.id,
                             before_json=None,
                             after_json=json.dumps({"reportDate": report_date.isoformat(),
+                                                   "imageDate": doc.report_date.isoformat(),
                                                    "imageId": doc.id,
                                                    "categoryIndex": category_index,
                                                    "fields": choice,
-                                                   "tripsChecked": len(rows)})))
+                                                   "selectedDayTrips": len(selected),
+                                                   "applyToRelatedDates": apply_to_related_dates,
+                                                   "relatedTripsChecked": len(rows),
+                                                   "changedTripCount": len(changed_epasses),
+                                                   "changedDates": sorted(changed_dates),
+                                                   "changedEPasses": changed_epasses[:20]})))
         db.commit()
-    return {"ok": True, "permit": permit_no, "tripsChecked": len(rows),
+    return {"ok": True, "permit": permit_no, "tripsChecked": len(selected),
+            "relatedTripsChecked": len(rows), "changedTripCount": len(changed_epasses),
+            "changedDates": sorted(changed_dates), "imageDate": doc.report_date.isoformat(),
             "changedFields": changed, "category": choice}
