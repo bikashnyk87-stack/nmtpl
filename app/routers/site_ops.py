@@ -992,7 +992,7 @@ def performance(site_id:str,request:Request,dimension:str="vehicle",from_date:da
     rows=[]
     for key,trips,mt,cum in db.execute(stmt):
         if key is None: continue
-        hsd=db.scalar(select(func.coalesce(func.sum(SiteHsdTransaction.litres),0)).where(SiteHsdTransaction.site_id==site_id,SiteHsdTransaction.operating_date>=start,SiteHsdTransaction.operating_date<=end,SiteHsdTransaction.transaction_type=="ISSUE",SiteHsdTransaction.asset_id==str(key))) or 0
+        hsd=db.scalar(select(func.coalesce(func.sum(SiteHsdTransaction.litres),0)).where(SiteHsdTransaction.site_id==site_id,SiteHsdTransaction.operating_date>=start,SiteHsdTransaction.operating_date<=end,SiteHsdTransaction.transaction_type=="ISSUE",SiteHsdTransaction.status=="POSTED",SiteHsdTransaction.asset_id==str(key))) or 0
         rows.append({"key":key,"trips":trips,"quantityMt":_fmt_decimal(mt),"quantityCum":_fmt_decimal(cum),"hsdL":_fmt_decimal(hsd),"lPerMt":(_fmt_decimal(hsd)/_fmt_decimal(mt) if _fmt_decimal(mt)>0 else None),"lPerTrip":(_fmt_decimal(hsd)/trips if trips else None)})
     return {"siteId":site_id,"dimension":dimension,"fromDate":start,"toDate":end,"rows":rows}
 
