@@ -1383,6 +1383,8 @@ def correct_kocp_hsd_transaction(
         raise HTTPException(409, "Record was updated by another user. Reload before saving corrections.")
     before = _hsd_audit_snapshot(row)
     reason = p.reason.strip()
+    if len(reason) < 5:
+        raise HTTPException(422, "Enter a meaningful correction reason (at least 5 characters).")
     previous = evaluate_hsd_stock(db, "KOCP")
     if p.action == "VOID":
         if row.transaction_type == "OPENING":
