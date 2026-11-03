@@ -1298,7 +1298,17 @@ def export_report(report_type: str, request: Request,
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     build_ms = (perf_counter() - started) * 1000 - read_ms
-    filename = f"AMIPL_{report_type}_{to_date:%Y-%m-%d}_Client_Format.xlsx"
+    # Keep the five customer-facing filenames recognizable from their
+    # approved source workbooks; the selected reporting month updates itself.
+    fiscal_year = f"{to_date.year if to_date.month>=4 else to_date.year-1}-{(to_date.year+1 if to_date.month>=4 else to_date.year)%100:02d}"
+    names = {
+        "trip": f"Trip Summary {to_date:%b-%y}.xlsx",
+        "transporter": f"Transporter wise Dispatch Report_{to_date:%b-%y}.xlsx",
+        "material": f"Material Wise Dispatch Repor {fiscal_year}.xlsx",
+        "destination": f"Destination Wise Report {to_date:%b-%y}.xlsx",
+        "despatch": f"Despatch Report {to_date:%b-%Y}.xlsx",
+    }
+    filename = names[report_type]
     # BytesIO's default iterator is line based, which fragments compressed ZIP
     # workbooks into many tiny chunks. Send predictable 256KiB chunks instead.
     size = buffer.getbuffer().nbytes
