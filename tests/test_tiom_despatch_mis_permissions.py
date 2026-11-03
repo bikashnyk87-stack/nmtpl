@@ -11,6 +11,8 @@ from app.routers import tiom_despatch
 def actor(monkeypatch):
     user = SimpleNamespace(admin=False, modules="PRODUCTION")
     monkeypatch.setattr(tiom_despatch, "get_user", lambda db, request: user)
+    monkeypatch.setattr(tiom_despatch, "require_site", lambda db, user, site: site)
+    monkeypatch.setattr(tiom_despatch, "has_permission", lambda *args: False)
     return user
 
 
@@ -49,6 +51,27 @@ def test_admin_keeps_full_access(actor):
 
 def test_production_is_still_required(actor):
     actor.modules = "DESPATCH_EVIDENCE"
+    with pytest.raises(HTTPException) as exc:
+        tiom_despatch._user(None, None, permission="DESPATCH_EVIDENCE")
+    assert exc.value.status_code == 403
+
+def test_normalised_site_grant_authorises_despatch_without_legacy_roles(actor, monkeypatch):
+    actor.modules = ""
+    monkeypatch.setattr(tiom_despatch, "has_permission",
+                        lambda db, user, site, module, action:
+                        site == "TIOM" and (module, action) in {
+                            ("PRODUCTION", "VIEW"), ("DESPATCH_EVIDENCE", "CREATE")
+                        })
+    assert tiom_despatch._user(None, None, permission="DESPATCH_EVIDENCE") is actor
+    with pytest.raises(HTTPException) as exc:
+        tiom_despatch._user(None, None, permission="DESPATCH_IMPORT")
+    assert exc.value.status_code == 403
+
+
+def test_unassigned_site_blocks_legacy_despatch(actor, monkeypatch):
+    monkeypatch.setattr(tiom_despatch, "require_site",
+                        lambda *args: (_ for _ in ()).throw(HTTPException(403, "Site unassigned")))
+    actor.modules += ",DESPATCH_EVIDENCE"
     with pytest.raises(HTTPException) as exc:
         tiom_despatch._user(None, None, permission="DESPATCH_EVIDENCE")
     assert exc.value.status_code == 403
