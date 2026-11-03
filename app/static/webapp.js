@@ -33,6 +33,7 @@ function setContext(d,s,t) {text('ctx', `${d} · ${s} Shift · ${t}`);}
 function showLogin(setup) {
   S.boot=null; S.screen='LOGIN'; S.att=null; S.shiftCtl=null;
   document.getElementById('nav').hidden=true; document.getElementById('signOutBtn').hidden=true;
+  const sitePicker=document.getElementById('tiomSiteJump');if(sitePicker)sitePicker.hidden=true;
   text('ctx','--'); text('userName','--');
   html('app','<div class="panel login"><div class="eyebrow">NMTPL SERVER</div><h1>'+(setup?'Create administrator':'Operations MIS')+'</h1><p class="note">'+(setup?'Create your server account on this laptop. This does not change your Google webapp account.':'Sign in with your server account.')+'</p><form id="login_form">'+(setup?'<label>Your name<input id="login_name" maxlength="120" required autocomplete="name"></label>':'')+'<label>User ID<input id="login_id" required maxlength="60" pattern="[A-Za-z0-9_.-]+" autocomplete="username"></label><label>Password<input id="login_pw" type="password" required '+(setup?'minlength="12"':'')+' maxlength="128" autocomplete="'+(setup?'new-password':'current-password')+'"></label>'+(setup?'<p class="note">Use at least 12 characters.</p>':'')+'<button id="login_submit" class="btn primary">'+(setup?'Create account':'Sign in')+'</button><div id="login_status" role="alert"></div></form></div>');
   document.getElementById('login_form').onsubmit=async event=>{
@@ -56,11 +57,26 @@ function allowedScreen(boot,screen){
 async function enterApp(){
   const boot=await request('rpc',{method:'getBootstrap',args:[]}); S.boot=boot;
   text('userName',boot.user.name);setContext(boot.today,boot.shift,boot.time);
-  document.getElementById('signOutBtn').hidden=false;buildNav();
+  document.getElementById('signOutBtn').hidden=false;
+  const sitePicker=document.getElementById('tiomSiteJump');
+  if(sitePicker){
+    sitePicker.hidden=!boot.user.isManagement;
+    const select=document.getElementById('tiomSiteSelect');
+    if(select)select.value='TIOM';
+  }
+  buildNav();
   let saved='';try{saved=sessionStorage.getItem(screenStateKey(boot))||''}catch(_){}
   const fallback=boot.user.isManagement?'HOME':(boot.user.modules.includes('DASHBOARD')?'DASHBOARD':'HOME');
   render(allowedScreen(boot,saved)?saved:fallback);
 }
+// Only central management users can use the cross-site jump control.
+// Site authorization is enforced independently by each destination API.
+function tiomJumpSite(site){
+  if(!S.boot?.user?.isManagement)return;
+  const destinations={TIOM:'/tiom',KOCP:'/site/KOCP',SOCP:'/site/SOCP',CENTRAL:'/central-control'};
+  if(Object.prototype.hasOwnProperty.call(destinations,site))window.location.assign(destinations[site]);
+}
+window.tiomJumpSite=tiomJumpSite;
 async function signOut(){const uid=S.boot?.user?.loginId;try{await request('logout',{})}finally{if(uid)NMTPLNet.clearUserDrafts(uid);if(typeof window.NMTPLClearTiomDrafts==='function')window.NMTPLClearTiomDrafts();showLogin(false)}}
 function buildNav(){
   const items=[];
