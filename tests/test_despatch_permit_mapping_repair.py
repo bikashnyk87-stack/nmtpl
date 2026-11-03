@@ -138,3 +138,108 @@ def test_ui_offers_single_permit_confirmation_and_bulk_safe_repair():
                    "tiomDDRepairCategories","tiomDDConfirmCategory",
                    "Confirm one permit","Source mapping"):
         assert phrase in src
+
+
+def test_earlier_image_visible_and_exact_continuing_permit_maps_multiple_dates_safely():
+    from app.services.tiom_despatch_client_layout import DESTINATION_BUCKETS
+    engine = _setup()
+    source_date = date(2026, 10, 30)
+    oct31 = date(2026, 10, 31)
+    nov1 = date(2026, 11, 1)
+    nov2 = date(2026, 11, 2)
+    ph_bucket = next(i for i, (buyer, dest, mat) in enumerate(DESTINATION_BUCKETS)
+                     if buyer == "PH ASSOCIATES PRIVATE LIMITED"
+                     and dest == "Kuarmunda(SNG)"
+                     and mat == "5-18mm(60-62)")
+    with Session(engine) as db:
+        db.add(router.DespatchDocument(
+            id="AMNS-30", report_date=source_date, filename="30.10.26.jpeg",
+            media_type="image/jpeg", sha256="f"*64,
+            image_data=b"ARCHIVED-IMAGE", review_status="EVIDENCE_ONLY"))
+        db.add(router.DespatchDocument(
+            id="FUTURE", report_date=date(2026, 11, 3), filename="future.jpeg",
+            media_type="image/jpeg", sha256="e"*64, image_data=b"FUTURE"))
+        db.add(_trip("OLD/1","L102601592",date(2026,10,26),
+                     buyer="LEGACY", dest="Dabuna", mat="S.Fines(60-62)"))
+        for day,count in ((oct31,7),(nov1,3),(nov2,1)):
+            for i in range(count):
+                row = _trip(f"{day}/{i}","L102601592",day,
+                            consignee="081813771711/PH ASSOCIATES PRIVATE LIMITED")
+                row.net_mt = Decimal("24.55") if day == nov2 else Decimal("30.5")
+                db.add(row)
+        db.add(_trip("UNRELATED", "L102604965", nov2,
+                     consignee="A DIFFERENT COMPANY"))
+        db.commit()
+        before = {(x.epass_no, x.report_date, x.status, x.net_mt)
+                  for x in db.scalars(select(router.DespatchTrip))}
+        preview = mapping_status(db, nov2)
+        doc = next(x for x in preview["images"] if x["id"]=="AMNS-30")
+        assert doc == {"id":"AMNS-30", "name":"30.10.26.jpeg",
+                       "reportDate":"2026-10-30", "status":"EVIDENCE_ONLY",
+                       "earlierEvidence":True}
+        assert all(x["id"]!="FUTURE" for x in preview["images"])
+        permit = next(x for x in preview["permits"] if x["permit_no"] == "L102601592")
+        assert permit["relatedUnclassifiedTrips"] == 11
+        assert permit["relatedDates"] == ["2026-10-31","2026-11-01","2026-11-02"]
+        with pytest.raises(ValueError, match="on or before"):
+            apply_confirmed_category(db,actor="ADMIN",report_date=nov2,
+                permit_no="L102601592",category_index=ph_bucket,
+                document_id="FUTURE",expected_trips=1)
+        confirmed = apply_confirmed_category(db,actor="ADMIN",
+            report_date=nov2, permit_no="L102601592",
+            category_index=ph_bucket,document_id="AMNS-30",expected_trips=1)
+        assert confirmed["tripsChecked"] == 1  # selected-day trips only
+        assert confirmed["changedTripCount"] == 11
+        assert confirmed["changedFields"] == 33
+        assert confirmed["changedDates"] == ["2026-10-31","2026-11-01","2026-11-02"]
+        rows=list(db.scalars(select(router.DespatchTrip)))
+        assert before == {(x.epass_no,x.report_date,x.status,x.net_mt) for x in rows}
+        active=[x for x in rows if x.permit_no=="L102601592" and x.report_date>=oct31]
+        assert len(active)==11
+        assert all(x.buyer=="PH ASSOCIATES PRIVATE LIMITED" and
+                   x.destination=="Kuarmunda(SNG)" and
+                   x.material_grade=="5-18mm(60-62)" for x in active)
+        assert db.get(router.DespatchTrip,"UNRELATED").buyer == ""
+        assert db.get(router.DespatchTrip,"OLD/1").buyer == "LEGACY"
+        assert mapping_status(db,nov2)["unmappedTrips"] == 1
+        assert apply_confirmed_category(db,actor="ADMIN",report_date=nov2,
+            permit_no="L102601592",category_index=ph_bucket,
+            document_id="AMNS-30",expected_trips=1)["changedTripCount"] == 0
+
+
+def test_cross_date_conflict_and_inconsistent_consignee_block_all_changes():
+    engine = _setup()
+    with Session(engine) as db:
+        db.add(router.DespatchDocument(id="AMNS-30",report_date=date(2026,10,30),
+            filename="30.10.26.jpeg",media_type="image/jpeg",
+            sha256="f"*64,image_data=b"ARCHIVED"))
+        db.add(_trip("31/1","SAME",date(2026,10,31),
+            buyer="DNA MINERALS PVT LTD",consignee="same"))
+        db.add(_trip("02/1","SAME",date(2026,11,2),
+            consignee="same"))
+        db.commit()
+        with pytest.raises(ValueError, match="conflicts"):
+            apply_confirmed_category(db,actor="ADMIN",report_date=date(2026,11,2),
+                permit_no="SAME",category_index=31,
+                document_id="AMNS-30",expected_trips=1)
+        assert db.get(router.DespatchTrip,"02/1").buyer == ""
+        db.get(router.DespatchTrip,"31/1").buyer=""
+        db.get(router.DespatchTrip,"31/1").consignee="party-one"
+        db.get(router.DespatchTrip,"02/1").consignee="party-two"
+        db.commit()
+        with pytest.raises(ValueError, match="inconsistent consignee"):
+            apply_confirmed_category(db,actor="ADMIN",report_date=date(2026,11,2),
+                permit_no="SAME",category_index=31,
+                document_id="AMNS-30",expected_trips=1)
+        assert db.get(router.DespatchTrip,"02/1").buyer == ""
+
+
+def test_ui_displays_original_image_date_and_manual_verification():
+    from pathlib import Path
+    ui=(Path(__file__).parents[1]/"app"/"static"/"tiom_despatch.js").read_text("utf-8")
+    assert "img.reportDate" in ui
+    assert "earlierEvidence" in ui
+    assert "tiomDDEvidencePreview" in ui
+    assert "View original" in ui
+    assert "selected E-Pass date" in ui
+    assert "Existing E-Pass dates, weights, trip counts and cancelled rows" in ui
