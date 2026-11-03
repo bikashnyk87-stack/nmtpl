@@ -715,7 +715,9 @@ def _report_verified_amns(db: Session, rows):
     """Report on confirmed MIS source fields, preserving original E-Pass records."""
     if not rows:
         return rows
-    from app.services.tiom_despatch_client_layout import destination_bucket_index
+    from app.services.tiom_despatch_client_layout import (
+        report_destination_buckets, report_destination_bucket_index,
+    )
     days = {x.report_date for x in rows if x.report_date >= date(2026, 10, 27)}
     if not days:
         return rows
@@ -742,10 +744,15 @@ def _report_verified_amns(db: Session, rows):
         projected = _ReportTripView(
             row, _amns_buyer(saved.buyer), saved.destination.strip(), classified
         )
-        if destination_bucket_index(projected) is None:
+        # A newly verified client/destination is appended to the exported
+        # workbook while preserving the original client column positions.
+        # Unknown/unverified image fields still block the report.
+        if report_destination_bucket_index(
+            projected, report_destination_buckets([projected])
+        ) is None:
             raise ValueError(
-                f"Permit {saved.permit_no}: approved AMNS destination has no "
-                "corresponding client report column. Original E-Passes unchanged."
+                f"Permit {saved.permit_no}: approved AMNS category is missing "
+                "a buyer, destination or material grade. E-Passes unchanged."
             )
         result.append(projected)
     return result
@@ -1244,9 +1251,10 @@ def export_check(report_type: str, request: Request,
                 "fixPermit": match.group(1) if match else None,
                 "fixDate": match.group(2) if match else None}
     from app.services.tiom_despatch_client_reports import _keymap, _material_counts
+    from app.services.tiom_despatch_client_layout import report_destination_buckets
     errors=[]
     if report_type in {"destination","transporter"}:
-        _, missing = _keymap(rows)
+        _, missing = _keymap(rows, report_destination_buckets(rows))
         if missing:
             errors.append(f"{len(missing)} unmatched buyer/destination categories (e.g. {missing[0].epass_no})")
     if report_type in {"material","despatch","transporter"}:
