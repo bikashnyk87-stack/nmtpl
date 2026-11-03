@@ -1797,3 +1797,21 @@ body.field-mode{
 .hsd-correction-grid label[hidden]{display:none}
 @media(max-width:850px){.hsd-correction-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:580px){.hsd-correction-grid{grid-template-columns:1fr}}
+
+/* KOCP all-vehicle HSD register: legible totals, compact date filters, complete tables. */
+.kocp-hsd-filter-bar{display:flex;align-items:end;flex-wrap:wrap;gap:9px;margin:2px 0 12px;padding:10px;border-radius:9px;background:#eff5f6;border:1px solid #d4e3e5}
+.kocp-hsd-filter-bar label{display:flex;flex-direction:column;gap:4px;color:#304e5b;font-size:11px;font-weight:700}
+.kocp-hsd-filter-bar input,.kocp-hsd-filter-bar select{min-height:36px;border:1px solid #b9cdd3;border-radius:7px;padding:7px;background:#fff;font-size:12px;color:#23414b}
+.kocp-hsd-filter-bar .btn{min-height:36px}
+.kocp-hsd-filter-search{flex:1 1 180px;max-width:310px}
+.kocp-hsd-filter-search input{width:100%}
+.kocp-vehicle-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px;margin:10px 0}
+.kocp-vehicle-stats>div{padding:12px;border:1px solid #d5e3e5;border-radius:9px;background:#f7fafb}
+.kocp-vehicle-stats span{display:block;text-transform:uppercase;letter-spacing:.03em;color:#5d7881;font-size:11px;font-weight:700}
+.kocp-vehicle-stats strong{display:block;color:#163d4e;font-size:20px;margin-top:5px}
+#kocpFuelVehicleResults .data-table th{font-size:11px;white-space:nowrap}
+#kocpFuelVehicleResults .data-table td{font-size:12px;border:1px solid #dce7ea;padding:9px}
+#kocpFuelVehicleResults .data-table tr[hidden]{display:none}
+.kocp-fuel-detail{margin-top:14px;border:1px solid #d9e4e7;border-radius:9px;padding:10px}
+.kocp-fuel-detail>summary{font-weight:750;color:#176060;cursor:pointer;font-size:12px}
+@media(max-width:750px){.kocp-vehicle-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.kocp-hsd-filter-bar{align-items:stretch}}

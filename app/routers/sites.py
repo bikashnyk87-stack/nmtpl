@@ -156,6 +156,41 @@ def _site_equipment_assignment(db: Session, site_id: str, machine_id: str, opera
     return eq if eq and eq.active and assignment else None
 
 
+def _kocp_hsd_equipment_eligibility(
+    db: Session, machine_id: str | None, operating_day: date
+):
+    """Allow recorded HSD for an active KOCP hired vehicle entered into the
+    master after the historical fuel date. The exception is site- and HSD-only:
+    it does not backdate the Equipment Site Assignment or relax production rules.
+    All exceptions are explicitly recorded in the HSD creation audit.
+    Returns (asset, historical_assignment_date | None).
+    """
+    if not machine_id:
+        return None, None
+    valid = _site_equipment_assignment(db, "KOCP", machine_id, operating_day)
+    if valid:
+        return valid, None
+    equipment = db.get(Equipment, machine_id)
+    if not equipment or not equipment.active or str(equipment.ownership or "").upper() != "HIRED":
+        return None, None
+    # Only allow a known active KOCP assignment registered after that
+    # operational date. An expired past assignment or another site's vehicle
+    # is never enough to authorize an HSD issue.
+    assignment = db.scalar(select(EquipmentSiteAssignment).where(
+        EquipmentSiteAssignment.site_id == "KOCP",
+        EquipmentSiteAssignment.machine_id == machine_id,
+        EquipmentSiteAssignment.active.is_(True),
+        EquipmentSiteAssignment.effective_from > operating_day,
+        or_(
+            EquipmentSiteAssignment.effective_to.is_(None),
+            EquipmentSiteAssignment.effective_to >= operating_day,
+        ),
+    ).order_by(EquipmentSiteAssignment.effective_from).limit(1))
+    if not assignment:
+        return None, None
+    return equipment, assignment.effective_from
+
+
 def _site_vehicle_from_display(db: Session, site_id: str, raw: str, operating_day: date):
     key=_norm_asset_ref(raw)
     if not key: return None
@@ -1428,7 +1463,10 @@ def correct_kocp_hsd_transaction(
             if not _site_shift_active(db, "KOCP", shift):
                 raise HTTPException(422, "Choose a valid KOCP shift.")
             if row.transaction_type == "ISSUE":
-                if not asset or not _site_equipment_assignment(db, "KOCP", asset, date_value):
+                valid_equipment, _historic = _kocp_hsd_equipment_eligibility(
+                    db, asset, date_value
+                )
+                if not valid_equipment:
                     raise HTTPException(422, "Choose active equipment assigned to KOCP.")
                 supplier = None
             elif row.transaction_type == "RECEIPT":
@@ -1505,9 +1543,20 @@ def create_hsd_transaction(site_id: str, p: SiteHsdTransactionIn, request: Reque
     if tx_type!="OPENING" or site_id!="KOCP":
         if not _site_shift_active(db,site_id,p.shift):
             raise HTTPException(422, f"Choose a valid active shift for {site_id}.")
-    if tx_type=="ISSUE":
-        if not p.assetId or not _site_equipment_assignment(db,site_id,p.assetId,p.operatingDate):
-            raise HTTPException(422, f"Choose a valid active equipment assigned to {site_id}.")
+    historical_hired_date = None
+    if tx_type == "ISSUE":
+        if site_id == "KOCP":
+            equipment, historical_hired_date = _kocp_hsd_equipment_eligibility(
+                db, p.assetId, p.operatingDate
+            )
+        else:
+            equipment = _site_equipment_assignment(db, site_id, p.assetId, p.operatingDate)
+        if not equipment:
+            raise HTTPException(
+                422, f"Choose active equipment assigned to {site_id}. "
+                     "For older hired fuel records, the vehicle must be active "
+                     "in the KOCP equipment master."
+            )
     if tx_type=="RECEIPT" and not (p.supplier or "").strip():
         raise HTTPException(422, "Supplier is required for HSD receipt.")
     if site_id == "KOCP":
@@ -1553,6 +1602,17 @@ def create_hsd_transaction(site_id: str, p: SiteHsdTransactionIn, request: Reque
         status="POSTED",
     )
     db.add(row)
-    _audit(db, user, site_id, "CREATE_HSD", "site_hsd_transaction", tx_id, after={"type": p.transactionType, "litres": str(p.litres), "asset": p.assetId})
+    _audit(db, user, site_id, "CREATE_HSD", "site_hsd_transaction", tx_id, after={
+        "type": p.transactionType, "litres": str(p.litres), "asset": p.assetId,
+        "historicalHiredAssignment": bool(historical_hired_date),
+        "siteAssignmentEffectiveFrom": (
+            historical_hired_date.isoformat() if historical_hired_date else None
+        ),
+    })
     db.commit()
-    return {"ok": True, "transactionId": tx_id, "remainingLitres": str(remaining) if remaining is not None else None}
+    return {
+        "ok": True, "transactionId": tx_id,
+        "remainingLitres": str(remaining) if remaining is not None else None,
+        "historicalHired": bool(historical_hired_date),
+        "assignmentEffectiveFrom": historical_hired_date,
+    }
