@@ -16,7 +16,7 @@ from app.db import engine, get_db, SessionLocal, Base
 from app.auth import WebUser, WebSession, get_user, require, MODULES, hash_password
 from app.config import settings
 from app.models import MasterOption, WbHeaderAlias, WbMovement, WbImportBatch, AuditLog
-from app.routers import health, masters, production, hsd, reconciliation, dashboard, shift_control, webapp, sites, site_ops, site_routes, site_material_types, maintenance
+from app.routers import health, masters, production, hsd, reconciliation, dashboard, shift_control, webapp, sites, site_ops, site_routes, site_material_types, maintenance, tiom_dashboard_export
 from app.services.wb_mapping import ensure_wb_header_mapping
 from app.services.attendance_automation import automation_loop
 from app.site_models import create_multisite_tables, ensure_tiom_entry_columns
@@ -622,6 +622,7 @@ app.include_router(sync.router)
 app.include_router(tiom_despatch.router)
 app.include_router(health.router)
 app.include_router(webapp.router)
+app.include_router(tiom_dashboard_export.router)
 app.include_router(sites.router)
 app.include_router(site_ops.router)
 app.include_router(site_routes.router)
