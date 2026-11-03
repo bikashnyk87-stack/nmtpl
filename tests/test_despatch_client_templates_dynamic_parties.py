@@ -87,7 +87,7 @@ def test_all_five_client_templates_keep_contracts_and_uniform_headings():
                 assert ws.cell(7,new_column+1).value==30.125
                 assert ws.row_dimensions[2].height>=50
                 assert ws.row_dimensions[4].height>=40
-                assert ws["A1"].alignment.horizontal=="center"
+                assert ws["A1"].alignment.horizontal=="left"  # visible without scrolling the wide report
             if kind=="transporter":
                 ws=wb["02.11.26"]
                 assert ws["B2"].value=="AMIPL DISPATCH DETAILS ON DT-02/11/2026"

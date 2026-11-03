@@ -95,9 +95,9 @@ def _fmt(ws, last_col=16, landscape=True):
 
 # Reusing immutable style objects prevents allocations for every cell of the
 # 90-column daily transporter workbook while keeping the exact visual layout.
-_HEADER_FONT = Font(name="Calibri", size=10, bold=True, color=WHITE)
-_TOTAL_FONT = Font(name="Calibri", size=9, bold=True, color=DARK)
-_BODY_FONT = Font(name="Calibri", size=9, color=DARK)
+_HEADER_FONT = Font(name="Calibri", size=12, bold=True, color=WHITE)
+_TOTAL_FONT = Font(name="Calibri", size=12, bold=True, color=DARK)
+_BODY_FONT = Font(name="Calibri", size=12, color=DARK)
 _HEADER_FILL = PatternFill("solid", fgColor=BLUE)
 _TOTAL_FILL = PatternFill("solid", fgColor=YELLOW)
 _HEADER_BORDER = Border(left=LINE, right=LINE, top=LINE, bottom=LINE)
@@ -131,6 +131,107 @@ def _title(ws, cell, value, end_col):
     x.fill=PatternFill("solid",fgColor=BLUE)
     x.alignment=Alignment(horizontal="center",vertical="center")
     ws.row_dimensions[cell].height=27
+
+
+def _finish_client_format(wb, report_type):
+    """Apply one complete format contract after values, formulas and merges.
+
+    Blank cells inside tables are real cells too: style the entire rectangle,
+    including numeric zero cells, so Excel gridlines are never the border.
+    """
+    edge = Side(style="thin", color="899BA9")
+    border = Border(left=edge,right=edge,top=edge,bottom=edge)
+    peach = PatternFill("solid", fgColor="F5C7A0")
+    white = PatternFill("solid", fgColor=WHITE)
+    dark_header = Font(name="Calibri", size=12, bold=True, color=DARK)
+
+    def table(ws, top, bottom, left, right, headers=(), totals=(), orange=False):
+        from textwrap import wrap
+        for r in range(top, bottom+1):
+            ws.row_dimensions[r].height = max(ws.row_dimensions[r].height or 0, 24)
+            for c in range(left, right+1):
+                cell = ws.cell(r,c)
+                cell.border = border
+                if cell.__class__.__name__ == "MergedCell":
+                    continue
+                if r in headers:
+                    cell.font = dark_header if orange else _HEADER_FONT
+                    cell.fill = peach if orange else _HEADER_FILL
+                    cell.alignment = _ALIGN_HEADER
+                elif r in totals:
+                    cell.font, cell.fill = _TOTAL_FONT, _TOTAL_FILL
+                    cell.alignment = _ALIGN_TEXT if c == left else _ALIGN_NUM
+                else:
+                    cell.font = _BODY_FONT
+                    cell.fill = STRIPE if (r-top)%2 else white
+                    cell.alignment = Alignment(vertical="center", wrap_text=True,
+                        horizontal="right" if isinstance(cell.value,(int,float,Decimal))
+                        or (isinstance(cell.value,str) and cell.value.startswith("=")) else "left")
+                    if isinstance(cell.value,str) and not cell.value.startswith("="):
+                        capacity=max(1,int((ws.column_dimensions[col(c)].width or 13)*.85))
+                        lines=sum(max(1,len(wrap(part,capacity))) for part in cell.value.split("\n"))
+                        ws.row_dimensions[r].height=max(ws.row_dimensions[r].height,lines*17+6)
+
+    def title(ws, row, first, last, dark=True):
+        for column in range(first,last+1):
+            cell=ws.cell(row,column)
+            cell.border=border
+            cell.fill=_HEADER_FILL if dark else white
+            if cell.__class__.__name__ != "MergedCell":
+                cell.font=Font(name="Calibri",size=16,bold=True,
+                               color=WHITE if dark else BLUE)
+                cell.alignment=Alignment(horizontal="center" if last-first<30 else "left",vertical="center",wrap_text=True)
+        ws.row_dimensions[row].height=max(ws.row_dimensions[row].height or 0,36)
+
+    for ws in wb:
+        ws.sheet_view.zoomScale=90
+        ws.sheet_format.defaultRowHeight=24
+        last=ws.max_column
+        if report_type == "trip":
+            table(ws,2,max(3,ws.max_row),1,16,headers=(2,))
+            ws.row_dimensions[2].height=42
+            table(ws,1,1,13,16,totals=(1,))
+            for row in range(3,ws.max_row+1):
+                ws.row_dimensions[row].height=max(ws.row_dimensions[row].height,36)
+        elif report_type in {"material","despatch","destination"}:
+            last = {"material":15,"despatch":22}.get(report_type,last)
+            end_header={"material":2,"despatch":3,"destination":5}[report_type]
+            table(ws,2,ws.max_row,1,last,headers=range(2,end_header+1),totals=(ws.max_row,))
+            title(ws,1,1,last)
+            ws.print_title_rows=f"1:{end_header}"
+            ws.row_dimensions[2].height=72 if report_type=="destination" else 44
+            for row in range(3,end_header+1):
+                ws.row_dimensions[row].height=48 if row < end_header else 40
+            if report_type != "destination":
+                for c in range(2,last+1):
+                    ws.column_dimensions[col(c)].width=max(ws.column_dimensions[col(c)].width or 0,19)
+        else:
+            # Three compact summary blocks, plus both full transporter matrices.
+            table(ws,9,10,2,4,totals=(9,10))
+            table(ws,4,9,6,10,headers=(4,5,6),totals=(9,))
+            table(ws,4,20,12,16,headers=(4,5,6),totals=(20,))
+            for row in (4,5,6):
+                ws.row_dimensions[row].height=36
+            label=next(c.row for c in ws["B"] if isinstance(c.value,str)
+                       and c.value.startswith("CUMULATIVE DISPATCH FOR THE MONTH"))
+            daily_total=label-2
+            ws.unmerge_cells("B23:H23")
+            ws.merge_cells(start_row=23,start_column=2,end_row=23,end_column=last)
+            table(ws,24,daily_total,2,last,headers=range(24,28),totals=(daily_total,),orange=True)
+            table(ws,label+1,ws.max_row,2,last,headers=range(label+1,label+5),
+                  totals=(ws.max_row,),orange=True)
+            title(ws,23,2,last)
+            title(ws,label,2,last)
+            title(ws,2,2,last,False)
+            ws["B1"].font=Font(name="Calibri",size=12,bold=True,color=WHITE)
+            for top in (24,label+1):
+                for offset,height in enumerate((72,48,48,36)):
+                    ws.row_dimensions[top+offset].height=height
+            ws.column_dimensions["B"].width=58
+            # The material legend must have one body style, including its first row.
+            ws.column_dimensions["L"].width=max(ws.column_dimensions["L"].width or 0,23)
+            for c in (7,8,9,10,13,14,15,16):
+                ws.column_dimensions[col(c)].width=max(ws.column_dimensions[col(c)].width or 0,18)
 
 
 def _days(start, end):
@@ -793,6 +894,7 @@ def build_client_workbook(report_type, all_records, from_date, to_date):
             raise ValueError(f"{len(missing)} movements not classified captive/non-captive: {sample}")
     else:
         raise ValueError("Unknown client report type")
+    _finish_client_format(wb, report_type)
     buf=BytesIO()
     wb.save(buf);buf.seek(0)
     return buf, {"trips":len(active), "quantityMt":float(_sum(active)),
