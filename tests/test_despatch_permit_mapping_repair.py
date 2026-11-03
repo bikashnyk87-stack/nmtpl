@@ -232,6 +232,14 @@ def test_cross_date_conflict_and_inconsistent_consignee_block_all_changes():
                 permit_no="SAME",category_index=31,
                 document_id="AMNS-30",expected_trips=1)
         assert db.get(router.DespatchTrip,"02/1").buyer == ""
+        single = apply_confirmed_category(db,actor="ADMIN",report_date=date(2026,11,2),
+                permit_no="SAME",category_index=31,
+                document_id="AMNS-30",expected_trips=1,
+                apply_to_related_dates=False)
+        assert single["changedTripCount"] == 1
+        assert single["changedDates"] == ["2026-11-02"]
+        assert db.get(router.DespatchTrip,"31/1").buyer == ""
+        assert db.get(router.DespatchTrip,"02/1").buyer == "PH ASSOCIATES PRIVATE LIMITED"
 
 
 def test_ui_displays_original_image_date_and_manual_verification():
