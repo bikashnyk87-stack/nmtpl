@@ -114,6 +114,8 @@ class DespatchAudit(Base):
 def _user(request, db, edit=False, permission=None):
     user = get_user(db, request)
     if not user.admin:
+        if edit:
+            raise HTTPException(403, "Despatch corrections and sender changes require management.")
         require_site(db, user, "TIOM")
         legacy = set((user.modules or "").split(","))
         if "PRODUCTION" not in legacy and not any(
@@ -133,8 +135,6 @@ def _user(request, db, edit=False, permission=None):
                 raise HTTPException(
                     403, f"{labels.get(permission, permission)} permission is required. Ask management to enable it in Users or Site Masters."
                 )
-        if edit:
-            raise HTTPException(403, "Despatch corrections and sender changes require management.")
     return user
 
 
