@@ -28,8 +28,8 @@ def database():
     Base.metadata.create_all(engine)
     with Session(engine) as db:
         db.add(Site(site_id="KOCP", site_name="KOCP", short_name="KOCP", active=True))
-        db.add(SiteShift(site_id="KOCP", shift="A", start_time=time(5), end_time=time(13), sequence_no=1, active=True))
-        db.add(SiteShift(site_id="KOCP", shift="B", start_time=time(13), end_time=time(21), sequence_no=2, active=True))
+        db.add(SiteShift(site_id="KOCP", shift="A", start_time=time(5), end_time=time(13), scheduled_hours=Decimal("8"), sequence_no=1, active=True))
+        db.add(SiteShift(site_id="KOCP", shift="B", start_time=time(13), end_time=time(21), scheduled_hours=Decimal("8"), sequence_no=2, active=True))
         db.add(Site(site_id="SOCP", site_name="SOCP", short_name="SOCP", active=True))
         db.add(SiteHsdTransaction(
             transaction_id="OPEN",site_id="KOCP",operating_date=DAY,
