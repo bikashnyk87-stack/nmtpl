@@ -56,7 +56,7 @@ def test_excel_report_is_styled_multi_sheet_and_has_48_kpi_cards():
     assert "Shift B" in summary["A3"].value
     assert summary["A6"].value == "Fresh ROM"
     assert summary["A7"].value == 9401.02
-    assert summary["A7"].number_format.endswith('" t"')
+    assert summary["A7"].number_format.endswith('"t"')
     assert summary["A7"].font.bold
     assert wb["Production Materials"]["A6"].value == "ROM"
     assert wb["Plant Performance"]["A6"].value == "Screen"
