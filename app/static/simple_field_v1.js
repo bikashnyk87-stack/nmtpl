@@ -1109,7 +1109,7 @@ function clearKocpHsdHistory(){
   render();
 }
 const kocpHsdAdmin=()=>siteId==='KOCP'&&Boolean(state.bootstrap?.user?.isManagement);
-function kocpHsdCanIssue(fuel){return siteId!=='KOCP'||(fuel&&fuel.stockBalance!==null&&fuel.stockBalance!==undefined)}
+function kocpHsdCanIssue(fuel){return siteId!=='KOCP'||(fuel&&fuel.stockBalance!==null&&fuel.stockBalance!==undefined&&Number(fuel.stockBalance)>0)}
 async function renderSimpleHsd(){
   const today=state.ctx.operatingDate,from=String(today).slice(0,8)+'01';
   const [data,fuel]=await Promise.all([
@@ -1300,7 +1300,7 @@ async function saveSimpleHsd(){
   if(siteId==='KOCP'&&hasIssueRows){
     try{
       const latest=await api('/api/site-ops/KOCP/fuel/balance');
-      if(latest.stockBalance===null||latest.stockBalance===undefined) {
+      if(latest.stockBalance===null||latest.stockBalance===undefined||Number(latest.stockBalance)<=0) {
         toast(latest.stockNote||'Verified stock is required before issuing fuel.','bad');
         return;
       }
