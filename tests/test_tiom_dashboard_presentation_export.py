@@ -9,7 +9,9 @@ EXPORT = (ROOT / "app/static/tiom_dashboard_presentation_export.js").read_text(e
 
 def test_presentation_report_is_primary_and_raw_csv_remains_separate():
     assert 'onclick="dashboardPresentationReport(' in UI
-    assert '>Download Report</button>' in UI
+    assert '>Download Excel Report</button>' in UI
+    assert 'onclick="dashboardExcel()"' in UI
+    assert 'dashboard-advanced-export' in UI
     assert '>Raw CSV</button>' in UI
     assert 'onclick="dashboardPrint()"' in UI
     assert 'tiom_dashboard_presentation_export.js' in INDEX

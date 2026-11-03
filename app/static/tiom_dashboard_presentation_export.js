@@ -233,6 +233,61 @@
       '<title>TIOM Management Report ' + escapeText(d.fromDate || '') + ' - ' + escapeText(d.toDate || '') + '</title><style>' +
       css + '</style></head><body><main class="sheet">' + bodyHtml(d) + '</main></body></html>';
   }
+  // Excel is the primary management download. Always recompute the selected
+  // period on the server, using exactly the dashboard's active filters.
+  window.dashboardExcel = async function () {
+    var d = typeof S !== 'undefined' && S.dashboard;
+    if (!d || !d.kpis) {
+      if (typeof toast === 'function') toast('Load the dashboard before downloading Excel.');
+      return;
+    }
+    var button = document.getElementById('dash_excel_download');
+    if (button && button.disabled) return;
+    var oldLabel = button ? button.textContent : '';
+    if (button) { button.disabled = true; button.textContent = 'Preparing Excel…'; }
+    try {
+      var filters = {
+        mode: (S.dashMode || 'TODAY'),
+        fromDate: d.fromDate,
+        toDate: d.toDate,
+        shift: d.shift || 'ALL',
+        materialFilter: d.materialFilter || '',
+        sourceFilter: d.sourceFilter || '',
+        destinationFilter: d.destinationFilter || '',
+        vehicleFilter: d.vehicleFilter || ''
+      };
+      var response = await fetch('/api/tiom/dashboard/report.xlsx', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json', 'X-NMTPL-Request': 'webapp'},
+        credentials: 'same-origin',
+        body: JSON.stringify(filters)
+      });
+      if (!response.ok) {
+        var msg = 'Excel report export failed (' + response.status + ')';
+        try { var errorPayload = await response.json(); msg = errorPayload.detail || msg; } catch (_) {}
+        if (response.status === 401) {
+          window.dispatchEvent(new Event('nmtpl-session-expired'));
+        }
+        throw new Error(msg);
+      }
+      var blob = await response.blob();
+      if (!blob.size) throw new Error('The server returned an empty report.');
+      var url = URL.createObjectURL(blob);
+      var download = document.createElement('a');
+      download.href = url;
+      download.download = 'TIOM_Management_KPI_Report_' + (d.fromDate || 'date') + '_' + (d.toDate || 'date') + '.xlsx';
+      download.style.display = 'none';
+      document.body.appendChild(download);
+      download.click();
+      download.remove();
+      setTimeout(function () { URL.revokeObjectURL(url); }, 3000);
+      if (typeof toast === 'function') toast('Formatted KPI Excel report downloaded.');
+    } catch (error) {
+      if (typeof toast === 'function') toast(error.message || 'Cannot download Excel report.', true);
+    } finally {
+      if (button) { button.disabled = false; button.textContent = oldLabel; }
+    }
+  };
   window.dashboardPresentationReport = function (mode) {
     var d = typeof S !== 'undefined' && S.dashboard;
     if (!d || !d.kpis) {

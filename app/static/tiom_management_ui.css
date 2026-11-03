@@ -159,3 +159,14 @@ html.tiom-management-ui #custom_dates[hidden]{display:none}
 .wb-full-scroll th{background:#f0f5f8;position:sticky;top:0}
 @media(max-width:1050px){.wb-full-kpis{grid-template-columns:repeat(3,1fr)}.wb-full-panels{grid-template-columns:1fr}}
 @media(max-width:620px){.wb-full-kpis{grid-template-columns:repeat(2,1fr)}}
+
+/* Consistent Super Admin site selection in the TIOM header. */
+.tiom-site-switch{display:flex;align-items:center;gap:7px;font-weight:700;font-size:12px;color:#dcebf2}
+.tiom-site-switch[hidden]{display:none!important}
+.tiom-site-switch select{min-width:112px;padding:8px 9px;border:1px solid #8bafb8;border-radius:6px;background:#f5fafb;color:#123548;font:600 12px Arial,sans-serif}
+.dashboard-advanced-export{display:inline-block;position:relative;vertical-align:middle}
+.dashboard-advanced-export summary{cursor:pointer;list-style:none;padding:8px 11px;border:1px solid #c8d9e2;border-radius:6px;background:#f1f6f8;color:#23485d;font-size:12px;font-weight:700}
+.dashboard-advanced-export summary::-webkit-details-marker{display:none}
+.dashboard-advanced-export[open]{z-index:12}
+.dashboard-advanced-export[open] button{margin:4px}
+@media(max-width:880px){.tiom-site-switch{width:100%;justify-content:flex-end}.tiom-site-switch select{min-width:104px}}
