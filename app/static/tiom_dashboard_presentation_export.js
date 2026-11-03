@@ -72,6 +72,18 @@
       card('WB movements', amount(k.wbTrips, 0), 'Valid weighbridge records', ''),
       card('WB movement tonnes', amount(k.wbTonnes, 2, ' t'), 'Movement audit, NOT final production', '')
     ].join('') + '</div>';
+    html += section('Production & recovery KPIs',
+      'Every value comes from the selected dashboard period; recovery is withheld if allocation is pending',
+      '<div class="report-kpi-grid">' + [
+        card('Screen fines', amount(p.screenFinesMt, 2, ' t'), '0–10 fines from screen'),
+        card('Screen 5–18', amount(p.screen518Mt, 2, ' t'), 'Screen product 5–18'),
+        card('Plant feed', amount(p.plantFeedMt, 2, ' t'), 'Recorded physical feed'),
+        card('Total crusher feed', amount(p.crusherFeedMt, 2, ' t'), 'Fresh + old-stock blend'),
+        card('Fresh crusher output', allocationPending ? 'Pending allocation' : amount(p.crusherFreshOutputMt, 2, ' t'), 'Net of allocated blend', allocationPending ? 'amber' : ''),
+        card('Final recovery', allocationPending ? 'Pending allocation' : amount(p.finalRecoveryPct, 2, '%'), 'Fresh final / fresh ROM', allocationPending ? 'amber' : 'teal'),
+        card('Crusher recovery', amount(p.crusherRecoveryPct, 2, '%'), 'Gross output / crusher feed'),
+        card('Process / timing balance', allocationPending ? 'Pending allocation' : amount(p.balanceMt, 2, ' t'), 'Fresh ROM less final fresh output', allocationPending ? 'amber' : '')
+      ].join('') + '</div>', 'kpi-section');
     var flow = [
       ['Fresh ROM', p.romInputMt],
       ['Plant feed', p.plantFeedMt],
@@ -112,19 +124,57 @@
         table(['Shift', 'Trips', 'Tonnes', 'HSD issued'], rows(d.shiftComparison).map(function (x) {
           return [x.shift || '—', amount(x.trips, 0), amount(x.tonnes, 1), amount(x.fuel, 1, ' L')];
         }), 'No shift comparison recorded.')) + '</div>';
+    html += section('Haulage productivity & WB reconciliation',
+      'Recorded haulage performance • missing lead distance is never estimated',
+      '<div class="report-kpi-grid">' + [
+        card('Trips / active hour', amount(k.tripsPerHour, 2), 'Haulage pace'),
+        card('Average lead', amount(k.haulAvgLeadKm, 3, ' km'), 'Quantity-weighted lead'),
+        card('Trip-km / hour', amount(k.tripKmPerHour, 2), 'Trips × lead / active hr'),
+        card('Tonne-km / hour', amount(k.tonKmPerHour, 2), 'Tonnes × lead / active hr'),
+        card('Average payload', amount(k.avgPayload, 2, ' t'), 'WB movement payload'),
+        card('Avg cycle time', amount(k.avgCycleTime, 1, ' min'), 'Movement start to unload'),
+        card('Avg loading time', amount(k.avgLoadingTime, 1, ' min'), 'Movement start to loaded'),
+        card('Match rate', amount(k.matchRate, 1, '%'), 'WB movement reconciliation'),
+        card('WB ↔ MIS linked', amount(k.misWbLinkedTrips, 0), 'Linked WB/MIS records'),
+        card('WB ↔ Field matched', amount(k.matched, 0), 'Exact field matches'),
+        card('WB unmatched', amount(k.wbUnmatched, 0), 'Unlinked WB movements', Number(k.wbUnmatched) > 0 ? 'amber' : ''),
+        card('Lead missing', amount(k.haulLeadMissingTrips, 0), 'Route distance needs review', Number(k.haulLeadMissingTrips) > 0 ? 'amber' : '')
+      ].join('') + '</div>', 'kpi-section');
+    var hsdPerFinalTon = p.finalProductionMt != null && !allocationPending &&
+      Number(p.finalProductionMt) > 0 && k.hsdLitres != null
+      ? Number(k.hsdLitres) / Number(p.finalProductionMt) : null;
+    html += section('HSD & equipment utilization',
+      'HSD issued is not actual consumption • productivity counts are activity indicators',
+      '<div class="report-kpi-grid">' + [
+        card('HSD issued', amount(k.hsdLitres, 1, ' L'), 'Issued from HSD ledger'),
+        card('HSD / trip', amount(k.fuelPerTrip, 2, ' L'), 'Reported issued-fuel indicator'),
+        card('HSD / fresh final t', amount(hsdPerFinalTon, 3, ' L/t'), 'Requires verified fresh output'),
+        card('Working equipment', amount(k.workingEquipment, 0), 'Equipment-shift count'),
+        card('Running loaders', amount(k.runningLoaders, 0), 'Recorded activity'),
+        card('Running excavators', amount(k.runningExcavators, 0), 'Recorded activity'),
+        card('Running tippers', amount(k.runningTippers, 0), 'Recorded activity'),
+        card('Equipment utilization', amount(k.equipmentUtilization, 1, '%'), 'Activity-based utilization')
+      ].join('') + '</div>', 'kpi-section');
+    var b = d.breakdowns || {}, monthly = d.monthly || {};
     html += '<div class="two-col">' +
-      section('Haulage & reconciliation', 'WB is the authority for recorded movement weights',
-        '<div class="small-kpis">' +
-        card('Trips / active hour', amount(k.tripsPerHour, 2), 'Haulage pace') +
-        card('Average payload', amount(k.avgPayload, 2, ' t'), 'WB movement') +
-        card('WB ↔ MIS linked', amount(k.misWbLinkedTrips, 0), 'Linked trips') +
-        card('Lead missing', amount(k.haulLeadMissingTrips, 0), 'Requires route km') + '</div>') +
-      section('Fuel & equipment', 'Issued HSD is not necessarily actual fuel consumption',
-        '<div class="small-kpis">' +
-        card('HSD issued', amount(k.hsdLitres, 1, ' L'), 'From HSD ledger') +
-        card('HSD / WB tonne', amount(k.hsdPerTonne, 3, ' L/t'), 'Movement-based indicator') +
-        card('Running loaders', amount(k.runningLoaders, 0), 'Recorded activity') +
-        card('Running tippers', amount(k.runningTippers, 0), 'Recorded activity') + '</div>') +
+      section('Drilling performance', 'Drill and compressor HMR where recorded',
+        '<div class="small-kpis">' + [
+          card('Drilled holes', amount(k.drillHoles, 0), 'Period total'),
+          card('Drill meterage', amount(k.drillMeterage, 2, ' m'), 'ROM / OB / BHJ / BHQ'),
+          card('Drill metres / hour', amount(k.drillMeterPerHour, 2, ' m/h'), 'HMR-based drilling rate'),
+          card('Drill HSD issued', amount(k.drillHsdLitres, 1, ' L'), 'Drill + compressor'),
+          card('Drill breakdown', amount(k.drillBreakdownHours, 1, ' h'), 'Recorded breakdown hours'),
+          card('Drill HSD / metre', amount(k.drillMeterage > 0 && k.drillHsdLitres != null ? Number(k.drillHsdLitres) / Number(k.drillMeterage) : null, 3, ' L/m'), 'Issued HSD / measured meterage')
+        ].join('') + '</div>') +
+      section('Maintenance & month-to-date', 'MTD is a separate monthly view through the selected report date',
+        '<div class="small-kpis">' + [
+          card('Open breakdowns', amount(b.activeEvents, 0), 'Recorded mechanical events'),
+          card('Period downtime', amount(b.periodDowntimeHours, 1, ' h'), 'Shift overlap hours'),
+          card('Month fresh output', amount(monthly.actual, 2, ' t'), 'Month-to-date final output'),
+          card('Avg daily fresh', amount(monthly.avgDaily, 2, ' t'), 'Month-to-date daily average'),
+          card('Best day output', amount(monthly.bestTonnes, 2, ' t'), monthly.bestDay || 'No recorded day'),
+          card('Worst day output', amount(monthly.worstTonnes, 2, ' t'), monthly.worstDay || 'No recorded day')
+        ].join('') + '</div>') +
       '</div>';
     var routeRows = rows(d.routes).slice(0, 20).map(function (x) {
       return [x.source || 'Unmapped', x.destination || 'Unmapped', amount(x.trips, 0),
@@ -172,11 +222,12 @@
       '.notice{margin:0 13px 12px;padding:10px;background:#fff4da;color:#845e17;border-left:3px solid #e5af48}',
       '.two-col{display:grid;grid-template-columns:1fr 1fr;gap:13px;align-items:start}.two-col .panel{margin:0}',
       '.bars{padding:13px}.bar-row{display:grid;grid-template-columns:1.5fr 1fr auto;align-items:center;gap:9px;padding:4px 0;font-size:9.5px}.bar-row span{overflow-wrap:anywhere}.bar-row b{white-space:nowrap;font-size:10px}.bar-track{height:9px;background:#e4eef3;border-radius:10px;overflow:hidden}.bar-track i{display:block;background:#00918e;height:100%;border-radius:10px}',
-      '.small-kpis{display:grid;grid-template-columns:repeat(2,1fr);gap:9px;padding:12px}.small-kpis .kpi{padding:9px}.small-kpis .kpi strong{font-size:16px}',
+      '.report-kpi-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;padding:12px}.report-kpi-grid .kpi strong{font-size:16px}.report-kpi-grid .kpi{padding:9px 10px}.kpi-section{break-inside:auto}',
+      '.small-kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px;padding:12px}.small-kpis .kpi{padding:9px}.small-kpis .kpi strong{font-size:16px}',
       '.notes{padding:9px 16px;font-size:11px;color:#496679}.notes ul{margin:6px 0 10px;padding-left:18px}.notes li{margin-bottom:5px}.notes p{margin:7px 0}',
       'footer{display:flex;justify-content:space-between;font-size:9px;color:#6b8391;border-top:1px solid #d7e4ea;padding-top:12px;margin-top:18px}',
-      '@media print{body{background:white;-webkit-print-color-adjust:exact;print-color-adjust:exact}.sheet{width:auto;margin:0;padding:0;box-shadow:none}.report-head{margin:0 0 16px;padding:13px 17px}.panel,.kpi,.two-col{break-inside:avoid}table{font-size:9.4px}th,td{padding:5px 7px}.kpis{gap:7px}.kpi{padding:8px}.kpi strong{font-size:15px}.panel-head h2{font-size:12px}.flow-node b{font-size:12px}.page-break{break-before:page}.report-title h1{font-size:20px}}',
-      '@media(max-width:740px){.sheet{margin:0;padding:13px}.report-head{margin:-13px -13px 15px;padding:12px}.report-type{display:none}.kpis{grid-template-columns:repeat(2,1fr)}.two-col{grid-template-columns:1fr}.flow{overflow-x:auto}.flow-node{min-width:125px}.report-title h1{font-size:19px}}'
+      '@media print{body{background:white;-webkit-print-color-adjust:exact;print-color-adjust:exact}.sheet{width:auto;margin:0;padding:0;box-shadow:none}.report-head{margin:0 0 16px;padding:13px 17px}.kpi,.two-col{break-inside:avoid}.panel{break-inside:auto}.panel-head{break-after:avoid}.report-kpi-grid{gap:6px;padding:8px}.report-kpi-grid .kpi strong{font-size:13px}.report-kpi-grid .kpi{padding:6px 8px}table{font-size:9.4px}th,td{padding:5px 7px}.kpis{gap:7px}.kpi{padding:8px}.kpi strong{font-size:15px}.panel-head h2{font-size:12px}.flow-node b{font-size:12px}.page-break{break-before:page}.report-title h1{font-size:20px}}',
+      '@media(max-width:740px){.sheet{margin:0;padding:13px}.report-head{margin:-13px -13px 15px;padding:12px}.report-type{display:none}.kpis,.report-kpi-grid{grid-template-columns:repeat(2,1fr)}.two-col{grid-template-columns:1fr}.flow{overflow-x:auto}.flow-node{min-width:125px}.report-title h1{font-size:19px}}'
     ].join('\n');
     return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' +
       '<title>TIOM Management Report ' + escapeText(d.fromDate || '') + ' - ' + escapeText(d.toDate || '') + '</title><style>' +
