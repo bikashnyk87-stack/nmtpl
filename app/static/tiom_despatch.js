@@ -247,7 +247,7 @@ window.tiomDDPanel=async function(which){
         ' permit/date groups</b> automatically use already-confirmed MIS permit classifications. No duplicate entry required.</p>'+
         (pending.length?
           '<p class="dd-warning"><b>'+f(issues.totalMissingTrips,0)+' trips in '+f(issues.totalMissingPermits,0)+
-          ' permit/date groups need MIS verification.</b> Only permits without a consistent confirmed source are listed below.</p>'+
+          ' permit/date groups need MIS verification.</b> Only permits without a consistent confirmed source are listed below.</p>':
           '<p><b>All month-to-date source classifications are ready.</b> Nothing needs to be entered again.</p>')+
         pending.map(p=>
           '<div class="dd-report"><div><strong>'+h(p.reportDate)+' · '+h(p.permitNo)+'</strong>'+
