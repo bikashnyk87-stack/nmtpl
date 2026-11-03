@@ -33,6 +33,7 @@ from app.services.tiom_despatch_client_layout import (
     CAPTIVE_MATERIALS, NON_CAPTIVE_MATERIALS, MATERIAL_COLUMNS,
     DESTINATION_BUCKETS, TRANSPORTERS_26_OCT, normalized,
     classified_material, destination_bucket_index, is_captive,
+    report_destination_buckets, report_destination_bucket_index,
 )
 
 HEADERS = [
@@ -148,11 +149,12 @@ def _sum(trips):
     return round(sum((Decimal(str(x.net_mt)) for x in trips), Decimal("0")),3)
 
 
-def _keymap(trips):
+def _keymap(trips, buckets=None):
+    buckets = buckets if buckets is not None else DESTINATION_BUCKETS
     matrix=defaultdict(lambda: [0,Decimal("0")])
     missing=[]
     for trip in trips:
-        idx=destination_bucket_index(trip)
+        idx=report_destination_bucket_index(trip, buckets)
         if idx is None:
             missing.append(trip)
         else:
@@ -325,9 +327,10 @@ def _display_customer(buyer):
     return "SNN MINERALS" if normalized(buyer) == normalized("S N N MINERALS PRIVATE LIMITED.") else buyer
 
 
-def _build_destination(wb,trips,as_of,matrix):
+def _build_destination(wb,trips,as_of,matrix,buckets=None):
+    buckets = buckets if buckets is not None else DESTINATION_BUCKETS
     ws=wb.create_sheet(as_of.strftime("%b-%y"))
-    category_end = 2 + 2*len(DESTINATION_BUCKETS)
+    category_end = 2 + 2*len(buckets)
     ex_col, total_col, cumulative_col = category_end, category_end+2, category_end+4
     _fmt(ws,cumulative_col);ws.freeze_panes="B6";ws.sheet_view.zoomScale=60
     ws.merge_cells(start_row=1,start_column=1,end_row=1,end_column=cumulative_col)
@@ -343,7 +346,7 @@ def _build_destination(wb,trips,as_of,matrix):
     # Customer and destination merged ranges exactly follow the uploaded hierarchy;
     # every two adjacent columns represent Trips and Quantity.
     prev_buyer=None;prev_dest=None;buyer_start=2;dest_start=2
-    for i,(buyer,dest,grade) in enumerate(DESTINATION_BUCKETS):
+    for i,(buyer,dest,grade) in enumerate(buckets):
         c=2+2*i
         if buyer != prev_buyer:
             if prev_buyer is not None and c-1>buyer_start:
@@ -364,7 +367,7 @@ def _build_destination(wb,trips,as_of,matrix):
         _style(ws,5,c+1,"Quantity",header=True)
         ws.column_dimensions[col(c)].width=11
         ws.column_dimensions[col(c+1)].width=15
-    endc=2+len(DESTINATION_BUCKETS)*2
+    endc=2+len(buckets)*2
     if endc-1>buyer_start:
         ws.merge_cells(start_row=2,start_column=buyer_start,end_row=2,end_column=endc-1)
     if endc-1>dest_start:
@@ -380,20 +383,23 @@ def _build_destination(wb,trips,as_of,matrix):
         _style(ws,5,c,"TRIP",header=True)
         _style(ws,5,c+1,"QUANTITY",header=True)
     for c in range(ex_col,cumulative_col+1):ws.column_dimensions[col(c)].width=17
-    ws.row_dimensions[4].height=35
+    ws.row_dimensions[2].height=57
+    ws.row_dimensions[3].height=35
+    ws.row_dimensions[4].height=48
+    ws.row_dimensions[5].height=28
     per_day=_groups(trips)
     days=monthrange(as_of.year,as_of.month)[1]
     for i in range(1,days+1):
         d=date(as_of.year,as_of.month,i);r=i+5
         _style(ws,r,1,datetime(d.year,d.month,d.day),fmt=DATE)
-        for idx in range(len(DESTINATION_BUCKETS)):
+        for idx in range(len(buckets)):
             c=2+2*idx;count,mt=matrix[(d,idx)]
             _style(ws,r,c,count,fmt=INT)
             _style(ws,r,c+1,float(mt),fmt=NUM)
-        _style(ws,r,ex_col,f"=SUM({','.join(col(2+2*j)+str(r) for j in range(9,len(DESTINATION_BUCKETS)))})",fmt=INT)
-        _style(ws,r,ex_col+1,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(9,len(DESTINATION_BUCKETS)))})",fmt=NUM)
-        _style(ws,r,total_col,f"=SUM({','.join(col(2+2*j)+str(r) for j in range(9))})+{col(ex_col)}{r}",fmt=INT)
-        _style(ws,r,total_col+1,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(9))})+{col(ex_col+1)}{r}",fmt=NUM)
+        _style(ws,r,ex_col,f"=SUM({','.join(col(2+2*j)+str(r) for j,b in enumerate(buckets) if normalized(b[0]) != normalized('Self'))})",fmt=INT)
+        _style(ws,r,ex_col+1,f"=SUM({','.join(col(3+2*j)+str(r) for j,b in enumerate(buckets) if normalized(b[0]) != normalized('Self'))})",fmt=NUM)
+        _style(ws,r,total_col,f"=SUM({','.join(col(2+2*j)+str(r) for j,b in enumerate(buckets) if normalized(b[0]) == normalized('Self'))})+{col(ex_col)}{r}",fmt=INT)
+        _style(ws,r,total_col+1,f"=SUM({','.join(col(3+2*j)+str(r) for j,b in enumerate(buckets) if normalized(b[0]) == normalized('Self'))})+{col(ex_col+1)}{r}",fmt=NUM)
         _style(ws,r,cumulative_col,f"={col(total_col+1)}{r}"+(f"+{col(cumulative_col)}{r-1}" if i>1 else ""),fmt=NUM)
     last=days+6
     _style(ws,last,1,"Total",total=True)
@@ -435,7 +441,8 @@ def _transporter_names(trips):
     ))
 
 
-def _build_transporter(wb,trips,from_date,to_date,matrix):
+def _build_transporter(wb,trips,from_date,to_date,matrix,buckets=None):
+    buckets = buckets if buckets is not None else DESTINATION_BUCKETS
     # Pre-aggregate E-Passes once. Previously every day recalculated its
     # month-to-date totals and each of 13 material grades by rescanning all
     # E-Passes, yielding O(days * grades * trips) work.
@@ -456,7 +463,7 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
         grade = classified_material(trip)
         daily_material[(d, grade)][0] += 1
         daily_material[(d, grade)][1] += weight
-        idx = destination_bucket_index(trip)
+        idx = report_destination_bucket_index(trip, buckets)
         if idx is not None:
             key = (d, normalized(trip.transporter), idx)
             daily_transporter[key][0] += 1
@@ -509,11 +516,12 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
         mark.alignment=Alignment(horizontal="center",vertical="center")
         ws.row_dimensions[1].height=23
         _client_logo(ws, "Q1")
-        ws.merge_cells("B2:P2")
+        ws.merge_cells(start_row=2,start_column=2,end_row=2,
+                       end_column=3+2*len(buckets))
         x=ws["B2"]
         x.value="AMIPL DISPATCH DETAILS ON DT-"+day.strftime("%d/%m/%Y")
         x.font=Font(size=14,bold=True,name="Calibri",color=BLUE)
-        ws.row_dimensions[2].height=26
+        ws.row_dimensions[2].height=34
         _style(ws,4,6,"DESTINATION WISE DISPATCH",header=True)
         _style(ws,4,12,"MATERIAL WISE DISPATCH",header=True)
         for c,t in [(7,"FTD"),(9,"FTM"),(13,"FTD"),(15,"FTM")]:
@@ -555,7 +563,7 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
         _style(ws,23,2,"DISPATCH FOR THE DAY",header=True)
         _style(ws,24,2,"TRANSPORTER NAME",header=True)
         prev_buyer=None;prev_dest=None;bstart=3;dstart=3
-        for idx,(buyer,dest,grade) in enumerate(DESTINATION_BUCKETS):
+        for idx,(buyer,dest,grade) in enumerate(buckets):
             c=3+2*idx
             if buyer != prev_buyer:
                 if prev_buyer is not None and c-1>bstart:
@@ -575,14 +583,14 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
             _style(ws,27,c+1,"Quantity",header=True)
             ws.column_dimensions[col(c)].width=11
             ws.column_dimensions[col(c+1)].width=16
-        endc=3+2*len(DESTINATION_BUCKETS)
+        endc=3+2*len(buckets)
         if endc-1>bstart:ws.merge_cells(start_row=24,start_column=bstart,end_row=24,end_column=endc-1)
         if endc-1>dstart:ws.merge_cells(start_row=25,start_column=dstart,end_row=25,end_column=endc-1)
-        total_trips_col=3+2*len(DESTINATION_BUCKETS)
+        total_trips_col=3+2*len(buckets)
         total_mt_col=total_trips_col+1
         _style(ws,24,total_trips_col,"Total Trips",header=True)
         _style(ws,24,total_mt_col,"Total Quantity",header=True)
-        ws.column_dimensions["B"].width=42
+        ws.column_dimensions["B"].width=55
         ws.column_dimensions["C"].width=17
         ws.column_dimensions["D"].width=16
         for c in range(5,17):ws.column_dimensions[col(c)].width=18
@@ -590,13 +598,13 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
         for pos,(transport_key, display_name) in enumerate(traders):
             r=28+pos
             _style(ws,r,2,display_name)
-            for idx in range(len(DESTINATION_BUCKETS)):
+            for idx in range(len(buckets)):
                 c=3+2*idx
                 count,mt=daily_transporter[(day,transport_key,idx)]
                 _style(ws,r,c,count,fmt=INT)
                 _style(ws,r,c+1,float(mt),fmt=NUM)
-            _style(ws,r,total_trips_col,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})",fmt=INT)
-            _style(ws,r,total_mt_col,f"=SUM({','.join(col(4+2*j)+str(r) for j in range(len(DESTINATION_BUCKETS)))})",fmt=NUM)
+            _style(ws,r,total_trips_col,f"=SUM({','.join(col(3+2*j)+str(r) for j in range(len(buckets)))})",fmt=INT)
+            _style(ws,r,total_mt_col,f"=SUM({','.join(col(4+2*j)+str(r) for j in range(len(buckets)))})",fmt=NUM)
         _style(ws,row_total,2,"Grand Total",total=True)
         for c in range(3,total_mt_col+1):
             letter=col(c)
@@ -604,11 +612,12 @@ def _build_transporter(wb,trips,from_date,to_date,matrix):
                    fmt=INT if c%2 else NUM)
         _append_transporter_cumulative(
             ws, day, traders, day_to_transporter[day],
-            start_row=row_total+2,
+            start_row=row_total+2, buckets=buckets,
         )
 
 
-def _append_transporter_cumulative(ws, as_of, transporters, cumulative, start_row):
+def _append_transporter_cumulative(ws, as_of, transporters, cumulative, start_row, buckets=None):
+    buckets = buckets if buckets is not None else DESTINATION_BUCKETS
     """Same-sheet cumulative table immediately below daily transporter total."""
     blue_line = Side(style="thin", color="253542")
     peach = PatternFill("solid", fgColor="F5C7A0")
@@ -617,7 +626,7 @@ def _append_transporter_cumulative(ws, as_of, transporters, cumulative, start_ro
         start_row+1, start_row+2, start_row+3, start_row+4
     )
     first = start_row+5
-    total_trips_col=3+2*len(DESTINATION_BUCKETS)
+    total_trips_col=3+2*len(buckets)
     total_mt_col=total_trips_col+1
     ws.merge_cells(start_row=label_row, start_column=2,
                    end_row=label_row, end_column=total_mt_col)
@@ -634,7 +643,7 @@ def _append_transporter_cumulative(ws, as_of, transporters, cumulative, start_ro
     _style(ws,buyer_row,2,"TRANSPORTER NAME",header=True)
     previous_buyer = previous_dest = None
     buyer_start = dest_start = 3
-    for idx,(buyer,dest,grade) in enumerate(DESTINATION_BUCKETS):
+    for idx,(buyer,dest,grade) in enumerate(buckets):
         c=3+2*idx
         if buyer!=previous_buyer:
             if previous_buyer is not None and c-1>buyer_start:
@@ -670,16 +679,16 @@ def _append_transporter_cumulative(ws, as_of, transporters, cumulative, start_ro
     for i,(transport_key,display_name) in enumerate(transporters):
         row=first+i
         _style(ws,row,2,display_name)
-        for idx in range(len(DESTINATION_BUCKETS)):
+        for idx in range(len(buckets)):
             c=3+2*idx
             count,mt=cumulative.get((transport_key,idx),(0,Decimal("0")))
             _style(ws,row,c,count,fmt=INT)
             _style(ws,row,c+1,float(mt),fmt=NUM)
         _style(ws,row,total_trips_col,
-               f"=SUM({','.join(col(3+2*j)+str(row) for j in range(len(DESTINATION_BUCKETS)))})",
+               f"=SUM({','.join(col(3+2*j)+str(row) for j in range(len(buckets)))})",
                fmt=INT)
         _style(ws,row,total_mt_col,
-               f"=SUM({','.join(col(4+2*j)+str(row) for j in range(len(DESTINATION_BUCKETS)))})",
+               f"=SUM({','.join(col(4+2*j)+str(row) for j in range(len(buckets)))})",
                fmt=NUM)
     grand=first+len(transporters)
     _style(ws,grand,2,"Grand Total",total=True)
@@ -726,7 +735,8 @@ def build_client_workbook(report_type, all_records, from_date, to_date):
     if not active:
         raise ValueError("No active E-Pass despatch data exists for this month; import source data first")
     # Trip and material-only exports must not pay to classify every destination.
-    matrix,unmapped=(_keymap(active) if report_type in {"destination","transporter"}
+    buckets = report_destination_buckets(active) if report_type in {"destination","transporter"} else DESTINATION_BUCKETS
+    matrix,unmapped=(_keymap(active, buckets) if report_type in {"destination","transporter"}
                       else ({}, []))
     _,material_unmapped=(_material_counts(active)
                          if report_type in {"material","despatch","transporter"}
@@ -743,11 +753,11 @@ def build_client_workbook(report_type, all_records, from_date, to_date):
     if report_type=="trip":
         _build_trip(wb,active,cancelled,from_date,to_date)
     elif report_type=="transporter":
-        _build_transporter(wb,active,from_date,to_date,matrix)
+        _build_transporter(wb,active,from_date,to_date,matrix,buckets)
     elif report_type=="material":
         _build_material(wb,active,to_date)
     elif report_type=="destination":
-        _build_destination(wb,active,to_date,matrix)
+        _build_destination(wb,active,to_date,matrix,buckets)
     elif report_type=="despatch":
         missing=_build_captive(wb,active,to_date)
         if missing:
