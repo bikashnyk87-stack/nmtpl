@@ -35,6 +35,7 @@ jobs:
           node --check app/static/tiom_despatch.js
           node --check app/static/site_access_master.js
           node --check app/static/admin_master_ops.js
+          node --check app/static/webapp.js
 
       - name: Run tests
         run: |
