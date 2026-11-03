@@ -22,6 +22,7 @@ from sqlalchemy import Boolean, Date, DateTime, Integer, LargeBinary, Numeric, S
 from sqlalchemy.orm import Mapped, Session, mapped_column, load_only
 
 from app.auth import csrf, get_user, require
+from app.site_auth import has_permission, require_site
 from app.db import Base, get_db
 
 router = APIRouter(prefix="/api/tiom/despatch", tags=["TIOM Despatch"])
@@ -112,16 +113,28 @@ class DespatchAudit(Base):
 
 def _user(request, db, edit=False, permission=None):
     user = get_user(db, request)
-    require(user, "PRODUCTION")
-    if permission and not user.admin and permission not in user.modules.split(","):
-        labels = {
-            "DESPATCH_EVIDENCE": "Despatch evidence upload",
-            "DESPATCH_IMPORT": "Despatch source import / Gmail sync",
-            "DESPATCH_REVIEW": "Despatch permit review / mapping",
-        }
-        raise HTTPException(403, f"{labels.get(permission, permission)} permission is required. Ask management to enable it in Users.")
-    if edit and not user.admin:
-        raise HTTPException(403, "Despatch corrections and sender changes require management.")
+    if not user.admin:
+        if edit:
+            raise HTTPException(403, "Despatch corrections and sender changes require management.")
+        require_site(db, user, "TIOM")
+        legacy = set((user.modules or "").split(","))
+        if "PRODUCTION" not in legacy and not any(
+            has_permission(db, user, "TIOM", "PRODUCTION", action)
+            for action in ("VIEW", "CREATE", "EDIT")
+        ):
+            raise HTTPException(403, "TIOM production access is required.")
+        if permission and permission not in legacy:
+            from app.routers.sites import EXTRA_PERMISSIONS_BY_SITE
+            action = EXTRA_PERMISSIONS_BY_SITE["TIOM"].get(permission)
+            if not action or not has_permission(db, user, "TIOM", permission, action):
+                labels = {
+                    "DESPATCH_EVIDENCE": "Despatch evidence upload",
+                    "DESPATCH_IMPORT": "Despatch source import / Gmail sync",
+                    "DESPATCH_REVIEW": "Despatch permit review / mapping",
+                }
+                raise HTTPException(
+                    403, f"{labels.get(permission, permission)} permission is required. Ask management to enable it in Users or Site Masters."
+                )
     return user
 
 

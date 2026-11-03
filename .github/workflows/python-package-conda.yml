@@ -33,6 +33,10 @@ jobs:
         run: |
           node --check app/static/tiom_phase1.js
           node --check app/static/tiom_despatch.js
+          node --check app/static/site_access_master.js
+          node --check app/static/admin_master_ops.js
+          node --check app/static/webapp.js
+          node --check app/static/central.js
 
       - name: Run tests
         run: |
