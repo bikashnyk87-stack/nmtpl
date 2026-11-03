@@ -1005,6 +1005,13 @@ def hsd_summary(site_id:str,request:Request,from_date:date|None=None,to_date:dat
     for typ in ("OPENING","RECEIPT","ISSUE","ADJUSTMENT"):
         sums[typ.lower()+"s" if typ!="ISSUE" else "issues"]=_fmt_decimal(db.scalar(select(func.coalesce(func.sum(SiteHsdTransaction.litres),0)).where(SiteHsdTransaction.site_id==site_id,SiteHsdTransaction.operating_date>=start,SiteHsdTransaction.operating_date<=end,SiteHsdTransaction.transaction_type==typ,SiteHsdTransaction.status=="POSTED")) or 0)
     opening=sums.get("openings",0); receipts=sums.get("receipts",0); issues=sums.get("issues",0); adjustments=sums.get("adjustments",0)
+    if site_id == "KOCP":
+        stock = _fuel_balance_as_of(db, site_id, end)
+        return {"siteId": site_id, "fromDate": start, "toDate": end,
+                "opening": opening, "receipts": receipts, "issues": issues,
+                "adjustments": adjustments, "closing": stock["stockBalance"],
+                "stockVerified": stock["stockBalance"] is not None,
+                "stockNote": stock["stockNote"]}
     return {"siteId":site_id,"fromDate":start,"toDate":end,"opening":opening,"receipts":receipts,"issues":issues,"adjustments":adjustments,"closing":opening+receipts+adjustments-issues}
 
 
