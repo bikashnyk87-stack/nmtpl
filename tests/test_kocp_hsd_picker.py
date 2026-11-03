@@ -46,5 +46,6 @@ def test_hsd_post_accepts_site_assigned_equipment_independent_of_group():
     start=api.index("def create_hsd_transaction(")
     end=api.index("tx_id = f\"HSD-",start)
     block=api[start:end]
-    assert "_site_equipment_assignment(db,site_id,p.assetId,p.operatingDate)" in block
+    assert "_kocp_hsd_equipment_eligibility(" in block
+    assert "_site_equipment_assignment(db, site_id, p.assetId, p.operatingDate)" in block
     assert "kocp_asset_allowed" not in block
