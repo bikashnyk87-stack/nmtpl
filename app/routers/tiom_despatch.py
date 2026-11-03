@@ -1202,6 +1202,7 @@ class SourceMapConfirm(BaseModel):
     document_id: str
     expected_trips: int
     confirmed_against_amns: bool
+    apply_to_related_dates: bool = True
 
 
 @router.post("/mapping-confirm")
@@ -1217,6 +1218,7 @@ def source_mapping_confirm(p: SourceMapConfirm, request: Request,
             db, actor=user.login_id, report_date=p.report_date, permit_no=p.permit_no,
             category_index=p.category_index, document_id=p.document_id,
             expected_trips=p.expected_trips,
+            apply_to_related_dates=p.apply_to_related_dates,
         )
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
