@@ -720,63 +720,148 @@ def _amns_material(material: str, grade: str, report_date: date) -> str:
 
 
 class _ReportTripView:
-    """Read-only report field overlay; doesn't mutate or reload the E-Pass row."""
-    def __init__(self, source, buyer, destination, material_grade):
+    """Read-only report field overlay; original Gmail E-Pass rows are never changed."""
+    def __init__(self, source, buyer, destination, material_grade, *,
+                 mis_source_date=None):
         self._source = source
         self.buyer = buyer
         self.destination = destination
         self.material_grade = material_grade
+        self.mis_source_date = mis_source_date
+        self.inherited_from_mis = bool(
+            mis_source_date and mis_source_date != source.report_date
+        )
 
     def __getattr__(self, name):
         return getattr(self._source, name)
 
 
-def _report_verified_amns(db: Session, rows):
-    """Report on confirmed MIS source fields, preserving original E-Pass records."""
+def _report_verified_amns(db: Session, rows, *, strict=True):
+    """Use MIS permit master as source of truth for reports, once per permit.
+
+    One confirmed buyer/destination/grade may cover adjoining dispatch dates
+    in the *same reporting period* for that exact permit when all confirmed
+    records agree, the consignee identity matches, and no existing E-Pass
+    classification conflicts. This is a read-only report projection:
+    quantities, E-Pass rows and date-wise MIS records are not changed.
+    """
     if not rows:
         return rows
+    from collections import defaultdict
     from app.services.tiom_despatch_client_layout import (
+        normalized, material_normalized, reportable_category,
         report_destination_buckets, report_destination_bucket_index,
     )
     days = {x.report_date for x in rows if x.report_date >= date(2026, 10, 27)}
     if not days:
         return rows
-    confirmed = {(x.report_date, x.permit_no.strip().upper()): x for x in db.scalars(
-        select(DespatchPermitDay).where(
-            DespatchPermitDay.report_date.in_(days),
-            DespatchPermitDay.review_status == "CONFIRMED",
+    saved_by_day = {(x.report_date, x.permit_no.strip().upper()): x
+                    for x in db.scalars(select(DespatchPermitDay).where(
+                        DespatchPermitDay.report_date.in_(days),
+                        DespatchPermitDay.review_status == "CONFIRMED",
+                    ))}
+    raw_by_day = defaultdict(list)
+    for row in rows:
+        raw_by_day[(row.report_date, row.permit_no.strip().upper())].append(row)
+    confirmed_by_permit = defaultdict(list)
+    for saved in saved_by_day.values():
+        try:
+            grade = _amns_material(saved.material, saved.grade_percent, saved.report_date)
+        except ValueError:
+            # The exact date still raises when strict=True. Invalid MIS
+            # data must never become an inherited source for other dates.
+            continue
+        buyer, destination = _amns_buyer(saved.buyer), saved.destination.strip()
+        probe = SimpleNamespace(
+            buyer=buyer, destination=destination, material_grade=grade,
+            report_date=saved.report_date,
         )
-    )}
+        if not reportable_category(probe):
+            continue
+        confirmed_by_permit[saved.permit_no.strip().upper()].append(
+            (saved, buyer, destination, grade)
+        )
+    reusable = {}
+    for permit, candidates in confirmed_by_permit.items():
+        category_keys = {
+            (normalized(buyer), normalized(destination),
+             material_normalized(grade, saved.report_date))
+            for saved, buyer, destination, grade in candidates
+        }
+        if len(category_keys) != 1:
+            continue  # Different confirmed categories need an MIS decision.
+        source_identities = {
+            normalized(getattr(row, "consignee", "") or "")
+            for saved, _, _, _ in candidates
+            for row in raw_by_day[(saved.report_date, permit)]
+            if str(getattr(row, "consignee", "") or "").strip()
+        }
+        if len(source_identities) != 1:
+            continue  # No verifiable or consistent consignee identity.
+        latest = max(candidates, key=lambda x: x[0].report_date)
+        reusable[permit] = (*latest, next(iter(source_identities)))
     result = []
     for row in rows:
-        saved = confirmed.get((row.report_date, row.permit_no.strip().upper()))
-        if not saved:
+        key = (row.report_date, row.permit_no.strip().upper())
+        saved = saved_by_day.get(key)
+        if saved:
+            try:
+                classified = _amns_material(
+                    saved.material, saved.grade_percent, saved.report_date
+                )
+            except ValueError as exc:
+                if strict:
+                    raise ValueError(
+                        f"Permit {saved.permit_no} ({saved.report_date}): {exc}"
+                    ) from exc
+                result.append(row)
+                continue
+            projected = _ReportTripView(
+                row, _amns_buyer(saved.buyer), saved.destination.strip(),
+                classified, mis_source_date=saved.report_date,
+            )
+            if report_destination_bucket_index(
+                projected, report_destination_buckets([projected])
+            ) is None:
+                if strict:
+                    raise ValueError(
+                        f"Permit {saved.permit_no} ({saved.report_date}): "
+                        "approved MIS source needs buyer, destination or material "
+                        "grade correction. Original E-Passes unchanged."
+                    )
+                result.append(row)
+                continue
+            result.append(projected)
+            continue
+        if reportable_category(row):
             result.append(row)
             continue
-        try:
-            classified = _amns_material(
-                saved.material, saved.grade_percent, saved.report_date
-            )
-        except ValueError as exc:
-            raise ValueError(
-                f"Permit {saved.permit_no} ({saved.report_date}): {exc}"
-            ) from exc
-        projected = _ReportTripView(
-            row, _amns_buyer(saved.buyer), saved.destination.strip(), classified
-        )
-        # A newly verified client/destination is appended to the exported
-        # workbook while preserving the original client column positions.
-        # Unknown/unverified image fields still block the report.
-        if report_destination_bucket_index(
-            projected, report_destination_buckets([projected])
-        ) is None:
-            raise ValueError(
-                f"Permit {saved.permit_no}: approved AMNS category is missing "
-                "a buyer, destination or material grade. E-Passes unchanged."
-            )
-        result.append(projected)
+        source = reusable.get(key[1])
+        if not source:
+            result.append(row)
+            continue
+        reference, buyer, destination, grade, source_consignee = source
+        current_consignee = normalized(getattr(row, "consignee", "") or "")
+        if not current_consignee or current_consignee != source_consignee:
+            result.append(row)
+            continue
+        fields = (("buyer", buyer), ("destination", destination),
+                  ("material_grade", grade))
+        if any(
+            str(getattr(row, field) or "").strip()
+            and (material_normalized(getattr(row, field), row.report_date)
+                 if field == "material_grade" else normalized(getattr(row, field)))
+            != (material_normalized(value, row.report_date)
+                if field == "material_grade" else normalized(value))
+            for field, value in fields
+        ):
+            result.append(row)
+            continue
+        result.append(_ReportTripView(
+            row, buyer, destination, grade,
+            mis_source_date=reference.report_date,
+        ))
     return result
-
 
 
 # Transcribed once from the approved AMNS WhatsApp report dated 28 October 2026.
@@ -1296,7 +1381,8 @@ def source_mapping_issues(request: Request, to_date: date,
             DespatchPermitDay.report_date.between(first, to_date),
             DespatchPermitDay.review_status == "CONFIRMED"))
     }
-    issues = _month_mapping_issue_rows(rows, saved)
+    projected = _report_verified_amns(db, rows, strict=False)
+    issues = _month_mapping_issue_rows(projected, saved)
     known = list(db.execute(select(DespatchPermitDay.buyer,
                                    DespatchPermitDay.destination).where(
         DespatchPermitDay.review_status == "CONFIRMED").distinct()))
@@ -1312,6 +1398,9 @@ def source_mapping_issues(request: Request, to_date: date,
         "fromDate": first.isoformat(), "toDate": to_date.isoformat(),
         "totalMissingTrips": sum(x["missingTrips"] for x in issues),
         "totalMissingPermits": len(issues), "items": issues,
+        "reusedTrips": sum(1 for x in projected if getattr(x, "inherited_from_mis", False)),
+        "reusedPermits": len({(x.report_date, x.permit_no) for x in projected
+                              if getattr(x, "inherited_from_mis", False)}),
         "buyerOptions": buyers, "destinationOptions": destinations,
         "materialOptions": MATERIAL_COLUMNS,
     }
@@ -1380,13 +1469,14 @@ def export_check(report_type: str, request: Request,
     begin=from_date.replace(day=1)
     # Read only the fields needed to validate report availability. A full
     # E-Pass row contains many strings and is fetched again for the export.
-    source_fields = [DespatchTrip.epass_no, DespatchTrip.permit_no,
-                     DespatchTrip.report_date, DespatchTrip.net_mt]
-    if report_type in {"destination", "transporter"}:
-        source_fields.extend((DespatchTrip.buyer, DespatchTrip.destination,
-                              DespatchTrip.material_grade))
-    elif report_type in {"material", "despatch"}:
-        source_fields.append(DespatchTrip.material_grade)
+    # A single source query serves all five report checks. Include the
+    # consignee identity and MIS category fields to avoid per-trip lazy loads.
+    source_fields = [
+        DespatchTrip.epass_no, DespatchTrip.permit_no,
+        DespatchTrip.report_date, DespatchTrip.net_mt,
+        DespatchTrip.buyer, DespatchTrip.destination,
+        DespatchTrip.material_grade, DespatchTrip.consignee,
+    ]
     rows=db.scalars(select(DespatchTrip).options(load_only(*source_fields)).where(
         DespatchTrip.report_date.between(begin,to_date),
         DespatchTrip.status=="ACTIVE")).all()
