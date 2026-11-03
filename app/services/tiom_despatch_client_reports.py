@@ -76,7 +76,9 @@ def _client_logo(ws, anchor):
 def _fmt(ws, last_col=16, landscape=True):
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.pageSetUpPr.fitToPage = True
-    ws.page_setup.fitToWidth = 1
+    # Wide client templates must remain legible when printed; don't squeeze
+    # 90+ columns into one A3 page.
+    ws.page_setup.fitToWidth = 0 if last_col >= 65 else 1
     ws.page_setup.fitToHeight = 0
     ws.page_setup.orientation = "landscape" if landscape else "portrait"
     ws.page_setup.paperSize = ws.PAPERSIZE_A3
@@ -93,13 +95,13 @@ def _fmt(ws, last_col=16, landscape=True):
 
 # Reusing immutable style objects prevents allocations for every cell of the
 # 90-column daily transporter workbook while keeping the exact visual layout.
-_HEADER_FONT = Font(name="Calibri", size=9, bold=True, color=WHITE)
+_HEADER_FONT = Font(name="Calibri", size=10, bold=True, color=WHITE)
 _TOTAL_FONT = Font(name="Calibri", size=9, bold=True, color=DARK)
 _BODY_FONT = Font(name="Calibri", size=9, color=DARK)
 _HEADER_FILL = PatternFill("solid", fgColor=BLUE)
 _TOTAL_FILL = PatternFill("solid", fgColor=YELLOW)
 _HEADER_BORDER = Border(left=LINE, right=LINE, top=LINE, bottom=LINE)
-_ALIGN_HEADER = Alignment(vertical="center", horizontal="left", wrap_text=True)
+_ALIGN_HEADER = Alignment(vertical="center", horizontal="center", wrap_text=True)
 _ALIGN_TEXT = Alignment(vertical="center", horizontal="left", wrap_text=False)
 _ALIGN_NUM = Alignment(vertical="center", horizontal="right", wrap_text=False)
 
@@ -205,8 +207,9 @@ def _detail_page(ws, trips, cancellation=False):
         ws[a].border = DATA_BORDER
     for j,head in enumerate(HEADERS,1):
         _style(ws,2,j,head,header=True)
-    ws.row_dimensions[2].height=30
-    sizes=[8,17,15,33,24,18,39,25,25,19,55,12,12,12,18,21]
+    ws.row_dimensions[2].height=34
+    # Original Trip Summary labels and positions, with consistent widths.
+    sizes=[8,17,16,30,24,18,42,24,22,19,52,13,13,13,19,23]
     for j,width in enumerate(sizes,1):
         ws.column_dimensions[col(j)].width=width
     # Thousands of trip records are present twice (daily + cumulative).
@@ -242,15 +245,17 @@ def _build_trip(wb,active,cancelled,from_date,to_date):
 def _build_material(wb,trips,as_of):
     ws=wb.create_sheet(as_of.strftime("%b-%y"))
     _fmt(ws,15);ws.freeze_panes="B3"
-    ws["A1"]=" DISPATCH REPORT FOR THE MONTH OF "+as_of.strftime("%B-%Y").upper()
+    ws["A1"]="DISPATCH REPORT FOR THE MONTH OF "+as_of.strftime("%B-%Y").upper()
     ws.merge_cells("A1:O1")
-    ws["A1"].font=Font(bold=True,size=13,name="Calibri")
-    ws.row_dimensions[1].height=26
+    ws["A1"].font=Font(bold=True,size=14,name="Calibri",color=WHITE)
+    ws["A1"].fill=_HEADER_FILL
+    ws["A1"].alignment=Alignment(vertical="center",horizontal="center")
+    ws.row_dimensions[1].height=32
     _style(ws,2,1,"Date",header=True)
     for i,material in enumerate(MATERIAL_COLUMNS,2):
         _style(ws,2,i,material,header=True)
     _style(ws,2,15,"Total Dispatch",header=True)
-    ws.row_dimensions[2].height=32
+    ws.row_dimensions[2].height=42
     counts,_=_material_counts(trips)
     days=monthrange(as_of.year,as_of.month)[1]
     ws.column_dimensions["A"].width=17
@@ -291,6 +296,7 @@ def _build_captive(wb,trips,as_of):
     _style(ws,2,22,"CUMMULATIVE",header=True)
     for i,name in enumerate(CAPTIVE_MATERIALS+NON_CAPTIVE_MATERIALS,2):
         _style(ws,3,i,_material_type_head(name),header=True)
+    ws.row_dimensions[2].height=28
     ws.row_dimensions[3].height=44
     ws.column_dimensions["A"].width=16
     for j in range(2,23):
@@ -338,7 +344,8 @@ def _build_destination(wb,trips,as_of,matrix,buckets=None):
     x.value="THAKURANI IRON ORE MINE OF M/s ARCELORMITTAL INDIA PRIVATE LTD. ( DESTINATION WISE DISPATCH REPORT )"
     x.font=Font(bold=True,name="Calibri",size=13,color=WHITE)
     x.fill=PatternFill("solid",fgColor=BLUE)
-    ws.row_dimensions[1].height=28
+    x.alignment=Alignment(horizontal="center",vertical="center",wrap_text=True)
+    ws.row_dimensions[1].height=35
     ws.merge_cells("A2:A5")
     _style(ws,2,1,"DATE",header=True)
     ws.column_dimensions["A"].width=18
@@ -522,6 +529,13 @@ def _build_transporter(wb,trips,from_date,to_date,matrix,buckets=None):
         x.value="AMIPL DISPATCH DETAILS ON DT-"+day.strftime("%d/%m/%Y")
         x.font=Font(size=14,bold=True,name="Calibri",color=BLUE)
         ws.row_dimensions[2].height=34
+        ws.merge_cells("F4:J4")
+        ws.merge_cells("L4:P4")
+        for c1,c2 in ((7,8),(9,10),(13,14),(15,16)):
+            ws.merge_cells(start_row=5,start_column=c1,end_row=5,end_column=c2)
+        ws.row_dimensions[4].height=30
+        ws.row_dimensions[5].height=28
+        ws.row_dimensions[6].height=27
         _style(ws,4,6,"DESTINATION WISE DISPATCH",header=True)
         _style(ws,4,12,"MATERIAL WISE DISPATCH",header=True)
         for c,t in [(7,"FTD"),(9,"FTM"),(13,"FTD"),(15,"FTM")]:
@@ -560,6 +574,13 @@ def _build_transporter(wb,trips,from_date,to_date,matrix,buckets=None):
         for c,v,fmt in [(13,today_total[0],INT),(14,float(round(today_total[1],3)),NUM),
                         (15,mtd_total[0],INT),(16,float(round(mtd_total[1],3)),NUM)]:
             _style(ws,20,c,v,total=True,fmt=fmt)
+        ws.merge_cells("B23:H23")
+        ws.merge_cells("B24:B27")
+        ws.row_dimensions[23].height=29
+        ws.row_dimensions[24].height=55
+        ws.row_dimensions[25].height=39
+        ws.row_dimensions[26].height=44
+        ws.row_dimensions[27].height=29
         _style(ws,23,2,"DISPATCH FOR THE DAY",header=True)
         _style(ws,24,2,"TRANSPORTER NAME",header=True)
         prev_buyer=None;prev_dest=None;bstart=3;dstart=3
@@ -640,6 +661,8 @@ def _append_transporter_cumulative(ws, as_of, transporters, cumulative, start_ro
     ws.row_dimensions[label_row].height=25
     ws.merge_cells(start_row=buyer_row,start_column=2,
                    end_row=trip_row,end_column=2)
+    for hrow, height in ((buyer_row,55),(dest_row,39),(grade_row,44),(trip_row,29)):
+        ws.row_dimensions[hrow].height = height
     _style(ws,buyer_row,2,"TRANSPORTER NAME",header=True)
     previous_buyer = previous_dest = None
     buyer_start = dest_start = 3
