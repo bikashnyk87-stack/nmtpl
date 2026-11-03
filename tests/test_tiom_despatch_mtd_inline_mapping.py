@@ -69,13 +69,14 @@ def test_invalid_material_grade_is_exposed_with_date_and_permit():
     assert issues[0]["reason"]
 
 
-def test_five_reports_has_direct_mtd_correction_form_and_save_action():
+def test_five_reports_uses_mis_as_sole_category_editor():
     html=(ROOT/"app/static/index.html").read_text("utf-8")
     js=(ROOT/"app/static/tiom_despatch.js").read_text("utf-8")
     assert "mtd-inline-fix-20261103" in html
     assert "mapping-issues?to_date=" in js
-    assert "issues.totalMissingTrips" in js
-    assert "tiomDDSaveMappingIssue" in js
-    assert "tiomDDUseSamePermitSource" in js
-    assert "api('permit-entry-one'" in js
-    assert "Original Gmail E-Pass weights" in js
+    assert "issues.reusedTrips" in js
+    assert "tiomDDOpenPermitFix" in js
+    assert "Open in MIS Permit Entry" in js
+    assert "Five Reports does not accept duplicate classifications" in js
+    assert "window.tiomDDSaveMappingIssue" not in js
+    assert "window.tiomDDUseSamePermitSource" not in js
