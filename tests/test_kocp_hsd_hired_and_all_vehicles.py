@@ -1,5 +1,5 @@
 """Hired KOCP fuel eligibility and untruncated date/shift vehicle report."""
-from datetime import date
+from datetime import date, time
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
@@ -28,8 +28,8 @@ def database():
     Base.metadata.create_all(engine)
     with Session(engine) as db:
         db.add(Site(site_id="KOCP", site_name="KOCP", short_name="KOCP", active=True))
-        db.add(SiteShift(site_id="KOCP", shift="A", start_time="05:00", end_time="13:00", sequence_no=1, active=True))
-        db.add(SiteShift(site_id="KOCP", shift="B", start_time="13:00", end_time="21:00", sequence_no=2, active=True))
+        db.add(SiteShift(site_id="KOCP", shift="A", start_time=time(5), end_time=time(13), sequence_no=1, active=True))
+        db.add(SiteShift(site_id="KOCP", shift="B", start_time=time(13), end_time=time(21), sequence_no=2, active=True))
         db.add(Site(site_id="SOCP", site_name="SOCP", short_name="SOCP", active=True))
         db.add(SiteHsdTransaction(
             transaction_id="OPEN",site_id="KOCP",operating_date=DAY,
