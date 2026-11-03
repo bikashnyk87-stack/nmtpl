@@ -110,9 +110,16 @@ class DespatchAudit(Base):
     after_json: Mapped[str | None] = mapped_column(Text)
 
 
-def _user(request, db, edit=False):
+def _user(request, db, edit=False, permission=None):
     user = get_user(db, request)
     require(user, "PRODUCTION")
+    if permission and not user.admin and permission not in user.modules.split(","):
+        labels = {
+            "DESPATCH_EVIDENCE": "Despatch evidence upload",
+            "DESPATCH_IMPORT": "Despatch source import / Gmail sync",
+            "DESPATCH_REVIEW": "Despatch permit review / mapping",
+        }
+        raise HTTPException(403, f"{labels.get(permission, permission)} permission is required. Ask management to enable it in Users.")
     if edit and not user.admin:
         raise HTTPException(403, "Despatch corrections and sender changes require management.")
     return user
@@ -329,7 +336,7 @@ def set_sender(p: SenderIn, request: Request, db: Session = Depends(get_db)):
 async def upload_trips(request: Request, file: UploadFile = File(...),
                        db: Session = Depends(get_db)):
     csrf(request)
-    user = _user(request, db, edit=True)
+    user = _user(request, db, permission="DESPATCH_IMPORT")
     data = await file.read(12_000_001)
     try:
         return _import_data(db, data, file.filename or "upload.xlsx", user.login_id)
@@ -342,7 +349,7 @@ async def upload_multi_sources(request: Request, files: list[UploadFile] = File(
                                db: Session = Depends(get_db)):
     """Handle multiple source files with schema detection, never by filename."""
     csrf(request)
-    user = _user(request, db, edit=True)
+    user = _user(request, db, permission="DESPATCH_IMPORT")
     if not files or len(files) > 8:
         raise HTTPException(422, "Choose 1-8 XLS, XLSX or CSV sources")
     from app.services.tiom_despatch_source_adapters import parse_despatch_sources
@@ -499,7 +506,7 @@ async def upload_image(request: Request, file: UploadFile = File(...),
                        report_date: date | None = Form(default=None),
                        db: Session = Depends(get_db)):
     csrf(request)
-    user = _user(request, db, edit=True)
+    user = _user(request, db, permission="DESPATCH_EVIDENCE")
     contents = await file.read(8_000_001)
     ctype = (file.content_type or "").lower()
     if not (ctype in {"image/jpeg", "image/png", "image/webp"} and len(contents) <= 8_000_000):
@@ -864,7 +871,7 @@ def save_permit_entry_one(p: PermitEntryOne, request: Request,
                           db: Session = Depends(get_db)):
     """One-click MIS correction with exact E-Pass reconciliation and audit."""
     csrf(request)
-    user = _user(request, db)
+    user = _user(request, db, permission="DESPATCH_REVIEW")
     from app.services.tiom_despatch_mapping import OPEN_DAY
     from app.services.tiom_despatch_client_layout import reportable_category
     if p.report_date < OPEN_DAY:
@@ -953,7 +960,7 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
                             db: Session = Depends(get_db)):
     """Atomic date-wise MIS verification; E-Pass weight/status never altered."""
     csrf(request)
-    user = _user(request, db)
+    user = _user(request, db, permission="DESPATCH_REVIEW")
     from app.services.tiom_despatch_mapping import OPEN_DAY
     from app.services.tiom_despatch_client_layout import reportable_category
     if p.report_date < OPEN_DAY:
@@ -1098,7 +1105,7 @@ class PermitReview(BaseModel):
 @router.post("/permit-review")
 def save_permit_review(p: PermitReview, request: Request, db: Session = Depends(get_db)):
     csrf(request)
-    user = _user(request, db, edit=True)
+    user = _user(request, db, permission="DESPATCH_REVIEW")
     if not p.permit_no.strip():
         raise HTTPException(422, "Permit number required")
     if p.grade_percent and (not re.fullmatch(r"\d{1,2}(?:\.\d{1,3})?%?", p.grade_percent) or float(p.grade_percent.rstrip("%")) > 100):
@@ -1178,7 +1185,7 @@ class SourceMapReconcile(BaseModel):
 def source_mapping_reconcile(p: SourceMapReconcile, request: Request,
                              db: Session = Depends(get_db)):
     csrf(request)
-    user = _user(request, db, edit=True)
+    user = _user(request, db, permission="DESPATCH_REVIEW")
     from app.services.tiom_despatch_mapping import reconcile_known_permits, OPEN_DAY
     if p.report_date < OPEN_DAY:
         raise HTTPException(422, "1–26 October is completed; choose 27 October onward")
@@ -1201,7 +1208,7 @@ class SourceMapConfirm(BaseModel):
 def source_mapping_confirm(p: SourceMapConfirm, request: Request,
                            db: Session = Depends(get_db)):
     csrf(request)
-    user = _user(request, db, edit=True)
+    user = _user(request, db, permission="DESPATCH_REVIEW")
     if not p.confirmed_against_amns:
         raise HTTPException(422, "Compare the permit and grade against the AMNS image first")
     from app.services.tiom_despatch_mapping import apply_confirmed_category
@@ -1484,7 +1491,7 @@ def mail_review_reconcile(p: DespatchReviewReconcileIn, request: Request,
     E-Pass records are never erased or overwritten.
     """
     csrf(request)
-    _user(request, db, edit=True)
+    _user(request, db, permission="DESPATCH_IMPORT")
     from app.services.tiom_despatch_mail import recheck_archived_despatch
     return recheck_archived_despatch(limit_messages=8, after=p.after, force=p.force)
 
@@ -1493,7 +1500,7 @@ def mail_review_reconcile(p: DespatchReviewReconcileIn, request: Request,
 def mail_sync(request: Request, db: Session = Depends(get_db)):
     """Management-triggered mailbox sync, separate from WB ingestion."""
     csrf(request)
-    _user(request, db, edit=True)
+    _user(request, db, permission="DESPATCH_IMPORT")
     from app.services.tiom_despatch_mail import gmail_scan
     try:
         return gmail_scan(50)
