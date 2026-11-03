@@ -1190,6 +1190,133 @@ def source_mapping_status(request: Request, report_date: date,
     return mapping_status(db, report_date)
 
 
+def _month_mapping_issue_rows(rows, confirmed):
+    """Group report-blocking categories by day/permit, not by individual E-Pass."""
+    from collections import defaultdict
+    from app.services.tiom_despatch_client_layout import (
+        normalized, reportable_category,
+    )
+    grouped = defaultdict(list)
+    for trip in rows:
+        grouped[(trip.report_date, trip.permit_no.strip().upper())].append(trip)
+    issues = []
+    sources = defaultdict(list)
+    for (day, permit), trips in sorted(grouped.items()):
+        saved = confirmed.get((day, permit))
+        grade_error = ""
+        if saved:
+            try:
+                material = _amns_material(saved.material, saved.grade_percent, day)
+            except ValueError as exc:
+                grade_error = str(exc)
+                material = saved.material
+            buyer, destination = _amns_buyer(saved.buyer), saved.destination.strip()
+            projected = [SimpleNamespace(buyer=buyer, destination=destination,
+                                          material_grade=material, report_date=day)
+                         for _ in trips]
+        else:
+            projected = trips
+        missing = len(trips) if grade_error else sum(
+            not reportable_category(trip) for trip in projected
+        )
+        candidate_fields = {}
+        if saved:
+            candidate_fields = {
+                "buyer": saved.buyer, "destination": saved.destination,
+                "material": saved.material, "gradePercent": saved.grade_percent,
+            }
+        else:
+            for dest_key, src_key in (("buyer", "buyer"),
+                                      ("destination", "destination"),
+                                      ("material", "material_grade")):
+                choices = {str(getattr(x, src_key) or "").strip()
+                           for x in trips if str(getattr(x, src_key) or "").strip()}
+                candidate_fields[dest_key] = next(iter(choices)) if len(choices) == 1 else ""
+            candidate_fields["gradePercent"] = ""
+        if missing:
+            incomplete = []
+            for label, key in (("buyer", "buyer"), ("destination", "destination"),
+                               ("material/grade", "material_grade")):
+                if any(not str(getattr(x, key) or "").strip() for x in projected):
+                    incomplete.append(label)
+            if not incomplete and (grade_error or missing):
+                incomplete.append("material grade not in approved report list")
+            issues.append({
+                "reportDate": day.isoformat(),
+                "permitNo": permit,
+                "tripCount": len(trips),
+                "missingTrips": missing,
+                "netMt": float(sum((Decimal(str(x.net_mt)) for x in trips), Decimal(0))),
+                **candidate_fields,
+                "permitQty": float(saved.permit_qty) if saved and saved.permit_qty is not None else None,
+                "balanceMt": float(saved.balance_mt) if saved and saved.balance_mt is not None else None,
+                "reason": grade_error or ", ".join(incomplete),
+                "editable": day >= date(2026, 10, 27),
+            })
+        elif all(reportable_category(t) for t in projected):
+            unique = {(normalized(t.buyer), normalized(t.destination),
+                       normalized(t.material_grade)) for t in projected}
+            if len(unique) == 1:
+                t = projected[0]
+                sources[permit].append({
+                    "reportDate": day.isoformat(), "buyer": t.buyer,
+                    "destination": t.destination, "material": t.material_grade,
+                })
+    for issue in issues:
+        choices = sources.get(issue["permitNo"], [])
+        # Never infer a disputed classification. Suggest source values from
+        # another date only when all complete dates agree for this exact permit.
+        unique = {(normalized(c["buyer"]), normalized(c["destination"]),
+                   normalized(c["material"])) for c in choices}
+        issue["samePermitSource"] = sorted(
+            choices, key=lambda x: x["reportDate"], reverse=True
+        )[0] if len(unique) == 1 else None
+    return issues
+
+
+@router.get("/mapping-issues")
+def source_mapping_issues(request: Request, to_date: date,
+                          db: Session = Depends(get_db)):
+    """All actual month-to-date report blockers, with a single-row MIS fix per permit."""
+    _user(request, db)
+    from app.services.tiom_despatch_client_layout import MATERIAL_COLUMNS
+    if to_date < date(2026, 10, 27):
+        return {"fromDate": to_date.replace(day=1).isoformat(),
+                "toDate": to_date.isoformat(), "totalMissingTrips": 0,
+                "totalMissingPermits": 0, "items": [], "materialOptions": MATERIAL_COLUMNS,
+                "buyerOptions": [], "destinationOptions": []}
+    first = to_date.replace(day=1)
+    rows = db.scalars(select(DespatchTrip).where(
+        DespatchTrip.report_date.between(first, to_date),
+        DespatchTrip.status == "ACTIVE",
+    ).order_by(DespatchTrip.report_date, DespatchTrip.permit_no)).all()
+    saved = {
+        (x.report_date, x.permit_no.strip().upper()): x
+        for x in db.scalars(select(DespatchPermitDay).where(
+            DespatchPermitDay.report_date.between(first, to_date),
+            DespatchPermitDay.review_status == "CONFIRMED"))
+    }
+    issues = _month_mapping_issue_rows(rows, saved)
+    known = list(db.execute(select(DespatchPermitDay.buyer,
+                                   DespatchPermitDay.destination).where(
+        DespatchPermitDay.review_status == "CONFIRMED").distinct()))
+    buyers = sorted({str(x[0]).strip() for x in known if x[0] and str(x[0]).strip()}
+                    | {str(x.buyer).strip() for x in rows if str(x.buyer or "").strip()},
+                    key=str.casefold)
+    destinations = sorted(
+        {str(x[1]).strip() for x in known if x[1] and str(x[1]).strip()}
+        | {str(x.destination).strip() for x in rows if str(x.destination or "").strip()},
+        key=str.casefold
+    )
+    return {
+        "fromDate": first.isoformat(), "toDate": to_date.isoformat(),
+        "totalMissingTrips": sum(x["missingTrips"] for x in issues),
+        "totalMissingPermits": len(issues), "items": issues,
+        "buyerOptions": buyers, "destinationOptions": destinations,
+        "materialOptions": MATERIAL_COLUMNS,
+    }
+
+
 class SourceMapReconcile(BaseModel):
     report_date: date
 
