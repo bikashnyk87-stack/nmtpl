@@ -131,13 +131,18 @@ def test_nonempty_conflicting_source_category_blocks_bulk_change():
         assert db.get(router.DespatchTrip,"NEW/1").destination==""
 
 
-def test_ui_offers_single_permit_confirmation_and_bulk_safe_repair():
+def test_report_ui_uses_single_mis_editor_without_duplicate_source_form():
     from pathlib import Path
     src=(Path(__file__).parents[1]/"app"/"static"/"tiom_despatch.js").read_text("utf-8")
-    for phrase in ("mapping-status","mapping-reconcile","mapping-confirm",
-                   "tiomDDRepairCategories","tiomDDConfirmCategory",
-                   "Confirm permit classification","Source mapping"):
+    for phrase in ("mapping-issues?to_date=", "tiomDDOpenPermitFix",
+                   "Open in MIS Permit Entry",
+                   "MIS Permit Entry is the single source",
+                   "Five Reports does not accept duplicate classifications"):
         assert phrase in src
+    # Existing guarded legacy repair actions remain available to their
+    # dedicated endpoints, but no duplicate data-entry form is rendered.
+    assert "window.tiomDDSaveMappingIssue" not in src
+    assert "mapping-reconcile" in src and "mapping-confirm" in src
 
 
 def test_earlier_image_visible_and_exact_continuing_permit_maps_multiple_dates_safely():
