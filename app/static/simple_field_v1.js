@@ -1035,8 +1035,16 @@ function kocpHsdCorrectionPanel(){
     <span class="simple-note">No permanent deletion. The original and corrected values remain in the audit log.</span></div>
   </section>`;
 }
-function openKocpHsdCorrection(id){
-  const r=kocpRecentHsdRows.find(x=>x.transactionId===id),panel=$('kocpHsdCorrection');
+async function openKocpHsdCorrection(id,fallbackDate=''){
+  let r=kocpRecentHsdRows.find(x=>x.transactionId===id);
+  const panel=$('kocpHsdCorrection');
+  if(!r&&fallbackDate){
+    try{
+      const records=await api('/api/sites/KOCP/records/hsd?limit=500&operating_date='+encodeURIComponent(fallbackDate));
+      r=records.find(x=>x.transactionId===id);
+      if(r)kocpRecentHsdRows.push(r);
+    }catch(e){return toast(e.message,'bad')}
+  }
   if(!kocpHsdAdmin()||!r||!panel||r.status!=='POSTED')return toast('Refresh the fuel register.','bad');
   panel.dataset.id=r.transactionId;panel.dataset.version=String(r.version||1);panel.dataset.type=r.transactionType;
   $('hcInfo').textContent=r.transactionType+' · '+r.transactionId+' · Entered by '+(r.enteredBy||'—');
@@ -1119,7 +1127,7 @@ async function renderSimpleHsd(){
     const existing=fuel?.openingBalance;
     const note=fuel?.stockNote||'Enter the verified initial fuel stock only once.';
     const content=existing
-      ? `<div class="hsd-opening-locked"><b>Opening balance recorded</b><p><strong>${dashNum(existing.litres,3)} L</strong> · ${esc(existing.date)} · ${esc(existing.reference||'No reference')}</p><small>One opening per site. Use Receipts and Issues for later movements; do not enter another opening.</small>${kocpHsdAdmin()?`<button type="button" class="btn outline" onclick="openKocpHsdCorrection('${esc(existing.transactionId)}')">Admin · Edit / Void Opening</button>`:''} </div>`
+      ? `<div class="hsd-opening-locked"><b>Opening balance recorded</b><p><strong>${dashNum(existing.litres,3)} L</strong> · ${esc(existing.date)} · ${esc(existing.reference||'No reference')}</p><small>One opening per site. Use Receipts and Issues for later movements; do not enter another opening.</small>${kocpHsdAdmin()?`<button type="button" class="btn outline" onclick="openKocpHsdCorrection('${esc(existing.transactionId)}','${esc(existing.date)}')">Admin · Edit / Void Opening</button>`:''} </div>`
       : `<div id="hsdOpeningForm" class="hsd-opening-form">
           <div class="field"><span>Opening as of date *</span><input type="date" id="hsdOpenDate" value="${esc(today)}"></div>
           <div class="field"><span>Verified diesel in stock (litres) *</span><input id="hsdOpenLitres" type="number" min="0" step="0.001" inputmode="decimal" placeholder="Enter measured litres"></div>
