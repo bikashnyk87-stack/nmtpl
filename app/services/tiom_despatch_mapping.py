@@ -16,7 +16,7 @@ from sqlalchemy import select
 
 from app.services.tiom_despatch_client_layout import (
     DESTINATION_BUCKETS, MATERIAL_COLUMNS, destination_bucket_index,
-    classified_material, normalized,
+    classified_material, normalized, reportable_category,
 )
 
 OPEN_DAY = date(2026, 10, 27)
@@ -66,8 +66,7 @@ def _matches_existing(row, candidate):
 
 
 def _is_classified(row):
-    return (destination_bucket_index(row) is not None and
-            classified_material(row) in VALID_MATERIALS)
+    return reportable_category(row)
 
 
 def mapping_status(db, day: date):

@@ -341,7 +341,7 @@ def _build_destination(wb,trips,as_of,matrix,buckets=None):
     _fmt(ws,cumulative_col);ws.freeze_panes="B6";ws.sheet_view.zoomScale=60
     ws.merge_cells(start_row=1,start_column=1,end_row=1,end_column=cumulative_col)
     x=ws["A1"]
-    x.value="THAKURANI IRON ORE MINE OF M/s ARCELORMITTAL INDIA PRIVATE LTD. ( DESTINATION WISE DISPATCH REPORT )"
+    x.value="THAKURANI IRON ORE MINE OF M/s ARCELORMITTAL INDIA PRIVATE LTD. ( DESTINATION WISE DISPATCH REPORT FOR THE MONTH OF "+as_of.strftime("%B-%Y").upper()+")"
     x.font=Font(bold=True,name="Calibri",size=13,color=WHITE)
     x.fill=PatternFill("solid",fgColor=BLUE)
     x.alignment=Alignment(horizontal="center",vertical="center",wrap_text=True)
@@ -361,6 +361,8 @@ def _build_destination(wb,trips,as_of,matrix,buckets=None):
             buyer_start=c
             _style(ws,2,c,buyer,header=True)
             prev_buyer=buyer
+            if prev_dest is not None and c-1>dest_start:
+                ws.merge_cells(start_row=3,start_column=dest_start,end_row=3,end_column=c-1)
             prev_dest=None
         if dest != prev_dest:
             if prev_dest is not None and c-1>dest_start:
@@ -419,10 +421,7 @@ def _build_destination(wb,trips,as_of,matrix,buckets=None):
 
 
 def _transporter_grade(index, default):
-    # Transporter matrix is an older version of client headings. Preserve
-    # its original 5-40mm legend even where Oct material sheet says 5-18mm.
-    if 28 <= index <= 36 and default.startswith("5-18mm"):
-        return default.replace("5-18mm","5-40mm")
+    # Use the template/source category's actual grade; no positional relabelling.
     return default
 
 
@@ -591,6 +590,8 @@ def _build_transporter(wb,trips,from_date,to_date,matrix,buckets=None):
                     ws.merge_cells(start_row=24,start_column=bstart,end_row=24,end_column=c-1)
                 bstart=c
                 _style(ws,24,c,buyer,header=True)
+                if prev_dest is not None and c-1>dstart:
+                    ws.merge_cells(start_row=25,start_column=dstart,end_row=25,end_column=c-1)
                 prev_buyer=buyer;prev_dest=None
             if dest != prev_dest:
                 if prev_dest is not None and c-1>dstart:
@@ -609,6 +610,8 @@ def _build_transporter(wb,trips,from_date,to_date,matrix,buckets=None):
         if endc-1>dstart:ws.merge_cells(start_row=25,start_column=dstart,end_row=25,end_column=endc-1)
         total_trips_col=3+2*len(buckets)
         total_mt_col=total_trips_col+1
+        for c in (total_trips_col,total_mt_col):
+            ws.merge_cells(start_row=24,start_column=c,end_row=27,end_column=c)
         _style(ws,24,total_trips_col,"Total Trips",header=True)
         _style(ws,24,total_mt_col,"Total Quantity",header=True)
         ws.column_dimensions["B"].width=55
@@ -674,6 +677,8 @@ def _append_transporter_cumulative(ws, as_of, transporters, cumulative, start_ro
                                end_row=buyer_row,end_column=c-1)
             buyer_start=c
             _style(ws,buyer_row,c,buyer,header=True)
+            if previous_dest is not None and c-1>dest_start:
+                ws.merge_cells(start_row=dest_row,start_column=dest_start,end_row=dest_row,end_column=c-1)
             previous_buyer,previous_dest=buyer,None
         if dest!=previous_dest:
             if previous_dest is not None and c-1>dest_start:
@@ -758,7 +763,7 @@ def build_client_workbook(report_type, all_records, from_date, to_date):
     if not active:
         raise ValueError("No active E-Pass despatch data exists for this month; import source data first")
     # Trip and material-only exports must not pay to classify every destination.
-    buckets = report_destination_buckets(active) if report_type in {"destination","transporter"} else DESTINATION_BUCKETS
+    buckets = report_destination_buckets(active, report_type) if report_type in {"destination","transporter"} else DESTINATION_BUCKETS
     matrix,unmapped=(_keymap(active, buckets) if report_type in {"destination","transporter"}
                       else ({}, []))
     _,material_unmapped=(_material_counts(active)

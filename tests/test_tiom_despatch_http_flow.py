@@ -109,7 +109,7 @@ def test_end_to_end_despatch_management():
                 assert "26.10.26" in wb.sheetnames
                 assert wb["26.10.26"]["D9"].value == 32
                 assert wb["26.10.26"]["D10"].value == 62
-                assert wb["26.10.26"]["CP24"].value == "Total Quantity"
+                assert wb["26.10.26"].cell(24,wb["26.10.26"].max_column).value == "Total Quantity"
             elif kind == "material":
                 assert ws["A2"].value == "Date"
                 assert ws["O2"].value == "Total Dispatch"
@@ -120,7 +120,7 @@ def test_end_to_end_despatch_management():
                 assert ws["A2"].value == "DATE"
                 assert ws["N5"].value == "Trips"
                 assert ws["O6"].value == 30
-                assert ws["CR6"].value.startswith("=CQ")
+                assert ws.cell(6,ws.max_column).value == "="+ws.cell(6,ws.max_column-1).coordinate
             else:
                 assert ws["B2"].value == "DABUNA PLANT"
                 assert ws["I2"].value == "NON CAPTIVE"

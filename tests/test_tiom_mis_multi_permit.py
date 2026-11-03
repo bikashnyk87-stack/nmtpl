@@ -92,7 +92,7 @@ def test_cumulative_monthly_transporter_sheet_has_requested_heading_and_totals()
     assert ws["B31"].value == "CUMULATIVE DISPATCH FOR THE MONTH OF OCTOBER-2026"
     assert ws["O36"].value == 2
     assert ws["P36"].value == 61.0
-    assert ws["CP37"].value.startswith("=SUM(")
+    assert ws.cell(37,ws.max_column).value.startswith("=SUM(")
     assert ws.oddHeader.left.text == "&BNMTPL | TIOM&B"
     assert totals["trips"] == 2 and totals["quantityMt"] == 61.0
     wb.close()
@@ -137,8 +137,8 @@ def test_source_saraikela_not_rejected_or_overwritten_as_old_chandil():
         assert exported.status_code == 200, exported.text
         wb = load_workbook(BytesIO(exported.content))
         ws = wb["28.10.26"]
-        assert ws["CO29"].value.startswith("=SUM(")
-        assert ws["CN28"].value == 29.750  # approved DNA Saraikela bucket
+        assert ws.cell(29,ws.max_column-1).value.startswith("=SUM(")
+        assert ws.cell(28,next(c.column for c in ws[25] if c.value=="TUIDUNGRI (SARAIKELA)")+1).value == 29.750  # approved DNA Saraikela bucket
         assert ws["B31"].value == "CUMULATIVE DISPATCH FOR THE MONTH OF OCTOBER-2026"
         wb.close()
     finally:

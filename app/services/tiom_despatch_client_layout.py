@@ -151,56 +151,58 @@ def destination_bucket_index(trip):
     return None
 
 
-def report_destination_buckets(trips):
-    """Client template categories first; append new verified parties automatically.
+def _category_key(category, day):
+    return (normalized(category[0]), normalized(category[1]),
+            material_normalized(category[2], day))
 
-    Existing customer/grade columns retain their original order. A new
-    buyer/destination/material combination gets a new pair of columns only
-    when E-Pass metadata is complete. Unknown fields are an explicit review
-    item, never guessed from the transporter or consignee.
+
+def _source_category(trip):
+    # Preserve verified source aliases, never infer a different destination.
+    index = destination_bucket_index(trip)
+    return (DESTINATION_BUCKETS[index] if index is not None else
+            (trip.buyer, trip.destination, trip.material_grade))
+
+
+def reportable_category(trip):
+    labels = (trip.buyer, trip.destination, trip.material_grade)
+    return (all(normalized(x) and normalized(x) not in
+                {"unknown", "na", "unverified", "tbd"}
+                and not normalized(x).startswith("unverified") for x in labels)
+            and classified_material(trip) in {normalized(x) for x in MATERIAL_COLUMNS})
+
+
+def report_destination_buckets(trips, report_type=None):
+    """Retain each supplied template; add complete source categories as needed.
+
+    No shared lists are mutated. New columns and totals are computed separately
+    for each workbook, including already confirmed image/permit entries.
     """
-    categories = list(DESTINATION_BUCKETS)
-    seen = {(normalized(a), normalized(b), normalized(c)) for a,b,c in categories}
+    if report_type:
+        import json
+        from pathlib import Path
+        templates = json.loads(Path(__file__).with_name(
+            "tiom_despatch_template_categories.json").read_text())
+        categories = [tuple(x) for x in templates[report_type]]
+    else:
+        categories = list(DESTINATION_BUCKETS)
     extensions = {}
     for trip in trips:
-        if destination_bucket_index(trip) is not None:
+        if not reportable_category(trip):
             continue
-        # Accepted 1–26 October uses the exact frozen client column layout.
-        # Dynamic new-party columns start from the subsequent report period.
-        if trip.report_date.year == 2026 and trip.report_date.month == 10 and trip.report_date.day <= 26:
-            continue
-        buyer = str(trip.buyer or "").strip()
-        destination = str(trip.destination or "").strip()
-        grade = str(trip.material_grade or "").strip()
-        if not (buyer and destination and grade):
-            continue
-        # Prevent accidentally interpreting placeholder words as new clients.
-        if any(normalized(x) in {"", "unknown", "na", "unverified", "tbd"}
-               or normalized(x).startswith("unverified")
-               for x in (buyer, destination, grade)):
-            continue
-        key = (normalized(buyer), normalized(destination),
-               material_normalized(grade, trip.report_date))
-        if key not in seen:
-            extensions.setdefault(key, (buyer, destination, grade))
-    for key, values in sorted(extensions.items(), key=lambda p: p[0]):
-        categories.append(values)
-        seen.add(key)
+        category = tuple(" ".join(str(x).split()) for x in _source_category(trip))
+        key = _category_key(category, trip.report_date)
+        if not any(_category_key(x, trip.report_date) == key for x in categories):
+            extensions.setdefault(key, category)
+    categories.extend(extensions[key] for key in sorted(extensions))
     return categories
 
 
 def report_destination_bucket_index(trip, buckets):
-    """Use original aliases, then newly appended client-report columns."""
-    index = destination_bucket_index(trip)
-    if index is not None:
-        return index
-    key = (normalized(trip.buyer), normalized(trip.destination),
-           material_normalized(trip.material_grade, trip.report_date))
-    if not all(key):
+    if not reportable_category(trip):
         return None
+    key = _category_key(_source_category(trip), trip.report_date)
     for i, category in enumerate(buckets):
-        if (normalized(category[0]), normalized(category[1]),
-                material_normalized(category[2], trip.report_date)) == key:
+        if _category_key(category, trip.report_date) == key:
             return i
     return None
 

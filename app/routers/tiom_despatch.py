@@ -837,7 +837,16 @@ def permit_entry_prefill(report_date: date, request: Request,
                     "do not auto-correct source values"
                 )
     from app.services.tiom_despatch_client_layout import MATERIAL_COLUMNS
+    # Suggestions grow from confirmed permit details; inputs also accept new names.
+    known = db.execute(select(DespatchPermitDay.buyer, DespatchPermitDay.destination).where(
+        DespatchPermitDay.review_status == "CONFIRMED").distinct()).all()
+    buyers = {x["buyer"] for x in master["categories"] if x["buyer"]}
+    destinations = {x["destination"] for x in master["categories"] if x["destination"]}
+    buyers.update(x[0].strip() for x in known if x[0] and x[0].strip())
+    destinations.update(x[1].strip() for x in known if x[1] and x[1].strip())
     return {**source, "categories": master["categories"],
+            "buyerOptions": sorted(buyers, key=str.casefold),
+            "destinationOptions": sorted(destinations, key=str.casefold),
             "materialOptions": MATERIAL_COLUMNS,
             "verifiedPermits": sum(x["entry_status"] == "CONFIRMED" for x in source["permits"]),
             "closed": False}
@@ -857,7 +866,7 @@ def save_permit_entry_one(p: PermitEntryOne, request: Request,
     csrf(request)
     user = _user(request, db)
     from app.services.tiom_despatch_mapping import OPEN_DAY
-    from app.services.tiom_despatch_client_layout import destination_bucket_index
+    from app.services.tiom_despatch_client_layout import reportable_category
     if p.report_date < OPEN_DAY:
         raise HTTPException(422, "Approved records through 26 October are read-only")
     item = p.permit
@@ -887,9 +896,9 @@ def save_permit_entry_one(p: PermitEntryOne, request: Request,
         buyer=_amns_buyer(buyer), destination=dest,
         material_grade=classified, report_date=p.report_date
     )
-    if destination_bucket_index(projection) is None:
+    if not reportable_category(projection):
         raise HTTPException(422,
-            "The buyer, destination and material/grade do not match an approved report column. "
+            "Enter the actual buyer and destination and an approved material/grade. "
             "Please check the company permit report; original E-Passes have not changed.")
     if item.permit_qty is not None and item.permit_qty < 0:
         raise HTTPException(422, "Permit quantity cannot be negative")
@@ -946,7 +955,7 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
     csrf(request)
     user = _user(request, db)
     from app.services.tiom_despatch_mapping import OPEN_DAY
-    from app.services.tiom_despatch_client_layout import destination_bucket_index
+    from app.services.tiom_despatch_client_layout import reportable_category
     if p.report_date < OPEN_DAY:
         raise HTTPException(422, "Approved 1–26 October Despatch records are protected")
     if len(p.permits) > 200:
@@ -987,10 +996,9 @@ def save_permit_entry_batch(p: PermitEntryBatch, request: Request,
             buyer=_amns_buyer(buyer), destination=dest,
             material_grade=category_material, report_date=p.report_date,
         )
-        if destination_bucket_index(projected) is None:
+        if not reportable_category(projected):
             raise HTTPException(422,
-                f"{permit}: this exact AMNS destination/material is missing from "
-                "the report master. Do not select a different destination.")
+                f"{permit}: enter the actual buyer and destination and an approved material/grade.")
         if item.permit_qty is not None and item.permit_qty < 0:
             raise HTTPException(422, f"{permit}: negative permit quantity")
         if item.balance_mt is not None and item.balance_mt < 0:

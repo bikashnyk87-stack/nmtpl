@@ -1,0 +1,436 @@
+{
+  "destination": [
+    [
+      "Self",
+      "Bhubaneswar",
+      "S.Fines(55-58)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "C.Fines(58-60)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "C.Fines(60-62)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(52-55)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(55-58)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(58-60)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(60-62)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(62-65)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(65-68)"
+    ],
+    [
+      "PANKAJINI INTERNATIONAL PRIVATE LIMITED",
+      "PDPB RLY SDG",
+      "C.Fines(55-58)"
+    ],
+    [
+      "PANKAJINI INTERNATIONAL PRIVATE LIMITED",
+      "Jamuria(W.B)",
+      "S.Fines(55-58)"
+    ],
+    [
+      "PANKAJINI INTERNATIONAL PRIVATE LIMITED",
+      "Phuljhar",
+      "C.Fines(55-58)"
+    ],
+    [
+      "PANKAJINI INTERNATIONAL PRIVATE LIMITED",
+      "Phuljhar",
+      "S.Fines(55-58)"
+    ],
+    [
+      "Bhusan Power and Steel Ltd.",
+      "Thelkoloi(Sambalpur)",
+      "S.Fines(58-60)"
+    ],
+    [
+      "Bhusan Power and Steel Ltd.",
+      "Thelkoloi(Sambalpur)",
+      "5-40mm(55-58)"
+    ],
+    [
+      "Bhusan Power and Steel Ltd.",
+      "Thelkoloi(Sambalpur)",
+      "C.Fines(58-60)"
+    ],
+    [
+      "SHYAMPURIA DEVELOPERS AND TRADERS LLP",
+      "Barbil RLY SDG",
+      "5-40mm(60-62)"
+    ],
+    [
+      "SHYAMPURIA DEVELOPERS AND TRADERS LLP",
+      "Barbil RLY SDG",
+      "5-40mm(58-60)"
+    ],
+    [
+      "SHYAMPURIA DEVELOPERS AND TRADERS LLP",
+      "MJBB RLY SDG",
+      "5-40mm(55-58)"
+    ],
+    [
+      "ORISSA METALIKS PVT LTD [UNIT II ]",
+      "Belkundi RLY SDG",
+      "C.Fines(55-58)"
+    ],
+    [
+      "ORISSA METALIKS PVT LTD [UNIT II ]",
+      "Belkundi RLY SDG",
+      "S.Fines(55-58)"
+    ],
+    [
+      "ORISSA METALIKS PVT LTD [UNIT II ]",
+      "Belkundi RLY SDG",
+      "S.Fines(58-60)"
+    ],
+    [
+      "MS BAITARANI ORE MOVERS",
+      "Hatgamharia",
+      "5-40mm(60-62)"
+    ],
+    [
+      "SNN MINERALS",
+      "Chandil(Saraikela)",
+      "5-40mm(60-62)"
+    ],
+    [
+      "STEELOGRAPH ASCENDERS",
+      "PDPB RLY SDG",
+      "5-40mm(60-62)"
+    ],
+    [
+      "Prabhu Sponge (P) Ltd.",
+      "Jhagarpur(SNG)",
+      "5-40mm(55-58)"
+    ],
+    [
+      "Prabhu Sponge (P) Ltd.",
+      "Jhagarpur(SNG)",
+      "5-40mm(58-60)"
+    ],
+    [
+      "Prabhu Sponge (P) Ltd.",
+      "Jhagarpur(SNG)",
+      "5-40mm(60-62)"
+    ],
+    [
+      "PH ASSOCIATES PRIVATE LIMITED",
+      "Palaspanga",
+      "5-18mm(55-58)"
+    ],
+    [
+      "PH ASSOCIATES PRIVATE LIMITED",
+      "Palaspanga",
+      "5-18mm(60-62)"
+    ],
+    [
+      "PH ASSOCIATES PRIVATE LIMITED",
+      "Uliburu, SJSPL",
+      "5-18mm(60-62)"
+    ],
+    [
+      "PH ASSOCIATES PRIVATE LIMITED",
+      "Kuarmunda(SNG)",
+      "5-18mm(60-62)"
+    ],
+    [
+      "PH ASSOCIATES PRIVATE LIMITED",
+      "Sukruli",
+      "5-18mm(60-62)"
+    ],
+    [
+      "S N N MINERALS PRIVATE LIMITED",
+      "Mohitpur(SINI)",
+      "5-40mm(55-58)"
+    ],
+    [
+      "S N N MINERALS PRIVATE LIMITED",
+      "Mohitpur(SINI)",
+      "5-40mm(60-62)"
+    ],
+    [
+      "S N N MINERALS PRIVATE LIMITED",
+      "Tuidungri(Chandil)",
+      "5-40mm(58-60)"
+    ],
+    [
+      "S N N MINERALS PRIVATE LIMITED",
+      "Tuidungri(Chandil)",
+      "5-40mm(60-62)"
+    ],
+    [
+      "GLOBAL MARKETING",
+      "RATURIA-WB",
+      "5-40mm(58-60)"
+    ],
+    [
+      "Shri Jagannath Steels & Power Ltd",
+      "Uliburu(SJSPL)",
+      "C.fines(55-58)"
+    ],
+    [
+      "Shri Jagannath Steels & Power Ltd",
+      "Uliburu(SJSPL)",
+      "S.Fines(55-58)"
+    ],
+    [
+      "Sri Balaji Metallics Pvt Ltd",
+      "KHAIRBONDH(SNG)",
+      "5-40mm(60-62)"
+    ],
+    [
+      "DNA MINERALS PVT LTD",
+      "Chandil",
+      "5-18mm(60-62)"
+    ],
+    [
+      "DNA MINERALS PVT LTD",
+      "Ramgarh",
+      "5-40mm(58-60)"
+    ]
+  ],
+  "transporter": [
+    [
+      "Self",
+      "Bhubaneswar",
+      "S.Fines(55-58)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "C.Fines(58-60)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "C.Fines(60-62)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(52-55)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(55-58)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(58-60)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(60-62)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(62-65)"
+    ],
+    [
+      "Self",
+      "Dabuna",
+      "S.Fines(65-68)"
+    ],
+    [
+      "PANKAJINI INTERNATIONAL PRIVATE LIMITED",
+      "PDPB RLY SDG",
+      "C.Fines(55-58)"
+    ],
+    [
+      "PANKAJINI INTERNATIONAL PRIVATE LIMITED",
+      "Jamuria(W.B)",
+      "S.Fines(55-58)"
+    ],
+    [
+      "PANKAJINI INTERNATIONAL PRIVATE LIMITED",
+      "Phuljhar",
+      "C.Fines(55-58)"
+    ],
+    [
+      "PANKAJINI INTERNATIONAL PRIVATE LIMITED",
+      "Phuljhar",
+      "S.Fines(55-58)"
+    ],
+    [
+      "Bhusan Power and Steel Ltd.",
+      "Thelkoloi(Sambalpur)",
+      "S.Fines(58-60)"
+    ],
+    [
+      "Bhusan Power and Steel Ltd.",
+      "Thelkoloi(Sambalpur)",
+      "5-40mm(55-58)"
+    ],
+    [
+      "Bhusan Power and Steel Ltd.",
+      "Thelkoloi(Sambalpur)",
+      "C.Fines(58-60)"
+    ],
+    [
+      "SHYAMPURIA DEVELOPERS AND TRADERS LLP",
+      "BARBIL RLY SDG",
+      "5-40mm(60-62)"
+    ],
+    [
+      "SHYAMPURIA DEVELOPERS AND TRADERS LLP",
+      "BARBIL RLY SDG",
+      "5-40mm(58-60)"
+    ],
+    [
+      "SHYAMPURIA DEVELOPERS AND TRADERS LLP",
+      "Banskopa(WB)",
+      "5-40mm(58-60)"
+    ],
+    [
+      "ORISSA METALIKS PVT LTD [UNIT II ]",
+      "Belkundi RLY SDG",
+      "C.Fines(55-58)"
+    ],
+    [
+      "ORISSA METALIKS PVT LTD [UNIT II ]",
+      "Belkundi RLY SDG",
+      "S.Fines(55-58)"
+    ],
+    [
+      "ORISSA METALIKS PVT LTD [UNIT II ]",
+      "Belkundi RLY SDG",
+      "S.Fines(58-60)"
+    ],
+    [
+      "MS BAITARANI ORE MOVERS",
+      "Hatgamharia",
+      "5-40mm(60-62)"
+    ],
+    [
+      "SNN MINERALS",
+      "Chandil(Saraikela)",
+      "5-40mm(60-62)"
+    ],
+    [
+      "STEELOGRAPH ASCENDERS",
+      "PDPB RLY SDG",
+      "5-40mm(58-60)"
+    ],
+    [
+      "Prabhu Sponge (P) Ltd.",
+      "Jhagarpur(SNG)",
+      "5-40mm(55-58)"
+    ],
+    [
+      "Prabhu Sponge (P) Ltd.",
+      "Jhagarpur(SNG)",
+      "5-40mm(58-60)"
+    ],
+    [
+      "Prabhu Sponge (P) Ltd.",
+      "Jhagarpur(SNG)",
+      "5-40mm(60-62)"
+    ],
+    [
+      "PH ASSOCIATES PRIVATE LIMITED",
+      "Palaspanga",
+      "5-40mm(55-58)"
+    ],
+    [
+      "PH ASSOCIATES PRIVATE LIMITED",
+      "Palaspanga",
+      "5-40mm(60-62)"
+    ],
+    [
+      "PH ASSOCIATES PRIVATE LIMITED",
+      "Uliburu, SJSPL",
+      "5-40mm(60-62)"
+    ],
+    [
+      "PH ASSOCIATES PRIVATE LIMITED",
+      "Kuarmunda(SNG)",
+      "5-40mm(55-58)"
+    ],
+    [
+      "PH ASSOCIATES PRIVATE LIMITED",
+      "Sukruli",
+      "5-18mm(60-62)"
+    ],
+    [
+      "S N N MINERALS PRIVATE LIMITED",
+      "Mohitpur(SINI)",
+      "5-40mm(55-58)"
+    ],
+    [
+      "S N N MINERALS PRIVATE LIMITED",
+      "Mohitpur(SINI)",
+      "5-40mm(60-62)"
+    ],
+    [
+      "S N N MINERALS PRIVATE LIMITED",
+      "Tuidungri(Chandil)",
+      "5-40mm(58-60)"
+    ],
+    [
+      "S N N MINERALS PRIVATE LIMITED",
+      "Tuidungri(Chandil)",
+      "5-40mm(60-62)"
+    ],
+    [
+      "GLOBAL MARKETING",
+      "RATURIA-WB",
+      "5-40mm(58-60)"
+    ],
+    [
+      "Shri Jagannath Steels & Power Ltd",
+      "Uliburu(SJSPL)",
+      "C.fines(55-58)"
+    ],
+    [
+      "Shri Jagannath Steels & Power Ltd",
+      "Uliburu(SJSPL)",
+      "S.Fines(55-58)"
+    ],
+    [
+      "Sri Balaji Metallics Pvt Ltd",
+      "KHAIRBONDH(SNG)",
+      "5-40mm(60-62)"
+    ],
+    [
+      "DNA MINERALS PVT LTD",
+      "Chandil",
+      "5-40mm(60-62)"
+    ],
+    [
+      "DNA MINERALS PVT LTD",
+      "Ramgarh",
+      "5-40mm(58-60)"
+    ]
+  ]
+}

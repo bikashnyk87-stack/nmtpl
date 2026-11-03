@@ -130,15 +130,15 @@ window.tiomDDPanel=async function(which){
         '<div class="dd-tools"><b>Date: '+h(reportDate)+'</b><span>'+data.totalTrips+' active E-Passes · '+f(data.totalMt)+' MT</span>'+
         '<button class="btn secondary small" onclick="tiomDDPanel(\'permits\')">Refresh Gmail permits</button></div>'+
         (data.permits.some(p=>p.sourceCorrection)?'<p style="color:#995000;font-weight:600">Approved AMNS 28-Oct source prefilled '+data.permits.filter(p=>p.sourceCorrection).length+' legacy permits. Review and click Save All & Reconcile once. Original Gmail E-Passes are unchanged.</p>':'')+
-        '<datalist id="dd_pe_buyers"><option value="AMNS"><option value="DNA MINERALS"><option value="SNN MINERALS"></datalist>'+
-        '<datalist id="dd_pe_destinations"><option value="DABUNA"><option value="TUIDUNGRI (SARAIKELA)"></datalist>'+
+        '<datalist id="dd_pe_buyers">'+Array.from(new Set(['AMNS','DNA MINERALS','SNN MINERALS',...(data.buyerOptions||[])])).map(x=>'<option value="'+h(x)+'">').join('')+'</datalist>'+
+        '<datalist id="dd_pe_destinations">'+Array.from(new Set(['DABUNA','TUIDUNGRI (SARAIKELA)',...(data.destinationOptions||[])])).map(x=>'<option value="'+h(x)+'">').join('')+'</datalist>'+
         '<datalist id="dd_pe_materials"><option value="SCREENED FINES"><option value="5X18">'+(data.materialOptions||[]).map(x=>'<option value="'+h(x)+'">').join('')+'</datalist>'+
         (last.repairTarget?.date===reportDate?'<div id="dd_repair_panel"></div>':'')+
         '<div class="dd-scroll"><table><thead><tr><th>Permit No.</th><th>Buyer (AMNS)</th><th>Destination (AMNS)</th><th>Material / Grade</th><th>Grade % (optional if band selected)</th><th>Permit MT</th><th>AMNS Trips</th><th>Dispatch MT</th><th>Balance MT</th><th>Gmail E-Pass Reference</th><th>Action</th></tr></thead>'+
         '<tbody id="dd_pe_rows"></tbody></table></div>'+
         '<div class="dd-tools"><button class="btn secondary small" onclick="tiomDDAddPermitRow()">+ Add permit</button>'+
         '<button class="btn primary small" onclick="tiomDDSavePermitBatch()">Save All & Reconcile</button></div>'+
-        '<p class="dd-note">For old permits, select the approved material/grade code (e.g. S.Fines(60-62)) and save only that permit. Numerical Grade % is optional when the material code already has the verified band. Original E-Passes remain unchanged.</p>'+
+        '<p class="dd-note">New buyers and destinations can be typed directly and are added to report headings after saving. For old permits, select the approved material/grade code (e.g. S.Fines(60-62)) and save only that permit. Numerical Grade % is optional when the material code already has the verified band. Original E-Passes remain unchanged.</p>'+
         '</section>';
       const body=$('dd_pe_rows');
       const field=(id,value,placeholder,width,other='')=>
@@ -245,7 +245,7 @@ window.tiomDDPanel=async function(which){
         '<button class="btn primary small" onclick="tiomDDRepairCategories()">Auto-fill from completed permit history</button>'+
         mapping.permits.map((p,i)=>
           '<div class="dd-report"><div><strong>'+h(p.permit_no)+'</strong> · '+f(p.tripCount,0)+' trips · '+f(p.netMt)+' MT'+
-          '<p><small>'+h(p.sourceMapped?'Verified prior permit available — use Auto-fill':'New or unmatched permit — check AMNS before selecting a client category')+'</small></p></div>'+
+          '<p><small>'+h(p.sourceMapped?'Verified prior permit available — use Auto-fill':'New permit — enter the verified buyer and destination in MIS Permit Entry')+'</small></p></div>'+
           (p.sourceMapped?'<small>Auto-fill available</small>':
            '<div><select id="dd_bucket_'+i+'"><option value="">Choose verified buyer / destination / grade</option>'+
            mapping.categories.map(b=>'<option value="'+b.index+'">'+h(b.buyer)+' · '+h(b.destination)+' · '+h(b.material)+'</option>').join('')+
@@ -256,7 +256,7 @@ window.tiomDDPanel=async function(which){
         '<section class="dd-box"><b>E-Pass categories present for '+h(mapping.reportDate)+'</b> · '+
         f(mapping.totalTrips,0)+' E-Passes classified. <small>AMNS permit verification is separate: use MIS Permit Entry.</small></section>';
       $('dd_body').innerHTML=mapPanel+'<section class="dd-box"><b>Five Client-Format Reports</b>'+
-       '<p>Branded Excel reports with consistent colours and borders; the transporter report includes the monthly cumulative table directly below the daily table. FTM totals exclude cancelled trips.</p>'+
+       '<p>Client report headings expand automatically for new verified buyers, destinations and transporters. Daily and monthly cumulative totals include every added category. FTM totals exclude cancelled trips.</p>'+
        '<div class="dd-tools"><label>Export basis <select id="dd_reportbasis"><option value="daily">Daily submission (To date + MTD)</option><option value="month">Month-to-date workbook (all daily sheets)</option></select></label>'+
        '<span>Reporting date: '+h(v('dd_to'))+' · Client submission next day</span></div>'+
        [['trip','Trip Summary · Daily, Cummulative, Cancellation'],['transporter','Transporter-wise Dispatch · FTD / FTM'],['material','Material-wise Dispatch · Date & Total'],['destination','Destination-wise · Buyers, Trips, Quantity'],['despatch','Captive / Non-captive · Date & Cumulative']].map(x=>
