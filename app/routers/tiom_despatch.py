@@ -791,7 +791,7 @@ def _report_verified_amns(db: Session, rows, *, strict=True):
         if len(category_keys) != 1:
             continue  # Different confirmed categories need an MIS decision.
         source_identities = {
-            normalized(row.consignee)
+            normalized(getattr(row, "consignee", "") or "")
             for saved, _, _, _ in candidates
             for row in raw_by_day[(saved.report_date, permit)]
             if str(getattr(row, "consignee", "") or "").strip()
