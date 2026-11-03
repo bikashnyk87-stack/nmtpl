@@ -253,6 +253,7 @@ window.tiomDDPanel=async function(which){
            '</select><select id="dd_amns_'+i+'" aria-label="AMNS evidence for '+h(p.permit_no)+'" onchange="tiomDDEvidencePreview('+i+')"><option value="">Choose AMNS evidence (current or prior date)</option>'+
            mapping.images.map(img=>'<option value="'+h(img.id)+'">'+h(img.name)+' · '+h(img.reportDate)+(img.earlierEvidence?' (earlier report)':' (same day)')+'</option>').join('')+
            '</select><div id="dd_amns_preview_'+i+'" class="dd-evidence-preview">Choose an image to view its original report before confirming this permit.</div>'+
+           (p.relatedUnclassifiedTrips>p.tripCount?'<label class="dd-evidence-propagate"><input type="checkbox" id="dd_all_dates_'+i+'" checked> Fill missing classifications for this exact permit on '+h(p.relatedDates.join(', '))+' ('+f(p.relatedUnclassifiedTrips,0)+' trips)</label>':'')+
            '<button class="btn secondary small" onclick="tiomDDConfirmCategory('+i+')">Confirm permit classification</button></div>')+
           '</div>').join('')+'</section>':
         '<section class="dd-box"><b>E-Pass categories present for '+h(mapping.reportDate)+'</b> · '+
@@ -304,7 +305,9 @@ window.tiomDDConfirmCategory=async i=>{
   const selected=last.sourceMapping.categories.find(c=>c.index===Number(category));
   const doc=last.sourceMapping.images.find(x=>x.id===image);
   if(!selected||!doc)return say('Invalid category or evidence selection. Refresh the report.',true);
-  const samePermitDates=(item.relatedDates||[]).filter(d=>d>=doc.reportDate&&d<=last.sourceMapping.reportDate);
+  const applyRelatedDates=$('dd_all_dates_'+i)?.checked!==false;
+  const samePermitDates=(applyRelatedDates?(item.relatedDates||[]):[last.sourceMapping.reportDate])
+    .filter(d=>d>=doc.reportDate&&d<=last.sourceMapping.reportDate);
   if(!window.confirm('Open the original image to verify first.\\n\\n'+
     'Does '+doc.name+' (AMNS report '+doc.reportDate+') SHOW permit '+item.permit_no+
     ' as '+selected.buyer+' / '+selected.destination+' / '+selected.material+
@@ -315,7 +318,8 @@ window.tiomDDConfirmCategory=async i=>{
     const r=await api('mapping-confirm',JSON.stringify({
       report_date:last.sourceMapping.reportDate,permit_no:item.permit_no,
       category_index:Number(category),document_id:image,
-      expected_trips:item.tripCount,confirmed_against_amns:true
+      expected_trips:item.tripCount,confirmed_against_amns:true,
+      apply_to_related_dates:applyRelatedDates
     }));
     await window.tiomDDPanel('reports');
     say('Confirmed permit '+r.permit+' using AMNS '+r.imageDate+'. Updated '+
