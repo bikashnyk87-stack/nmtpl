@@ -1194,7 +1194,7 @@ def _month_mapping_issue_rows(rows, confirmed):
     """Group report-blocking categories by day/permit, not by individual E-Pass."""
     from collections import defaultdict
     from app.services.tiom_despatch_client_layout import (
-        MATERIAL_COLUMNS, normalized, reportable_category,
+        normalized, reportable_category,
     )
     grouped = defaultdict(list)
     for trip in rows:
@@ -1234,7 +1234,6 @@ def _month_mapping_issue_rows(rows, confirmed):
                 candidate_fields[dest_key] = next(iter(choices)) if len(choices) == 1 else ""
             candidate_fields["gradePercent"] = ""
         if missing:
-            fields = ["Buyer" if not x.buyer else "" for x in projected]
             incomplete = []
             for label, key in (("buyer", "buyer"), ("destination", "destination"),
                                ("material/grade", "material_grade")):
