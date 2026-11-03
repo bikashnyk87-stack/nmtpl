@@ -107,7 +107,7 @@ assert(html.includes('HSD &amp; equipment utilization'), 'HSD KPI group missing'
 assert(html.includes('Drilling performance'), 'drilling KPI group missing');
 assert(html.includes('Maintenance &amp; month-to-date'), 'monthly KPI group missing');
 assert(html.includes('2.541 km'), 'average lead is missing');
-assert(html.includes('87.75%'), 'match rate is missing');
+assert(html.includes('87.8%'), 'match rate is missing or not rounded to dashboard precision');
 assert(html.includes('150.00 m'), 'drill meterage is missing');
 assert(html.includes('2.000 L/m'), 'drill HSD intensity is wrong');
 assert(html.includes('1,10,000.00 t'), 'Indian-formatted MTD output is wrong');
