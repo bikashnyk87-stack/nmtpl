@@ -136,7 +136,7 @@ def test_ui_offers_single_permit_confirmation_and_bulk_safe_repair():
     src=(Path(__file__).parents[1]/"app"/"static"/"tiom_despatch.js").read_text("utf-8")
     for phrase in ("mapping-status","mapping-reconcile","mapping-confirm",
                    "tiomDDRepairCategories","tiomDDConfirmCategory",
-                   "Confirm one permit","Source mapping"):
+                   "Confirm permit classification","Source mapping"):
         assert phrase in src
 
 
