@@ -1502,6 +1502,123 @@ def fuel_live_balance(
             "todayIssueL": quantities.get("ISSUE", 0.0)}
 
 
+
+@router.get("/KOCP/fuel/vehicles")
+def kocp_hsd_vehicle_report(
+    request: Request,
+    from_date: date,
+    to_date: date,
+    shift: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """All HSD-consuming KOCP vehicles; grouped totals are never top-N capped.
+
+    Detailed issues are bounded separately for screen performance. Both use
+    the posted-only ledger to ensure voids are excluded from all quantities.
+    """
+    user = get_user(db, request)
+    require_site(db, user, "KOCP")
+    _require_any(db, user, "KOCP", "HSD")
+    if to_date < from_date or (to_date - from_date).days > 366:
+        raise HTTPException(422, "Choose a valid From–To range of at most 367 days.")
+    if shift is not None:
+        shift = shift.strip().upper() or None
+        if shift and shift not in {"A", "B", "C"}:
+            raise HTTPException(422, "Choose shift A, B, C or All.")
+    filters = [
+        SiteHsdTransaction.site_id == "KOCP",
+        SiteHsdTransaction.status == "POSTED",
+        SiteHsdTransaction.transaction_type == "ISSUE",
+        SiteHsdTransaction.operating_date >= from_date,
+        SiteHsdTransaction.operating_date <= to_date,
+    ]
+    if shift:
+        filters.append(SiteHsdTransaction.shift == shift)
+    grouped = db.execute(select(
+        SiteHsdTransaction.asset_id,
+        func.count(SiteHsdTransaction.transaction_id),
+        func.coalesce(func.sum(SiteHsdTransaction.litres), 0),
+        func.min(SiteHsdTransaction.operating_date),
+        func.max(SiteHsdTransaction.operating_date),
+    ).where(*filters).group_by(
+        SiteHsdTransaction.asset_id
+    ).order_by(
+        func.sum(SiteHsdTransaction.litres).desc(),
+        SiteHsdTransaction.asset_id,
+    )).all()
+    ids = [asset for asset, *_ in grouped if asset]
+    equipment = {
+        item.machine_id: item
+        for item in db.scalars(
+            select(Equipment).where(Equipment.machine_id.in_(ids))
+        )
+    } if ids else {}
+    asset_rows = []
+    total_litres = Decimal("0")
+    issue_count = 0
+    for asset, count, litres, first_day, last_day in grouped:
+        eq = equipment.get(asset)
+        qty = Decimal(str(litres))
+        issue_count += int(count)
+        total_litres += qty
+        display = (
+            " · ".join(
+                x for x in (
+                    f"Door {eq.door_no}" if eq and eq.door_no else None,
+                    eq.vehicle_no if eq else None,
+                    f"ID {eq.machine_id}" if eq else None,
+                ) if x
+            ) if eq else (asset or "Unmapped equipment")
+        )
+        asset_rows.append({
+            "assetId": asset, "vehicle": display,
+            "registration": eq.vehicle_no if eq else None,
+            "doorNo": eq.door_no if eq else None,
+            "ownership": eq.ownership if eq else "Unknown",
+            "equipmentType": eq.type if eq else "Unmapped",
+            "issues": int(count),
+            "litres": str(qty),
+            "averageLitres": str(qty / count) if count else None,
+            "firstDate": first_day.isoformat() if first_day else None,
+            "lastDate": last_day.isoformat() if last_day else None,
+        })
+    # Separate from the all-vehicle totals: detail rows are paginated via
+    # the date window if needed, never silently presented as all records.
+    detail_limit = 3000
+    entries = list(db.scalars(select(SiteHsdTransaction).where(
+        *filters
+    ).order_by(
+        SiteHsdTransaction.operating_date.desc(),
+        SiteHsdTransaction.entered_at.desc(),
+        SiteHsdTransaction.transaction_id.desc(),
+    ).limit(detail_limit + 1)))
+    has_more = len(entries) > detail_limit
+    detail = [{
+        "transactionId": row.transaction_id,
+        "date": row.operating_date.isoformat(),
+        "shift": row.shift,
+        "assetId": row.asset_id,
+        "vehicle": next(
+            (x["vehicle"] for x in asset_rows if x["assetId"] == row.asset_id),
+            row.asset_id or "Unknown"
+        ),
+        "litres": str(row.litres),
+        "reference": row.reference_no,
+        "enteredBy": row.entered_by,
+    } for row in entries[:detail_limit]]
+    return {
+        "fromDate": from_date.isoformat(), "toDate": to_date.isoformat(),
+        "shift": shift or "ALL",
+        "vehicles": asset_rows,
+        "vehicleCount": len(asset_rows),
+        "issueCount": issue_count,
+        "totalLitres": str(total_litres),
+        "averageLitres": str(total_litres / issue_count) if issue_count else None,
+        "entries": detail, "hasMoreEntries": has_more,
+        "detailLimit": detail_limit,
+    }
+
+
 @router.get("/{site_id}/fuel/summary")
 def fuel_summary(
     site_id: str,
