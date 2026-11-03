@@ -1269,7 +1269,12 @@ function rebuildSimpleHsdRows(){
   refreshEntryRowCounts();
 }
 async function saveSimpleHsd(){
-  if(siteId==='KOCP'){
+  const hasIssueRows=[...document.querySelectorAll('.simple-hsd-row')].some(row=>{
+    const i=row.dataset.i;
+    return row.dataset.saved!=='1' && $('shType'+i)?.value==='ISSUE' &&
+      Boolean($('shAsset'+i)?.value||$('shLitres'+i)?.value||$('shRef'+i)?.value);
+  });
+  if(siteId==='KOCP'&&hasIssueRows){
     try{
       const latest=await api('/api/site-ops/KOCP/fuel/balance');
       if(latest.stockBalance===null||latest.stockBalance===undefined) {
