@@ -1158,7 +1158,7 @@ async function renderSimpleHsd(){
       <thead><tr><th>#</th><th>Shift</th><th>Type</th><th>${activeHsdEntryType==='RECEIPT'?'Supplier':'Equipment / Supplier'}</th><th>Litres</th><th>Reference</th><th>Status</th></tr></thead>
       <tbody id="simpleHsdRows">${hsdGridRows(10)}</tbody>
     </table></div>
-    <div class="simple-actions"><button type="button" id="shSave" class="btn primary" onclick="saveSimpleHsd()" ${siteId==='KOCP'&&!kocpHsdCanIssue(fuel)?'disabled title="Opening stock must be verified before issuing fuel"':''}>Save ${esc(modeLabel)} Rows</button><button type="button" class="btn outline" onclick="clearSimpleHsdDraft()">Clear This Draft</button><span class="draft-state">Draft autosaves on this PC</span></div>
+    <div class="simple-actions"><button type="button" id="shSave" class="btn primary" onclick="saveSimpleHsd()" ${siteId==='KOCP'&&activeHsdEntryType==='ISSUE'&&!kocpHsdCanIssue(fuel)?'disabled title="Opening stock must be verified before issuing fuel"':''}>Save ${esc(modeLabel)} Rows</button><button type="button" class="btn outline" onclick="clearSimpleHsdDraft()">Clear This Draft</button><span class="draft-state">Draft autosaves on this PC</span></div>
     <div class="simple-note">Live balance refreshes from posted Neon transactions after every successful issue; unfinished rows are retained.</div>
   </div>`+
   panel('Recent '+modeLabel+' records',recentTable(hsdHead,rows),`${rows.length} recent records`)+
