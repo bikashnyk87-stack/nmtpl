@@ -715,7 +715,9 @@ def _report_verified_amns(db: Session, rows):
     """Report on confirmed MIS source fields, preserving original E-Pass records."""
     if not rows:
         return rows
-    from app.services.tiom_despatch_client_layout import destination_bucket_index
+    from app.services.tiom_despatch_client_layout import (
+        report_destination_buckets, report_destination_bucket_index,
+    )
     days = {x.report_date for x in rows if x.report_date >= date(2026, 10, 27)}
     if not days:
         return rows
@@ -742,10 +744,15 @@ def _report_verified_amns(db: Session, rows):
         projected = _ReportTripView(
             row, _amns_buyer(saved.buyer), saved.destination.strip(), classified
         )
-        if destination_bucket_index(projected) is None:
+        # A newly verified client/destination is appended to the exported
+        # workbook while preserving the original client column positions.
+        # Unknown/unverified image fields still block the report.
+        if report_destination_bucket_index(
+            projected, report_destination_buckets([projected])
+        ) is None:
             raise ValueError(
-                f"Permit {saved.permit_no}: approved AMNS destination has no "
-                "corresponding client report column. Original E-Passes unchanged."
+                f"Permit {saved.permit_no}: approved AMNS category is missing "
+                "a buyer, destination or material grade. E-Passes unchanged."
             )
         result.append(projected)
     return result
@@ -1244,9 +1251,10 @@ def export_check(report_type: str, request: Request,
                 "fixPermit": match.group(1) if match else None,
                 "fixDate": match.group(2) if match else None}
     from app.services.tiom_despatch_client_reports import _keymap, _material_counts
+    from app.services.tiom_despatch_client_layout import report_destination_buckets
     errors=[]
     if report_type in {"destination","transporter"}:
-        _, missing = _keymap(rows)
+        _, missing = _keymap(rows, report_destination_buckets(rows))
         if missing:
             errors.append(f"{len(missing)} unmatched buyer/destination categories (e.g. {missing[0].epass_no})")
     if report_type in {"material","despatch","transporter"}:
@@ -1290,7 +1298,17 @@ def export_report(report_type: str, request: Request,
     except ValueError as exc:
         raise HTTPException(409, str(exc)) from exc
     build_ms = (perf_counter() - started) * 1000 - read_ms
-    filename = f"AMIPL_{report_type}_{to_date:%Y-%m-%d}_Client_Format.xlsx"
+    # Keep the five customer-facing filenames recognizable from their
+    # approved source workbooks; the selected reporting month updates itself.
+    fiscal_year = f"{to_date.year if to_date.month>=4 else to_date.year-1}-{(to_date.year+1 if to_date.month>=4 else to_date.year)%100:02d}"
+    names = {
+        "trip": f"Trip Summary {to_date:%b-%y}.xlsx",
+        "transporter": f"Transporter wise Dispatch Report_{to_date:%b-%y}.xlsx",
+        "material": f"Material Wise Dispatch Repor {fiscal_year}.xlsx",
+        "destination": f"Destination Wise Report {to_date:%b-%y}.xlsx",
+        "despatch": f"Despatch Report {to_date:%b-%Y}.xlsx",
+    }
+    filename = names[report_type]
     # BytesIO's default iterator is line based, which fragments compressed ZIP
     # workbooks into many tiny chunks. Send predictable 256KiB chunks instead.
     size = buffer.getbuffer().nbytes
