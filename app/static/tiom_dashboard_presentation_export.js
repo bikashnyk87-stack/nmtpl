@@ -195,8 +195,8 @@
         if (typeof toast === 'function') toast('Allow pop-ups to open the printable report.');
         return;
       }
-      w.document.open(); w.document.write(content); w.document.close();
       w.onload = function () { w.focus(); w.print(); };
+      w.document.open(); w.document.write(content); w.document.close();
       return;
     }
     var name = 'TIOM_Management_Report_' + (d.fromDate || 'date') + '_' + (d.toDate || 'date') + '.html';
