@@ -1010,6 +1010,115 @@ function fuelKpiCards(fuel){
     ${dashKpi('Fuel / OB CuM',fuel?.litresPerCum!=null?dashNum(fuel.litresPerCum,3)+' L/CuM':'—','Only if posted OB CuM exists','')}
   </div>`
 }
+
+let kocpFuelReportRange={from:'',to:'',shift:'ALL'};
+let kocpFuelReportData=null;
+function kocpFuelRangeFor(today){
+  return {
+    from:kocpFuelReportRange.from||String(today).slice(0,8)+'01',
+    to:kocpFuelReportRange.to||today,
+    shift:kocpFuelReportRange.shift||'ALL'
+  };
+}
+async function fetchKocpFuelVehicleReport(range){
+  const p=new URLSearchParams({from_date:range.from,to_date:range.to});
+  if(range.shift!=='ALL')p.set('shift',range.shift);
+  return api('/api/site-ops/KOCP/fuel/vehicles?'+p.toString());
+}
+function kocpVehicleReportResults(d){
+  if(!d||d.error)return '<p class="simple-warning">Vehicle report unavailable: '+esc(d?.error||'Reload report.')+'</p>';
+  const rows=d.vehicles||[];
+  const overview=`<div class="kocp-vehicle-stats">
+    <div><span>Vehicles issued</span><strong>${dashNum(d.vehicleCount)}</strong></div>
+    <div><span>Issue entries</span><strong>${dashNum(d.issueCount)}</strong></div>
+    <div><span>Total issued</span><strong>${dashNum(d.totalLitres,2)} L</strong></div>
+    <div><span>Average / issue</span><strong>${d.averageLitres==null?'—':dashNum(d.averageLitres,2)+' L'}</strong></div>
+  </div>`;
+  const summary=recentTable(
+    ['#','Vehicle / registration','Ownership','Type','Issues','Litres','Avg/issue','First','Last'],
+    rows.map((v,i)=>`<tr class="kocp-fuel-vehicle-row" data-search="${esc([v.vehicle,v.assetId,v.registration,v.doorNo,v.ownership,v.equipmentType].join(' ').toLowerCase())}">
+      <td>${i+1}</td><td><b>${esc(v.vehicle)}</b></td>
+      <td>${esc(v.ownership||'—')}</td><td>${esc(v.equipmentType||'—')}</td>
+      <td>${dashNum(v.issues)}</td><td><b>${dashNum(v.litres,2)} L</b></td>
+      <td>${v.averageLitres==null?'—':dashNum(v.averageLitres,2)+' L'}</td>
+      <td>${esc(v.firstDate||'—')}</td><td>${esc(v.lastDate||'—')}</td>
+    </tr>`)
+  );
+  const details=(d.entries||[]).map((v,i)=>`<tr><td>${i+1}</td>
+    <td>${esc(v.date)}</td><td>${esc(v.shift||'—')}</td><td>${esc(v.vehicle)}</td>
+    <td>${dashNum(v.litres,2)} L</td><td>${esc(v.reference||'—')}</td>
+    <td>${esc(v.enteredBy||'—')}</td></tr>`);
+  return overview+
+    `<p class="simple-note">All POSTED vehicle issues between ${esc(d.fromDate)} and ${esc(d.toDate)} · Shift ${esc(d.shift)}. Voided entries excluded.</p>`+
+    (rows.length?summary:'<p class="ops-empty">No posted HSD issues for these filters.</p>')+
+    `<details class="kocp-fuel-detail">
+       <summary>View individual fuel issues (${dashNum(d.issueCount)} entries)</summary>
+       ${d.hasMoreEntries?'<p class="simple-warning">Only the first '+dashNum(d.detailLimit)+' details are shown; shorten date range to see every row. All vehicle totals are complete.</p>':''}
+       ${recentTable(['#','Date','Shift','Vehicle','Litres','Reference','Entered by'],details)}
+     </details>`;
+}
+function kocpVehicleReportPanel(data,today){
+  const r=kocpFuelRangeFor(today);
+  kocpFuelReportData=data;
+  const opts=['ALL','A','B','C'].map(s=>`<option value="${s}" ${s===r.shift?'selected':''}>${s==='ALL'?'All shifts':'Shift '+s}</option>`).join('');
+  return `<div class="kocp-hsd-filter-bar">
+    <label>From <input id="kocpHsdFrom" type="date" value="${esc(r.from)}"></label>
+    <label>To <input id="kocpHsdTo" type="date" value="${esc(r.to)}"></label>
+    <label>Shift <select id="kocpHsdShift">${opts}</select></label>
+    <button type="button" class="btn primary" onclick="applyKocpFuelVehicleFilters()">Show Report</button>
+    <button type="button" class="btn outline" onclick="setKocpFuelMonthToDate()">This Month</button>
+    <button type="button" class="btn outline" onclick="downloadKocpFuelVehicleCsv()">Download CSV</button>
+    <label class="kocp-hsd-filter-search">Search vehicle <input id="kocpHsdSearch" type="search" placeholder="Vehicle / Door / Owner" oninput="filterKocpFuelVehicles()"></label>
+  </div><div id="kocpFuelVehicleResults">${kocpVehicleReportResults(data)}</div>`;
+}
+function filterKocpFuelVehicles(){
+  const term=String($('kocpHsdSearch')?.value||'').trim().toLowerCase();
+  document.querySelectorAll('.kocp-fuel-vehicle-row').forEach(r=>{
+    r.hidden=!!term&&!String(r.dataset.search||'').includes(term);
+  });
+}
+async function applyKocpFuelVehicleFilters(){
+  const from=$('kocpHsdFrom')?.value,to=$('kocpHsdTo')?.value,shift=$('kocpHsdShift')?.value||'ALL';
+  if(!from||!to||to<from)return toast('Choose a valid From–To date range.','bad');
+  kocpFuelReportRange={from,to,shift};
+  const host=$('kocpFuelVehicleResults'),btn=document.querySelector('.kocp-hsd-filter-bar .btn.primary');
+  if(!host)return;
+  if(btn)btn.disabled=true;
+  try{
+    host.innerHTML='<p class="simple-note">Loading vehicle report…</p>';
+    const d=await fetchKocpFuelVehicleReport(kocpFuelReportRange);
+    kocpFuelReportData=d;host.innerHTML=kocpVehicleReportResults(d);
+    filterKocpFuelVehicles();
+  }catch(e){
+    kocpFuelReportData=null;host.innerHTML=kocpVehicleReportResults({error:e.message});
+    toast(e.message,'bad');
+  }finally{if(btn)btn.disabled=false}
+}
+function setKocpFuelMonthToDate(){
+  const today=state.ctx.operatingDate;
+  if($('kocpHsdFrom'))$('kocpHsdFrom').value=String(today).slice(0,8)+'01';
+  if($('kocpHsdTo'))$('kocpHsdTo').value=today;
+  if($('kocpHsdShift'))$('kocpHsdShift').value='ALL';
+  applyKocpFuelVehicleFilters();
+}
+function downloadKocpFuelVehicleCsv(){
+  const d=kocpFuelReportData;
+  if(!d||d.error)return toast('Apply the date filters and load the report first.','bad');
+  const quote=v=>'"'+String(v??'').replace(/"/g,'""')+'"';
+  const rows=[
+    ['KOCP HSD VEHICLE CONSUMPTION'],
+    ['From',d.fromDate,'To',d.toDate,'Shift',d.shift],
+    ['Vehicle','Registration','Door No','Ownership','Type','Issue Count','Total Litres','Avg Litres / Issue','First Date','Last Date'],
+    ...(d.vehicles||[]).map(v=>[v.vehicle,v.registration,v.doorNo,v.ownership,v.equipmentType,v.issues,v.litres,v.averageLitres,v.firstDate,v.lastDate]),
+    ['TOTAL','','','','',d.issueCount,d.totalLitres,d.averageLitres]
+  ];
+  const csv='\uFEFF'+rows.map(r=>r.map(quote).join(',')).join('\r\n');
+  const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  const a=document.createElement('a');a.href=url;
+  a.download='KOCP_HSD_Vehicles_'+d.fromDate+'_to_'+d.toDate+'.csv';
+  document.body.appendChild(a);a.click();a.remove();URL.revokeObjectURL(url);
+}
+
 function fuelAssetBreakdown(fuel){
   const assets=fuel?.issueByAsset||[];
   return assets.length
@@ -1112,9 +1221,12 @@ const kocpHsdAdmin=()=>siteId==='KOCP'&&Boolean(state.bootstrap?.user?.isManagem
 function kocpHsdCanIssue(fuel){return siteId!=='KOCP'||(fuel&&fuel.stockBalance!==null&&fuel.stockBalance!==undefined&&Number(fuel.stockBalance)>0)}
 async function renderSimpleHsd(){
   const today=state.ctx.operatingDate,from=String(today).slice(0,8)+'01';
-  const [data,fuel]=await Promise.all([
+  const [data,fuel,vehicleReport]=await Promise.all([
     api(`/api/sites/${siteId}/records/hsd?limit=${siteId==='KOCP'&&kocpHsdHistoryDate?500:60}${siteId==='KOCP'&&kocpHsdHistoryDate?'&operating_date='+encodeURIComponent(kocpHsdHistoryDate):''}`).catch(()=>[]),
-    api(`/api/site-ops/${siteId}/fuel/summary?from_date=${from}&to_date=${today}`).catch(()=>null)
+    api(`/api/site-ops/${siteId}/fuel/summary?from_date=${from}&to_date=${today}`).catch(()=>null),
+    siteId==='KOCP'&&activeHsdEntryType==='ISSUE'
+      ? fetchKocpFuelVehicleReport(kocpFuelRangeFor(today)).catch(e=>({error:e.message}))
+      : Promise.resolve(null)
   ]);
   if(siteId==='KOCP')kocpRecentHsdRows=data;
   const rows=data.filter(r=>activeHsdEntryType==='LEGACY'||r.transactionType===(activeHsdEntryType==='RECOVERY'?'RECEIPT':activeHsdEntryType))
@@ -1185,7 +1297,7 @@ async function renderSimpleHsd(){
     <div class="simple-note">Live balance refreshes from posted Neon transactions after every successful issue; unfinished rows are retained.</div>
   </div>`+
   panel('Recent '+modeLabel+' records',kocpHsdHistoryControls()+recentTable(hsdHead,rows),`${rows.length} recent records`)+
-  panel('Top HSD-consuming equipment',fuelAssetBreakdown(fuel),'Selected month')+(siteId==='KOCP'?kocpHsdCorrectionPanel():'');
+  (siteId==='KOCP'?panel('All HSD-consuming vehicles / equipment',kocpVehicleReportPanel(vehicleReport,today),'Complete list · From–To filters'):panel('Top HSD-consuming equipment',fuelAssetBreakdown(fuel),'Selected month'))+(siteId==='KOCP'?kocpHsdCorrectionPanel():'');
 }
 async function saveHsdOpening(){
   const btn=$('hsdOpenSave'),date=$('hsdOpenDate')?.value;
@@ -1326,8 +1438,8 @@ async function saveSimpleHsd(){
           assetType:type==='ISSUE'?'EQUIPMENT':null,assetId:type==='ISSUE'?asset:null,litres,
           supplier:type==='RECEIPT'?supplier:null,referenceNo:ref||null,sourceType:'PORTAL',sourceRecordUid:uid.value};
         st.textContent='Saving…';st.className='simple-status muted';
-        await api(`/api/sites/${siteId}/hsd`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-        st.textContent='Saved ✓';st.className='simple-status good';done++;row.dataset.saved='1';
+        const saved=await api(`/api/sites/${siteId}/hsd`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+        st.textContent=saved?.historicalHired?'Saved · historic hired ✓':'Saved ✓';st.className='simple-status good';done++;row.dataset.saved='1';
         row.querySelectorAll('input,select').forEach(input=>{input.disabled=true});
         // Confirm the remaining fuel after EVERY posted issue, not only after
         // the last row in a batch. Do not rerender/erase unsaved issue rows.
@@ -1442,7 +1554,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,applyKocpFuelVehicleFilters,setKocpFuelMonthToDate,filterKocpFuelVehicles,downloadKocpFuelVehicleCsv,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
