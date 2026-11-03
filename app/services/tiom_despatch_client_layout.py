@@ -165,6 +165,10 @@ def report_destination_buckets(trips):
     for trip in trips:
         if destination_bucket_index(trip) is not None:
             continue
+        # Accepted 1–26 October uses the exact frozen client column layout.
+        # Dynamic new-party columns start from the subsequent report period.
+        if trip.report_date.year == 2026 and trip.report_date.month == 10 and trip.report_date.day <= 26:
+            continue
         buyer = str(trip.buyer or "").strip()
         destination = str(trip.destination or "").strip()
         grade = str(trip.material_grade or "").strip()
@@ -172,6 +176,7 @@ def report_destination_buckets(trips):
             continue
         # Prevent accidentally interpreting placeholder words as new clients.
         if any(normalized(x) in {"", "unknown", "na", "unverified", "tbd"}
+               or normalized(x).startswith("unverified")
                for x in (buyer, destination, grade)):
             continue
         key = (normalized(buyer), normalized(destination),
