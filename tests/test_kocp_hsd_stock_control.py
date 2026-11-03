@@ -166,3 +166,47 @@ def test_stock_helper_only_counts_posted_and_checks_daily_negative():
             require_fuel_available(db, "KOCP", DAY, Decimal("11"))
         assert exc.value.status_code == 409
     engine.dispose()
+
+
+def test_receipt_before_opening_allowed_but_does_not_unlock_issue(monkeypatch):
+    engine = database()
+    with app_client(monkeypatch, engine) as client:
+        receipt = client.post("/api/sites/KOCP/hsd", json={
+            "operatingDate": DAY.isoformat(), "shift": "A",
+            "transactionType": "RECEIPT", "litres": "50",
+            "supplier": "HSD supplier", "referenceNo": "Challan 1",
+        })
+        assert receipt.status_code == 200
+        issue = client.post("/api/sites/KOCP/hsd", json=issue_body("BLOCKED", 10))
+        assert issue.status_code == 409
+    engine.dispose()
+
+
+def test_admin_cannot_void_receipt_that_would_create_negative_stock(monkeypatch):
+    engine = database()
+    with Session(engine) as db:
+        add_hsd(db, "OPEN", "OPENING", 100)
+        add_hsd(db, "RECEIPT", "RECEIPT", 100, supplier="Fuel supplier")
+        add_hsd(db, "ISSUE", "ISSUE", 150, asset_id="TIP-1")
+    with app_client(monkeypatch, engine) as client:
+        rejected = client.post("/api/sites/KOCP/hsd/RECEIPT/correct", json={
+            "action": "VOID", "expectedVersion": 1,
+            "reason": "Incorrect receipt needs removal",
+        })
+        assert rejected.status_code == 409
+    with Session(engine) as db:
+        assert db.get(SiteHsdTransaction, "RECEIPT").status == "POSTED"
+    engine.dispose()
+
+
+def test_unapproved_operator_cannot_create_ko_cp_opening(monkeypatch):
+    engine = database()
+    with app_client(monkeypatch, engine, admin=False) as client:
+        monkeypatch.setattr(sites, "has_permission", lambda *args: False)
+        result = client.post("/api/sites/KOCP/hsd", json={
+            "operatingDate": DAY.isoformat(), "shift": None,
+            "transactionType": "OPENING", "litres": "999",
+            "referenceNo": "Unapproved opening document",
+        })
+        assert result.status_code == 403
+    engine.dispose()
