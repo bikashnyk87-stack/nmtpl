@@ -1782,3 +1782,18 @@ body.field-mode{
 .kocp-correction-reason textarea{min-height:66px}
 @media(max-width:960px){.kocp-correction-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.kocp-correction-reason{grid-column:span 2}}
 @media(max-width:600px){.kocp-correction-grid{grid-template-columns:1fr}.kocp-correction-reason{grid-column:span 1}}
+
+/* KOCP HSD ledger guard and compact administrator correction form */
+.hsd-block-warning{border:1px solid #e8b36a;background:#fff8e8;color:#694114;padding:12px 14px;margin:10px 0;border-radius:9px;font-size:12px;line-height:1.5}
+.hsd-block-warning b{font-size:13px}
+.hsd-correction-panel[hidden]{display:none!important}
+.hsd-correction-panel{background:#fff;border:1px solid #a7cfca;border-radius:10px;margin:12px 0;padding:14px}
+.hsd-correction-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:8px}
+.hsd-correction-head b{font-size:14px;color:#12494b}
+.hsd-correction-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.hsd-correction-grid>label{display:flex;flex-direction:column;gap:5px;min-width:0;font-weight:700;font-size:11px;color:#42616b}
+.hsd-correction-grid>label:last-child{grid-column:1/-1}
+.hsd-correction-grid input,.hsd-correction-grid select,.hsd-correction-grid textarea{width:100%;padding:9px;font-size:13px;min-height:38px;border-radius:7px;border:1px solid #bfd0d7;background:#fff;color:#1f4350}
+.hsd-correction-grid label[hidden]{display:none}
+@media(max-width:850px){.hsd-correction-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:580px){.hsd-correction-grid{grid-template-columns:1fr}}

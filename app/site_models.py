@@ -394,6 +394,8 @@ class SiteHsdTransaction(Base):
     entered_by: Mapped[str] = mapped_column(String(60))
     entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
     status: Mapped[str] = mapped_column(String(30), default="POSTED", index=True)
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     __table_args__ = (
         UniqueConstraint("site_id", "source_type", "source_record_uid", name="uq_site_hsd_source_uid"),
         Index("ix_site_hsd_summary", "site_id", "operating_date", "shift", "transaction_type"),
@@ -1066,6 +1068,10 @@ def ensure_tiom_entry_columns(engine) -> None:
     targets = {
         'tiom_source_deployment': {'operator_id': 'VARCHAR(60)'},
         'site_trip': {'route_id': 'VARCHAR(80)'},
+        'site_hsd_transaction': {
+            'version': 'INTEGER NOT NULL DEFAULT 1',
+            'updated_at': 'TIMESTAMP WITH TIME ZONE',
+        },
         'site_weight_factor': {
             'destination_location_id': 'VARCHAR(80)',
             'route_id': 'VARCHAR(80)',

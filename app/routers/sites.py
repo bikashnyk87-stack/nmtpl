@@ -37,6 +37,7 @@ from app.site_models import (
 )
 from app.site_schemas import (
     SiteHsdTransactionIn,
+    SiteHsdCorrectionIn,
     SiteTripIn,
     SiteWbManualIn,
     WeightFactorDecisionIn,
@@ -46,6 +47,7 @@ from app.site_schemas import (
     UserAccountUpdateIn,
 )
 from app.services.kocp_factor_rules import resolve_kocp_point_factor
+from app.services.kocp_hsd_stock import lock_hsd_ledger, evaluate_hsd_stock, require_fuel_available
 from app.services.site_context import resolve_site_context
 from app.services.site_master_import import equipment_dimensions, equipment_row_errors
 
@@ -1313,6 +1315,7 @@ def list_site_hsd(site_id: str, request: Request, operating_date: date | None = 
         "litres": r.litres, "supplier": r.supplier, "referenceNo": r.reference_no,
         "meterReading": r.meter_reading, "eventAt": r.event_at, "status": r.status,
         "enteredBy": r.entered_by, "enteredAt": r.entered_at,
+        "version": r.version,
     } for r in rows]
 
 
@@ -1342,6 +1345,142 @@ def site_audit(site_id: str, request: Request, limit: int = 100, db: Session = D
     return [{"createdAt": r.created_at, "actor": r.actor, "action": r.action, "entity": r.entity, "entityId": r.entity_id, "reason": r.reason} for r in rows]
 
 
+
+def _hsd_audit_snapshot(row: SiteHsdTransaction) -> dict:
+    return {
+        "date": str(row.operating_date), "shift": row.shift,
+        "type": row.transaction_type, "assetId": row.asset_id,
+        "litres": str(row.litres), "supplier": row.supplier,
+        "referenceNo": row.reference_no,
+        "meterReading": str(row.meter_reading) if row.meter_reading is not None else None,
+        "status": row.status, "version": row.version,
+    }
+
+
+@router.post("/KOCP/hsd/{transaction_id}/correct")
+def correct_kocp_hsd_transaction(
+    transaction_id: str, p: SiteHsdCorrectionIn,
+    request: Request, db: Session = Depends(get_db),
+):
+    """Admin-only audited edit/void; never delete source history or fake stock."""
+    csrf(request)
+    user = get_user(db, request)
+    require_site(db, user, "KOCP")
+    if not user.admin:
+        raise HTTPException(403, "Only the administrator can edit or void KOCP fuel records.")
+    lock_hsd_ledger(db, "KOCP")
+    row = db.scalar(select(SiteHsdTransaction).where(
+        SiteHsdTransaction.transaction_id == transaction_id,
+        SiteHsdTransaction.site_id == "KOCP",
+    ).with_for_update())
+    if not row:
+        raise HTTPException(404, "KOCP HSD record not found.")
+    if row.status != "POSTED":
+        raise HTTPException(409, "Only posted records can be edited or voided.")
+    if row.source_type != "PORTAL":
+        raise HTTPException(409, "Only manually entered KOCP HSD records can be corrected here.")
+    if row.version != p.expectedVersion:
+        raise HTTPException(409, "Record was updated by another user. Reload before saving corrections.")
+    before = _hsd_audit_snapshot(row)
+    reason = p.reason.strip()
+    if len(reason) < 5:
+        raise HTTPException(422, "Enter a meaningful correction reason (at least 5 characters).")
+    previous = evaluate_hsd_stock(db, "KOCP")
+    if p.action == "VOID":
+        if row.transaction_type == "OPENING":
+            other_issues = db.scalar(select(SiteHsdTransaction.transaction_id).where(
+                SiteHsdTransaction.site_id == "KOCP",
+                SiteHsdTransaction.status == "POSTED",
+                SiteHsdTransaction.transaction_type == "ISSUE",
+            ).limit(1))
+            if other_issues:
+                raise HTTPException(
+                    409, "Cannot void the opening while posted fuel issues exist. "
+                         "Correct those issues first or edit the opening with verified stock."
+                )
+        candidate = evaluate_hsd_stock(
+            db, "KOCP", exclude_transaction_id=row.transaction_id
+        )
+        # If the original ledger was already unverified, voiding an issue is
+        # still permitted so that administrators can repair historic mistakes.
+        if previous["verified"] and not candidate["verified"]:
+            if not (row.transaction_type == "OPENING" and
+                    "Opening stock" in (candidate["reason"] or "")):
+                raise HTTPException(409, candidate["reason"])
+        row.status = "VOID"
+    else:
+        date_value = p.operatingDate or row.operating_date
+        litres = p.litres if p.litres is not None else row.litres
+        shift = p.shift if p.shift is not None else row.shift
+        asset = p.assetId if p.assetId is not None else row.asset_id
+        supplier = p.supplier if p.supplier is not None else row.supplier
+        reference = p.referenceNo if p.referenceNo is not None else row.reference_no
+        reading = p.meterReading if p.meterReading is not None else row.meter_reading
+        if row.transaction_type == "OPENING":
+            if litres < 0:
+                raise HTTPException(422, "Opening stock cannot be negative.")
+            if not (reference or "").strip():
+                raise HTTPException(422, "Verified opening stock reference is mandatory.")
+            shift, asset, supplier = None, None, None
+        else:
+            if litres <= 0:
+                raise HTTPException(422, "Fuel litres must be greater than zero.")
+            if not _site_shift_active(db, "KOCP", shift):
+                raise HTTPException(422, "Choose a valid KOCP shift.")
+            if row.transaction_type == "ISSUE":
+                if not asset or not _site_equipment_assignment(db, "KOCP", asset, date_value):
+                    raise HTTPException(422, "Choose active equipment assigned to KOCP.")
+                supplier = None
+            elif row.transaction_type == "RECEIPT":
+                if not (supplier or "").strip():
+                    raise HTTPException(422, "Supplier is mandatory for receipts.")
+                asset = None
+        candidate = evaluate_hsd_stock(
+            db, "KOCP",
+            exclude_transaction_id=row.transaction_id,
+            additional=(date_value, row.transaction_type, litres),
+        )
+        if not candidate["verified"]:
+            # Legacy issue records without any opening may be corrected
+            # downward / relabelled, but not enlarged or moved to other dates.
+            legacy_repair = (
+                not previous["verified"]
+                and previous["openingCount"] == 0
+                and row.transaction_type == "ISSUE"
+                and date_value == row.operating_date
+                and litres <= row.litres
+            )
+            # Receipts are allowed before the verified opening is recorded,
+            # but they do not authorize any new issue.
+            preopening_receipt = (
+                previous["openingCount"] == 0
+                and row.transaction_type == "RECEIPT"
+            )
+            if not (legacy_repair or preopening_receipt):
+                raise HTTPException(409, candidate["reason"])
+        row.operating_date = date_value
+        row.shift = shift
+        row.asset_id = asset
+        row.supplier = supplier
+        row.reference_no = reference.strip() if reference else None
+        row.meter_reading = reading
+        row.litres = litres
+    row.version += 1
+    row.updated_at = datetime.now(timezone.utc)
+    _audit(db, user, "KOCP", p.action + "_HSD", "site_hsd_transaction",
+           transaction_id, before=before,
+           after=_hsd_audit_snapshot(row), reason=reason)
+    db.commit()
+    stock = evaluate_hsd_stock(db, "KOCP")
+    return {
+        "ok": True, "transactionId": row.transaction_id,
+        "status": row.status, "version": row.version,
+        "stockVerified": stock["verified"],
+        "stockBalance": str(stock["balance"]) if stock["verified"] else None,
+        "stockNote": stock["reason"],
+    }
+
+
 @router.post("/{site_id}/hsd")
 def create_hsd_transaction(site_id: str, p: SiteHsdTransactionIn, request: Request, db: Session = Depends(get_db)):
     csrf(request)
@@ -1349,6 +1488,9 @@ def create_hsd_transaction(site_id: str, p: SiteHsdTransactionIn, request: Reque
     site_id = require_site(db, user, site_id)
     require_permission(db, user, site_id, "HSD", "CREATE")
     tx_type=str(p.transactionType or "").strip().upper()
+    if tx_type == "OPENING" and site_id == "KOCP":
+        if not (user.admin or has_permission(db, user, site_id, "HSD", "APPROVE")):
+            raise HTTPException(403, "Verified opening stock can be recorded only by administrator or HSD approver.")
     if tx_type=="OPENING" and site_id=="KOCP":
         # Opening stock is a one-time starting point, not a daily receipt.
         # It can legitimately be zero. All other HSD transactions need >0 L.
@@ -1368,31 +1510,29 @@ def create_hsd_transaction(site_id: str, p: SiteHsdTransactionIn, request: Reque
             raise HTTPException(422, f"Choose a valid active equipment assigned to {site_id}.")
     if tx_type=="RECEIPT" and not (p.supplier or "").strip():
         raise HTTPException(422, "Supplier is required for HSD receipt.")
+    if site_id == "KOCP":
+        # Lock before checking idempotency and stock, so parallel issue requests
+        # can never both spend the same remaining litres.
+        lock_hsd_ledger(db, site_id)
     if p.sourceRecordUid:
         existing = db.scalar(select(SiteHsdTransaction.transaction_id).where(SiteHsdTransaction.site_id == site_id, SiteHsdTransaction.source_type == p.sourceType, SiteHsdTransaction.source_record_uid == p.sourceRecordUid))
         if existing:
             return {"ok": True, "transactionId": existing, "idempotent": True}
-    if tx_type=="OPENING" and site_id=="KOCP":
-        # PostgreSQL transaction-scoped lock prevents two simultaneous requests
-        # from creating duplicate initial stock baselines without a schema change.
-        if db.bind is not None and db.bind.dialect.name == "postgresql":
-            db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
-                       {"key": f"HSD_OPENING_{site_id}"})
-        existing_open = db.scalar(select(SiteHsdTransaction.transaction_id).where(
-            SiteHsdTransaction.site_id==site_id,
-            SiteHsdTransaction.transaction_type=="OPENING",
-            SiteHsdTransaction.status=="POSTED",
-        ).limit(1))
-        if existing_open:
-            raise HTTPException(409, "Opening balance already recorded. Do not add another opening; use the existing reference.")
-        older = db.scalar(select(SiteHsdTransaction.transaction_id).where(
-            SiteHsdTransaction.site_id==site_id,
-            SiteHsdTransaction.status=="POSTED",
-            SiteHsdTransaction.transaction_type.in_(["RECEIPT", "ISSUE", "ADJUSTMENT"]),
-            SiteHsdTransaction.operating_date < p.operatingDate,
-        ).limit(1))
-        if older:
-            raise HTTPException(409, "Earlier posted fuel movements exist. Opening date must be on or before the first transaction.")
+    remaining = None
+    if site_id == "KOCP":
+        if tx_type == "OPENING":
+            candidate = evaluate_hsd_stock(
+                db, site_id, additional=(p.operatingDate, "OPENING", p.litres)
+            )
+            if not candidate["verified"]:
+                raise HTTPException(409, candidate["reason"])
+        elif tx_type == "ISSUE":
+            remaining = require_fuel_available(db, site_id, p.operatingDate, p.litres)
+        elif tx_type == "ADJUSTMENT":
+            raise HTTPException(
+                409, "Unclassified fuel adjustments are disabled for KOCP. "
+                     "Use audited admin correction or a verified receipt."
+            )
     tx_id = f"HSD-{site_id}-{uuid4().hex[:14].upper()}"
     row = SiteHsdTransaction(
         transaction_id=tx_id,
@@ -1415,4 +1555,4 @@ def create_hsd_transaction(site_id: str, p: SiteHsdTransactionIn, request: Reque
     db.add(row)
     _audit(db, user, site_id, "CREATE_HSD", "site_hsd_transaction", tx_id, after={"type": p.transactionType, "litres": str(p.litres), "asset": p.assetId})
     db.commit()
-    return {"ok": True, "transactionId": tx_id}
+    return {"ok": True, "transactionId": tx_id, "remainingLitres": str(remaining) if remaining is not None else None}

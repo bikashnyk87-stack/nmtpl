@@ -1016,14 +1016,110 @@ function fuelAssetBreakdown(fuel){
     ? `<div class="ops-fuel-assets">${assets.map(x=>`<div><span>${esc(x.label||x.assetId)}</span><b>${dashNum(x.litres,1)} L</b><small>${dashNum(x.count)} issues</small></div>`).join('')}</div>`
     : '<div class="ops-empty">No posted equipment fuel issues for the selected period.</div>';
 }
+function kocpHsdCorrectionPanel(){
+  if(!kocpHsdAdmin())return '';
+  return `<section id="kocpHsdCorrection" class="hsd-correction-panel" hidden>
+    <div class="hsd-correction-head"><b>Admin · Correct HSD record</b><button type="button" class="btn outline" onclick="closeKocpHsdCorrection()">Close</button></div>
+    <p class="field-help" id="hcInfo"></p>
+    <div class="hsd-correction-grid">
+      <label>Date <input type="date" id="hcDate"></label>
+      <label>Shift <select id="hcShift">${shiftOpts(simpleShift())}</select></label>
+      <label>Litres <input id="hcLitres" type="number" step="0.001" min="0"></label>
+      <label id="hcAssetBox">Equipment ${lookupMarkup('hcAsset','ASSET','Vehicle / equipment')}</label>
+      <label id="hcSupplierBox">Supplier <input id="hcSupplier" maxlength="120"></label>
+      <label>Reference <input id="hcReference" maxlength="120"></label>
+      <label>Correction reason (required) <textarea id="hcReason" rows="2" maxlength="500" placeholder="Explain which value was wrong"></textarea></label>
+    </div>
+    <div class="simple-actions"><button type="button" class="btn primary" id="hcSave" onclick="saveKocpHsdCorrection('EDIT')">Save Correction</button>
+    <button type="button" class="btn outline" id="hcVoid" onclick="saveKocpHsdCorrection('VOID')">Void Wrong Entry</button>
+    <span class="simple-note">No permanent deletion. The original and corrected values remain in the audit log.</span></div>
+  </section>`;
+}
+async function openKocpHsdCorrection(id,fallbackDate=''){
+  let r=kocpRecentHsdRows.find(x=>x.transactionId===id);
+  const panel=$('kocpHsdCorrection');
+  if(!r&&fallbackDate){
+    try{
+      const records=await api('/api/sites/KOCP/records/hsd?limit=500&operating_date='+encodeURIComponent(fallbackDate));
+      r=records.find(x=>x.transactionId===id);
+      if(r)kocpRecentHsdRows.push(r);
+    }catch(e){return toast(e.message,'bad')}
+  }
+  if(!kocpHsdAdmin()||!r||!panel||r.status!=='POSTED')return toast('Refresh the fuel register.','bad');
+  panel.dataset.id=r.transactionId;panel.dataset.version=String(r.version||1);panel.dataset.type=r.transactionType;
+  $('hcInfo').textContent=r.transactionType+' · '+r.transactionId+' · Entered by '+(r.enteredBy||'—');
+  $('hcDate').value=r.operatingDate;
+  $('hcShift').value=r.shift||simpleShift();
+  $('hcLitres').value=r.litres||'0';
+  fillKocpEditLookup('hcAsset',r.assetId);
+  $('hcSupplier').value=r.supplier||'';$('hcReference').value=r.referenceNo||'';
+  $('hcReason').value='';
+  $('hcAssetBox').hidden=r.transactionType!=='ISSUE';
+  $('hcSupplierBox').hidden=r.transactionType!=='RECEIPT';
+  $('hcShift').disabled=r.transactionType==='OPENING';
+  panel.hidden=false;
+  bindLookups(panel);
+  panel.scrollIntoView({behavior:'smooth',block:'center'});
+}
+function closeKocpHsdCorrection(){
+  if($('kocpHsdCorrection'))$('kocpHsdCorrection').hidden=true;
+}
+async function saveKocpHsdCorrection(action){
+  const panel=$('kocpHsdCorrection'),id=panel?.dataset.id,why=$('hcReason')?.value.trim();
+  if(!id||!why||why.length<5)return toast('Enter a reason of at least 5 characters.','bad');
+  const payload={action,expectedVersion:Number(panel.dataset.version),reason:why};
+  if(action==='EDIT'){
+    payload.operatingDate=$('hcDate').value;
+    payload.shift=panel.dataset.type==='OPENING'?null:$('hcShift').value;
+    payload.litres=$('hcLitres').value;
+    payload.assetId=panel.dataset.type==='ISSUE'?$('hcAsset').value:null;
+    payload.supplier=panel.dataset.type==='RECEIPT'?$('hcSupplier').value.trim():null;
+    payload.referenceNo=$('hcReference').value.trim();
+    if(!payload.operatingDate||payload.litres===''||Number(payload.litres)<0)return toast('Check date and litres.','bad');
+    if(panel.dataset.type==='ISSUE'&&!payload.assetId)return toast('Select the correct vehicle.','bad');
+    if(panel.dataset.type==='RECEIPT'&&!payload.supplier)return toast('Supplier required.','bad');
+  }
+  if(action==='VOID'&&!confirm('Void this wrong HSD record? It will be excluded from stock and all reports. Audit history will remain.'))return;
+  for(const key of ['hcSave','hcVoid'])$(key).disabled=true;
+  try{
+    const res=await api('/api/sites/KOCP/hsd/'+encodeURIComponent(id)+'/correct',{
+      method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)
+    });
+    toast(action==='VOID'?'Fuel entry voided and audited':'Fuel record corrected and audited');
+    await render();
+    if(!res.stockVerified)toast('Fuel stock still unverified. Reconcile opening stock and receipts.','bad');
+  }catch(e){toast(e.message,'bad')}
+  finally{for(const key of ['hcSave','hcVoid'])if($(key))$(key).disabled=false}
+}
+
+let kocpRecentHsdRows=[];
+let kocpHsdHistoryDate='';
+function kocpHsdHistoryControls(){
+  if(!kocpHsdAdmin())return '';
+  return `<div class="hsd-history-tools"><label>Find records by date <input type="date" id="hsdHistoryDate" value="${esc(kocpHsdHistoryDate)}"></label>
+     <button class="btn outline" onclick="reloadKocpHsdHistory()">Find Entries</button>
+     <button class="btn outline" onclick="clearKocpHsdHistory()">Latest Records</button></div>`;
+}
+function reloadKocpHsdHistory(){
+  kocpHsdHistoryDate=$('hsdHistoryDate')?.value||'';
+  render();
+}
+function clearKocpHsdHistory(){
+  kocpHsdHistoryDate='';
+  render();
+}
+const kocpHsdAdmin=()=>siteId==='KOCP'&&Boolean(state.bootstrap?.user?.isManagement);
+function kocpHsdCanIssue(fuel){return siteId!=='KOCP'||(fuel&&fuel.stockBalance!==null&&fuel.stockBalance!==undefined&&Number(fuel.stockBalance)>0)}
 async function renderSimpleHsd(){
   const today=state.ctx.operatingDate,from=String(today).slice(0,8)+'01';
   const [data,fuel]=await Promise.all([
-    api(`/api/sites/${siteId}/records/hsd?limit=60`).catch(()=>[]),
+    api(`/api/sites/${siteId}/records/hsd?limit=${siteId==='KOCP'&&kocpHsdHistoryDate?500:60}${siteId==='KOCP'&&kocpHsdHistoryDate?'&operating_date='+encodeURIComponent(kocpHsdHistoryDate):''}`).catch(()=>[]),
     api(`/api/site-ops/${siteId}/fuel/summary?from_date=${from}&to_date=${today}`).catch(()=>null)
   ]);
+  if(siteId==='KOCP')kocpRecentHsdRows=data;
   const rows=data.filter(r=>activeHsdEntryType==='LEGACY'||r.transactionType===(activeHsdEntryType==='RECOVERY'?'RECEIPT':activeHsdEntryType))
-    .map(r=>`<tr><td>${esc(r.operatingDate)}</td><td>${esc(r.shift||'—')}</td><td>${esc(r.transactionType)}</td><td>${esc(r.assetId||r.supplier||'—')}</td><td>${fmt(r.litres,2)}</td><td>${esc(r.referenceNo||'—')}</td><td>${esc(r.status)}</td></tr>`);
+    .map(r=>`<tr><td>${esc(r.operatingDate)}</td><td>${esc(r.shift||'—')}</td><td>${esc(r.transactionType)}</td><td>${esc(r.assetId||r.supplier||'—')}</td><td>${fmt(r.litres,2)}</td><td>${esc(r.referenceNo||'—')}</td><td>${esc(r.status)}</td>${kocpHsdAdmin()?`<td>${r.status==='POSTED'?'<button type="button" class="btn outline" onclick="openKocpHsdCorrection(\''+esc(r.transactionId)+'\')">Edit / Void</button>':'Voided'}</td>`:''}</tr>`);
+  const hsdHead=['Date','Shift','Type','Equipment / Supplier','Litres','Reference','Status',...(kocpHsdAdmin()?['Admin Action']:[])];
   const legacyExists=!!localStorage.getItem(draftKey('HSD'));
   const tab=(type,label)=>`<button type="button" role="tab" aria-selected="${activeHsdEntryType===type}" class="hsd-mode-tab ${activeHsdEntryType===type?'active':''}" onclick="setSimpleHsdMode('${type}')">${label}</button>`;
   const modeLabel=activeHsdEntryType==='RECEIPT'?'Receipt':activeHsdEntryType==='RECOVERY'?'Previous Receipt Batch':activeHsdEntryType==='OPENING'?'Opening Balance':activeHsdEntryType==='LEGACY'?'Previous Mixed Draft':'Issue';
@@ -1031,7 +1127,7 @@ async function renderSimpleHsd(){
     const existing=fuel?.openingBalance;
     const note=fuel?.stockNote||'Enter the verified initial fuel stock only once.';
     const content=existing
-      ? `<div class="hsd-opening-locked"><b>Opening balance recorded</b><p><strong>${dashNum(existing.litres,3)} L</strong> · ${esc(existing.date)} · ${esc(existing.reference||'No reference')}</p><small>One opening per site. Use Receipts and Issues for later movements; do not enter another opening.</small></div>`
+      ? `<div class="hsd-opening-locked"><b>Opening balance recorded</b><p><strong>${dashNum(existing.litres,3)} L</strong> · ${esc(existing.date)} · ${esc(existing.reference||'No reference')}</p><small>One opening per site. Use Receipts and Issues for later movements; do not enter another opening.</small>${kocpHsdAdmin()?`<button type="button" class="btn outline" onclick="openKocpHsdCorrection('${esc(existing.transactionId)}','${esc(existing.date)}')">Admin · Edit / Void Opening</button>`:''} </div>`
       : `<div id="hsdOpeningForm" class="hsd-opening-form">
           <div class="field"><span>Opening as of date *</span><input type="date" id="hsdOpenDate" value="${esc(today)}"></div>
           <div class="field"><span>Verified diesel in stock (litres) *</span><input id="hsdOpenLitres" type="number" min="0" step="0.001" inputmode="decimal" placeholder="Enter measured litres"></div>
@@ -1042,7 +1138,7 @@ async function renderSimpleHsd(){
     return simplePageHead('KOCP Fuel / HSD','One-time starting diesel stock and day-to-day fuel register.')+
       `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${tab('OPENING','Opening Balance')}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
       hsdBalanceStrip(fuel)+
-      `<section class="hsd-opening-panel"><h3>Initial Fuel Opening Balance</h3><p class="field-help">Record the diesel physically available at KOCP at the start of operations. Later stock = opening + posted receipts − posted issues.</p>${content}<p class="field-help">${esc(note)}</p></section>`;
+      `<section class="hsd-opening-panel"><h3>Initial Fuel Opening Balance</h3><p class="field-help">Opening stock must be based on the physical stock sheet at the START of the opening date. Existing historical issues must reconcile without going negative. Do not invent litres to make the ledger balance.</p>${content}<p class="field-help">${esc(note)}</p></section>`+kocpHsdCorrectionPanel();
   }
 
   if(siteId==='KOCP'&&activeHsdEntryType==='RECEIPT'){
@@ -1065,11 +1161,12 @@ async function renderSimpleHsd(){
         </div>
         <div id="rcSaveStatus" class="hsd-entry-feedback" aria-live="polite"></div>
       </section>`+
-      panel('Recent Fuel Receipts',recentTable(['Date','Shift','Type','Supplier','Litres','Reference','Status'],rows.slice(0,15)),`${rows.length} recent records`);
+      panel('Recent Fuel Receipts',kocpHsdHistoryControls()+recentTable(hsdHead,rows.slice(0,100)),`${rows.length} recent records`)+kocpHsdCorrectionPanel();
   }
   return simplePageHead(`${siteId} Fuel / HSD`,'Separate diesel issue and receipt registers; batch entry with saved drafts.')+
   `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
   (siteId==='KOCP'?hsdBalanceStrip(fuel):fuelKpiCards(fuel))+
+  (siteId==='KOCP'&&!kocpHsdCanIssue(fuel)?'<div class="hsd-block-warning"><b>Fuel issues blocked: no verified available stock.</b> Enter an actual opening balance or approved fuel receipt, and reconcile previously posted issues. No new issue can be saved until the ledger is valid.</div>':'')+
   `<div id="simpleHsdForm" class="simple-form batch-entry-form">
     <div class="simple-top compact-entry-controls">
       <div class="field"><span>Date *</span><input id="shDate" type="date" data-no-draft value="${state.ctx.operatingDate}"></div>
@@ -1084,11 +1181,11 @@ async function renderSimpleHsd(){
       <thead><tr><th>#</th><th>Shift</th><th>Type</th><th>${activeHsdEntryType==='RECEIPT'?'Supplier':'Equipment / Supplier'}</th><th>Litres</th><th>Reference</th><th>Status</th></tr></thead>
       <tbody id="simpleHsdRows">${hsdGridRows(10)}</tbody>
     </table></div>
-    <div class="simple-actions"><button type="button" id="shSave" class="btn primary" onclick="saveSimpleHsd()">Save ${esc(modeLabel)} Rows</button><button type="button" class="btn outline" onclick="clearSimpleHsdDraft()">Clear This Draft</button><span class="draft-state">Draft autosaves on this PC</span></div>
+    <div class="simple-actions"><button type="button" id="shSave" class="btn primary" onclick="saveSimpleHsd()" ${siteId==='KOCP'&&activeHsdEntryType==='ISSUE'&&!kocpHsdCanIssue(fuel)?'disabled title="Opening stock must be verified before issuing fuel"':''}>Save ${esc(modeLabel)} Rows</button><button type="button" class="btn outline" onclick="clearSimpleHsdDraft()">Clear This Draft</button><span class="draft-state">Draft autosaves on this PC</span></div>
     <div class="simple-note">Live balance refreshes from posted Neon transactions after every successful issue; unfinished rows are retained.</div>
   </div>`+
-  panel('Recent '+modeLabel+' records',recentTable(['Date','Shift','Type','Equipment / Supplier','Litres','Reference','Status'],rows),`${rows.length} recent records`)+
-  panel('Top HSD-consuming equipment',fuelAssetBreakdown(fuel),'Selected month');
+  panel('Recent '+modeLabel+' records',kocpHsdHistoryControls()+recentTable(hsdHead,rows),`${rows.length} recent records`)+
+  panel('Top HSD-consuming equipment',fuelAssetBreakdown(fuel),'Selected month')+(siteId==='KOCP'?kocpHsdCorrectionPanel():'');
 }
 async function saveHsdOpening(){
   const btn=$('hsdOpenSave'),date=$('hsdOpenDate')?.value;
@@ -1195,6 +1292,20 @@ function rebuildSimpleHsdRows(){
   refreshEntryRowCounts();
 }
 async function saveSimpleHsd(){
+  const hasIssueRows=[...document.querySelectorAll('.simple-hsd-row')].some(row=>{
+    const i=row.dataset.i;
+    return row.dataset.saved!=='1' && $('shType'+i)?.value==='ISSUE' &&
+      Boolean($('shAsset'+i)?.value||$('shLitres'+i)?.value||$('shRef'+i)?.value);
+  });
+  if(siteId==='KOCP'&&hasIssueRows){
+    try{
+      const latest=await api('/api/site-ops/KOCP/fuel/balance');
+      if(latest.stockBalance===null||latest.stockBalance===undefined||Number(latest.stockBalance)<=0) {
+        toast(latest.stockNote||'Verified stock is required before issuing fuel.','bad');
+        return;
+      }
+    }catch(e){toast(e.message||'Stock verification unavailable','bad');return}
+  }
   const btn=$('shSave'),rows=[...document.querySelectorAll('.simple-hsd-row')];
   let used=0,done=0;btn.disabled=true;
   try{
@@ -1331,7 +1442,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});

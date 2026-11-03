@@ -127,6 +127,6 @@ def test_compact_receipt_layout_and_issue_post_refresh():
     issues=js[js.index("async function saveSimpleHsd("):js.index("function clearSimpleHsdDraft(")]
     assert "await refreshHsdBalance();" in issues
     assert "sourceRecordUid:uid.value" in js
-    assert "simple_field_v1.js?v=kocp-production-corrections-r9" in (ROOT/"app/static/site.html").read_text("utf-8")
+    assert "simple_field_v1.js?v=kocp-hsd-stock-r10" in (ROOT/"app/static/site.html").read_text("utf-8")
     p=subprocess.run(["node","--check",str(JS)],capture_output=True,text=True,timeout=20)
     assert p.returncode==0,p.stderr
