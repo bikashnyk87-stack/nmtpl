@@ -201,7 +201,8 @@ def reconcile_known_permits(db, *, actor: str = "DESPATCH_AUTOMATIC_PERMIT_MASTE
 
 
 def apply_confirmed_category(db, *, actor: str, report_date: date, permit_no: str,
-                             category_index: int, document_id: str, expected_trips: int):
+                             category_index: int, document_id: str, expected_trips: int,
+                             apply_to_related_dates: bool = True):
     """One verified AMNS classification for one permit/day; no weight edits."""
     from app.routers.tiom_despatch import (
         DespatchTrip, DespatchDocument, DespatchAudit,
@@ -224,7 +225,7 @@ def apply_confirmed_category(db, *, actor: str, report_date: date, permit_no: st
     # An explicitly verified source image proves permit identity, not the
     # quantities on subsequent dates. Reuse its classification for the exact
     # same permit only, while preserving each E-Pass date, MT and status.
-    first_day = max(OPEN_DAY, doc.report_date)
+    first_day = max(OPEN_DAY, doc.report_date) if apply_to_related_dates else report_date
     rows = list(db.scalars(select(DespatchTrip).where(
         DespatchTrip.report_date >= first_day,
         DespatchTrip.report_date <= report_date,
@@ -262,7 +263,7 @@ def apply_confirmed_category(db, *, actor: str, report_date: date, permit_no: st
     if changed:
         db.add(DespatchAudit(actor=actor, action="CONFIRM_AMNS_CATEGORY",
                             entity_key=permit_no,
-                            reason="Operator-verified same-permit source category against historical AMNS image " + doc.id,
+                            reason="Operator-verified AMNS source category for exact permit " + doc.id,
                             before_json=None,
                             after_json=json.dumps({"reportDate": report_date.isoformat(),
                                                    "imageDate": doc.report_date.isoformat(),
@@ -270,6 +271,7 @@ def apply_confirmed_category(db, *, actor: str, report_date: date, permit_no: st
                                                    "categoryIndex": category_index,
                                                    "fields": choice,
                                                    "selectedDayTrips": len(selected),
+                                                   "applyToRelatedDates": apply_to_related_dates,
                                                    "relatedTripsChecked": len(rows),
                                                    "changedTripCount": len(changed_epasses),
                                                    "changedDates": sorted(changed_dates),
