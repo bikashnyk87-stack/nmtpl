@@ -103,6 +103,41 @@ def test_all_five_client_templates_keep_contracts_and_uniform_headings():
             wb.close()
 
 
+def test_captive_report_extends_verifiable_non_captive_grade_and_keeps_totals():
+    day=date(2026,11,3)
+    records=[
+        trip("L102604962/8",day,"DNA MINERALS PVT LTD",
+             "Bongobari(Purulia)","5-18mm(62-65)"),
+        trip("L102604962/9",day,"DNA MINERALS PVT LTD",
+             "Bongobari(Purulia)","5-18mm(62-65)"),
+        trip("L102604962/10",day,"DNA MINERALS PVT LTD",
+             "Bongobari(Purulia)","5-18mm(62-65)"),
+    ]
+    records[0].permit_qty=Decimal("0")
+    records[0].dispatch_time=""
+    output,summary=build_client_workbook("despatch",records,day,day)
+    assert summary["trips"]==3
+    wb=load_workbook(output)
+    try:
+        ws=wb["DESTINATION WISE"]
+        assert ws["U3"].value=="18-40mm(62-65)"  # original column retained
+        assert ws["V3"].value=="5-18mm(62-65)"  # new approved grade
+        assert ws["W2"].value=="CUMMULATIVE"
+        assert ws["V6"].value==90.375
+        assert ws["W6"].value=="=SUM(B6:V6)+W5"
+        assert ws["W34"].value=="=W33"
+    finally:
+        wb.close()
+    trip_output,_=build_client_workbook("trip",records,day,day)
+    trip_wb=load_workbook(trip_output)
+    try:
+        ws=trip_wb["03.11.26"]
+        assert ws["C3"].value is None
+        assert ws["P3"].value is None
+    finally:
+        trip_wb.close()
+
+
 def test_incomplete_new_party_cannot_be_guessed_from_transporter():
     rec=trip("L102699999/2",date(2026,11,2),"","", "",
              "BRAND NEW TRANSPORT")
