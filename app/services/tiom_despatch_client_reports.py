@@ -40,7 +40,7 @@ HEADERS = [
     "Sl.No.", "Permit No.", "Permit Qty.", "Buyer Name", "E-Pass No",
     "Vehicle RegNo", "Transporter Name", "Destination", "Material/Grade",
     "Stack No.", "Consignee Name", "Tare Wt.", "Gross Wt.", "Net Wt.",
-    "Date ", "Time",
+    "Date ", "WB Time",
 ]
 BLUE = "184768"
 MID = "36769A"
@@ -390,7 +390,7 @@ def _build_captive(wb,trips,as_of):
     columns; the original cumulative column moves only if needed.
     """
     from app.services.tiom_despatch_client_layout import reportable_category
-    allowed = {normalized(x): x for x in MATERIAL_COLUMNS}
+    allowed = {normalized(x): x for x in MATERIAL_COLUMNS + ["5-18mm(62-65)"]}
     original_captive = {normalized(x) for x in CAPTIVE_MATERIALS}
     original_non_captive = {normalized(x) for x in NON_CAPTIVE_MATERIALS}
     extra_captive, extra_non_captive = {}, {}
@@ -912,7 +912,7 @@ def build_client_workbook(report_type, all_records, from_date, to_date):
     if report_type in {"destination","transporter"} and unmapped:
         sample=", ".join(x.epass_no for x in unmapped[:5])
         raise ValueError(f"{len(unmapped)} E-Pass movements have unmapped buyer/destination/material buckets: {sample}. Correct aliases before client export.")
-    if report_type in {"material","despatch","transporter"} and material_unmapped:
+    if report_type in {"material","transporter"} and material_unmapped:
         sample=", ".join(x.epass_no for x in material_unmapped[:5])
         raise ValueError(f"{len(material_unmapped)} E-Pass movements have unknown material grade: {sample}. Verify source before client export.")
     wb=Workbook()
