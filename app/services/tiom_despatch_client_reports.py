@@ -40,7 +40,7 @@ HEADERS = [
     "Sl.No.", "Permit No.", "Permit Qty.", "Buyer Name", "E-Pass No",
     "Vehicle RegNo", "Transporter Name", "Destination", "Material/Grade",
     "Stack No.", "Consignee Name", "Tare Wt.", "Gross Wt.", "Net Wt.",
-    "Date ", "Time",
+    "Date ", "WB Time",
 ]
 BLUE = "184768"
 MID = "36769A"
