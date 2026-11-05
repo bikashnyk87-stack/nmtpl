@@ -1524,7 +1524,7 @@ def export_check(report_type: str, request: Request,
         _, missing = _keymap(rows, report_destination_buckets(rows))
         if missing:
             errors.append(f"{len(missing)} unmatched buyer/destination categories (e.g. {missing[0].epass_no})")
-    if report_type in {"material","despatch","transporter"}:
+    if report_type in {"material","transporter"}:
         _, missing = _material_counts(rows)
         if missing:
             errors.append(f"{len(missing)} unmatched material grades (e.g. {missing[0].epass_no})")
