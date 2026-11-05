@@ -69,6 +69,21 @@ def test_four_confirmed_mis_permits_cover_219_prior_day_epasses_without_reentry(
     assert {x["permitNo"] for x in issues} == {"L102604967", "L102604962"}
 
 
+def test_confirmed_mis_permit_quantity_fills_only_missing_report_values():
+    saved=verified("2026-11-02","L102605612","Self","Dabuna",
+                   "C.Fines(60-62)","60.65")
+    saved.permit_qty=Decimal("6066.840")
+    early=trip("2026-11-01","L102605612")
+    same_day=trip("2026-11-02","L102605612")
+    explicit=trip("2026-11-02","L102605612")
+    explicit.permit_qty=Decimal("6050.000")
+    projected=_report_verified_amns(FakeDB([saved]),[early,same_day,explicit])
+    assert projected[0].permit_qty==Decimal("6066.840")
+    assert projected[1].permit_qty==Decimal("6066.840")
+    assert projected[2].permit_qty==Decimal("6050.000")
+    assert not hasattr(early,"permit_qty")  # source unchanged
+
+
 def test_mismatched_consignee_refuses_inherited_category():
     confirmed = verified("2026-11-02", "L102605571", "Self", "Dabuna", "C.Fines(60-62)", "60.65")
     rows = [

@@ -6,6 +6,7 @@ Synthetic test values only; no confidential original MIS exports committed.
 from __future__ import annotations
 
 from io import BytesIO
+from decimal import Decimal
 from types import SimpleNamespace
 import sys
 
@@ -72,6 +73,7 @@ def test_provider_header_detection_for_both_independent_source_layouts():
     assert datewise[0]["report_date"]==transporter[0]["report_date"]=="2026-10-27"
     assert datewise[0]["net_mt"]=="31.91"
     assert datewise[0]["tare_mt"]=="15.57"
+    assert datewise[0]["dispatch_time"]=="11:15:31:910AM"
     assert transporter[0]["transporter"]=="RIDHICON LOGISTICS PRIVATE LIMITED"
     assert normalize_header("  E-Pass No. ")=="epassno"
 
@@ -90,6 +92,35 @@ def test_import_both_sources_enriches_without_duplicate_trips():
         assert sum(float(x.net_mt) for x in rows)==63.83
         assert dispatch._import_data(db,sample_datewise(),"Date WIse 27-10-2026.xlsx","TEST")["skippedExisting"]==2
         assert dispatch._import_data(db,sample_transporter(),"Transporter WIse 27-10-2026.xlsx","TEST")["enriched"]==0
+
+
+def test_reimport_of_fuller_source_recovers_missing_qty_and_wb_time():
+    from openpyxl import load_workbook
+    engine=create_engine("sqlite://",poolclass=StaticPool,
+                         connect_args={"check_same_thread":False})
+    Base.metadata.create_all(engine,tables=[
+        dispatch.DespatchTrip.__table__,dispatch.DespatchAudit.__table__
+    ])
+    first=load_workbook(BytesIO(sample_datewise()))
+    first.active["P7"]="Oct 27 2026"
+    first.active["P8"]="Oct 27 2026"
+    initial=BytesIO();first.save(initial);first.close()
+    more=load_workbook(BytesIO(sample_datewise()))
+    more.active["Q6"]="Permit Qty."
+    more.active["Q7"]=Decimal("4000.000")
+    more.active["Q8"]=Decimal("4000.000")
+    fuller=BytesIO();more.save(fuller);more.close()
+    with Session(engine) as db:
+        result=dispatch._import_data(db,initial.getvalue(),"datewise.xlsx","TEST")
+        assert result["inserted"]==2
+        assert all(not x.dispatch_time and not x.permit_qty
+                   for x in db.scalars(select(dispatch.DespatchTrip)))
+        enriched=dispatch._import_data(db,fuller.getvalue(),"fuller.xlsx","TEST")
+        assert enriched["inserted"]==0
+        assert enriched["enriched"]==2
+        rows=list(db.scalars(select(dispatch.DespatchTrip)))
+        assert all(x.dispatch_time=="11:15:31:910AM" for x in rows)
+        assert all(x.permit_qty==Decimal("4000") for x in rows)
 
 
 def test_transport_manifest_does_not_create_unverified_epass():

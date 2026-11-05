@@ -257,6 +257,19 @@ def _import_data(db, data, filename, actor):
                     (old.vehicle_no and entry["vehicle_no"] and
                      old.vehicle_no.strip().upper() != entry["vehicle_no"].strip().upper())):
                 mismatches.append(key + ": existing E-Pass weight/date/vehicle differs")
+                continue
+            # A later full Trip Summary may provide real permit quantity and
+            # WB time missing from an earlier Date Wise import. Enrich only
+            # empty fields, after E-Pass date/vehicle/net weight reconciliation.
+            updated = False
+            if not old.permit_qty and entry["permit_qty"] > 0:
+                old.permit_qty = entry["permit_qty"]
+                updated = True
+            if not str(old.dispatch_time or "").strip() and entry["dispatch_time"]:
+                old.dispatch_time = entry["dispatch_time"]
+                updated = True
+            if updated:
+                enriched += 1
             continue
         trip = DespatchTrip(**entry)
         existing[key] = trip
@@ -722,11 +735,16 @@ def _amns_material(material: str, grade: str, report_date: date) -> str:
 class _ReportTripView:
     """Read-only report field overlay; original Gmail E-Pass rows are never changed."""
     def __init__(self, source, buyer, destination, material_grade, *,
-                 mis_source_date=None):
+                 mis_source_date=None, permit_qty=None):
         self._source = source
         self.buyer = buyer
         self.destination = destination
         self.material_grade = material_grade
+        # MIS permit quantity is used only when confirmed and the E-Pass has
+        # no positive quantity of its own. Never replace actual source values.
+        if (permit_qty is not None and Decimal(str(permit_qty)) > 0
+                and not (getattr(source, "permit_qty", None) or 0)):
+            self.permit_qty = permit_qty
         self.mis_source_date = mis_source_date
         self.inherited_from_mis = bool(
             mis_source_date and mis_source_date != source.report_date
@@ -819,6 +837,7 @@ def _report_verified_amns(db: Session, rows, *, strict=True):
             projected = _ReportTripView(
                 row, _amns_buyer(saved.buyer), saved.destination.strip(),
                 classified, mis_source_date=saved.report_date,
+                permit_qty=saved.permit_qty,
             )
             if report_destination_bucket_index(
                 projected, report_destination_buckets([projected])
@@ -860,6 +879,7 @@ def _report_verified_amns(db: Session, rows, *, strict=True):
         result.append(_ReportTripView(
             row, buyer, destination, grade,
             mis_source_date=reference.report_date,
+            permit_qty=reference.permit_qty,
         ))
     return result
 
