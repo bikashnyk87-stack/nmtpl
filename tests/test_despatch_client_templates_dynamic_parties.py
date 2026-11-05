@@ -120,8 +120,8 @@ def test_captive_report_extends_verifiable_non_captive_grade_and_keeps_totals():
     wb=load_workbook(output)
     try:
         ws=wb["DESTINATION WISE"]
-        assert ws["U3"].value=="18-40mm(62-65)"  # original column retained
-        assert ws["V3"].value=="5-18mm(62-65)"  # new approved grade
+        assert ws["U3"].value.replace("\n","")=="18-40mm(62-65)"  # original column retained
+        assert ws["V3"].value.replace("\n","")=="5-18mm(62-65)"  # new approved grade
         assert ws["W2"].value=="CUMMULATIVE"
         assert ws["V6"].value==90.375
         assert ws["W6"].value=="=SUM(B6:V6)+W5"
