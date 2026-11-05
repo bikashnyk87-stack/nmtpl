@@ -168,7 +168,7 @@ def reportable_category(trip):
     return (all(normalized(x) and normalized(x) not in
                 {"unknown", "na", "unverified", "tbd"}
                 and not normalized(x).startswith("unverified") for x in labels)
-            and classified_material(trip) in {normalized(x) for x in MATERIAL_COLUMNS})
+            and classified_material(trip) in ({normalized(x) for x in MATERIAL_COLUMNS} | {normalized("5-18mm(62-65)")}))
 
 
 def report_destination_buckets(trips, report_type=None):
