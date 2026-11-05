@@ -194,7 +194,7 @@ def _finish_client_format(wb, report_type):
             for row in range(3,ws.max_row+1):
                 ws.row_dimensions[row].height=max(ws.row_dimensions[row].height,36)
         elif report_type in {"material","despatch","destination"}:
-            last = {"material":15,"despatch":22}.get(report_type,last)
+            last = {"material":15}.get(report_type,last)
             end_header={"material":2,"despatch":3,"destination":5}[report_type]
             table(ws,2,ws.max_row,1,last,headers=range(2,end_header+1),totals=(ws.max_row,))
             title(ws,1,1,last)
@@ -283,11 +283,11 @@ def _trip_row(x, index):
     dtext = (x.report_date.strftime("%b %e %Y") if hasattr(x.report_date,"strftime")
              else str(x.report_date))
     return (
-        index, x.permit_no, float(x.permit_qty or 0), x.buyer,
+        index, x.permit_no, float(x.permit_qty) if x.permit_qty and x.permit_qty > 0 else None, x.buyer,
         x.epass_no, x.vehicle_no, x.transporter, x.destination,
         x.material_grade, x.stack_no, x.consignee,
         float(x.tare_mt), float(x.gross_mt), float(x.net_mt), dtext.strip(),
-        x.dispatch_time,
+        x.dispatch_time or None,
     )
 
 
@@ -383,51 +383,90 @@ def _material_type_head(name):
 
 
 def _build_captive(wb,trips,as_of):
+    """Preserve template columns while extending verified material categories.
+
+    Captive is derived solely from the approved buyer (Self), never guessed
+    from a vehicle, destination or weight. New grade bands retain their own
+    columns; the original cumulative column moves only if needed.
+    """
+    from app.services.tiom_despatch_client_layout import reportable_category
+    allowed = {normalized(x): x for x in MATERIAL_COLUMNS}
+    original_captive = {normalized(x) for x in CAPTIVE_MATERIALS}
+    original_non_captive = {normalized(x) for x in NON_CAPTIVE_MATERIALS}
+    extra_captive, extra_non_captive = {}, {}
+    for t in trips:
+        if not reportable_category(t):
+            continue
+        key = classified_material(t)
+        if key not in allowed:
+            continue
+        if is_captive(t):
+            if key not in original_captive:
+                extra_captive[key] = allowed[key]
+        elif key not in original_non_captive:
+            extra_non_captive[key] = allowed[key]
+    captive_materials = CAPTIVE_MATERIALS + [extra_captive[k] for k in sorted(extra_captive)]
+    non_captive_materials = NON_CAPTIVE_MATERIALS + [
+        extra_non_captive[k] for k in sorted(extra_non_captive)
+    ]
+    non_start = 2 + len(captive_materials)
+    total_col = non_start + len(non_captive_materials)
+    last_material_col = total_col - 1
+    total_letter = col(total_col)
+    last_material_letter = col(last_material_col)
+
     ws=wb.create_sheet("DESTINATION WISE")
-    _fmt(ws,22);ws.freeze_panes="B4"
+    _fmt(ws,total_col);ws.freeze_panes="B4"
     _title(ws,1,"DISPATCH REPORT (CAPTIVE/NON-CAPTIVE) FOR THE MONTH OF "+
-           as_of.strftime("%B-%Y").upper(),22)
+           as_of.strftime("%B-%Y").upper(),total_col)
     ws.merge_cells("A2:A3")
     _style(ws,2,1,"DATE",header=True)
-    ws.merge_cells("B2:H2")
+    ws.merge_cells(start_row=2,start_column=2,end_row=2,end_column=non_start-1)
     _style(ws,2,2,"DABUNA PLANT",header=True)
-    ws.merge_cells("I2:U2")
-    _style(ws,2,9,"NON CAPTIVE",header=True)
-    ws.merge_cells("V2:V3")
-    _style(ws,2,22,"CUMMULATIVE",header=True)
-    for i,name in enumerate(CAPTIVE_MATERIALS+NON_CAPTIVE_MATERIALS,2):
+    ws.merge_cells(start_row=2,start_column=non_start,end_row=2,end_column=last_material_col)
+    _style(ws,2,non_start,"NON CAPTIVE",header=True)
+    ws.merge_cells(start_row=2,start_column=total_col,end_row=3,end_column=total_col)
+    _style(ws,2,total_col,"CUMMULATIVE",header=True)
+    for i,name in enumerate(captive_materials + non_captive_materials,2):
         _style(ws,3,i,_material_type_head(name),header=True)
     ws.row_dimensions[2].height=28
     ws.row_dimensions[3].height=44
     ws.column_dimensions["A"].width=16
-    for j in range(2,23):
+    for j in range(2,total_col+1):
         ws.column_dimensions[col(j)].width=17
+
     sums=defaultdict(Decimal)
-    miss=[]
-    captive={normalized(x):i for i,x in enumerate(CAPTIVE_MATERIALS,2)}
-    noncaptive={normalized(x):i for i,x in enumerate(NON_CAPTIVE_MATERIALS,9)}
+    missing=[]
+    captive_index={normalized(x):i for i,x in enumerate(captive_materials,2)}
+    non_index={normalized(x):i for i,x in enumerate(non_captive_materials,non_start)}
     for t in trips:
+        if not reportable_category(t):
+            missing.append(t)
+            continue
         mat=classified_material(t)
-        idx=(captive if is_captive(t) else noncaptive).get(mat)
+        idx=(captive_index if is_captive(t) else non_index).get(mat)
         if idx is None:
-            miss.append(t)
+            missing.append(t)
             continue
         sums[(t.report_date,idx)]+=Decimal(str(t.net_mt))
     days=monthrange(as_of.year,as_of.month)[1]
     for i in range(1,days+1):
         d=date(as_of.year,as_of.month,i);r=i+3
         _style(ws,r,1,datetime(d.year,d.month,d.day),fmt=DATE)
-        for j in range(2,22):
+        for j in range(2,total_col):
             _style(ws,r,j,float(sums[(d,j)]),fmt=NUM)
-        _style(ws,r,22,f"=SUM(B{r}:U{r})"+(f"+V{r-1}" if i>1 else ""),fmt=NUM)
+        _style(ws,r,total_col,
+               f"=SUM(B{r}:{last_material_letter}{r})"+
+               (f"+{total_letter}{r-1}" if i>1 else ""),fmt=NUM)
     last=days+4
     _style(ws,last,1,"TOTAL",total=True)
-    for j in range(2,23):
+    for j in range(2,total_col+1):
         letter=col(j)
-        formula=(f"=V{last-1}" if j==22 else f"=SUM({letter}4:{letter}{last-1})")
+        formula=(f"={total_letter}{last-1}" if j==total_col
+                 else f"=SUM({letter}4:{letter}{last-1})")
         _style(ws,last,j,formula,total=True,fmt=NUM)
-    ws.print_area=f"A1:V{last}"
-    return miss
+    ws.print_area=f"A1:{total_letter}{last}"
+    return missing
 
 
 def _display_customer(buyer):
