@@ -137,6 +137,20 @@ def _text(value: Any) -> str:
     return unescape(str(value)).strip()
 
 
+def _embedded_weighment_time(raw_date: str) -> str:
+    """Extract only a clock explicitly present in a source date/time cell.
+
+    Date Wise 'Date' columns may contain 'Nov 03 2026 11:15:31:910AM'.
+    Keep the real WB clock; a date-only cell must not yield an invented time.
+    """
+    value = _text(raw_date)
+    match = re.search(
+        r"(?<!\\d)(\\d{1,2}:[0-5]\\d:[0-5]\\d(?::\\d{1,3})?\\s*(?:AM|PM)?)(?![A-Za-z0-9])",
+        value, re.IGNORECASE,
+    )
+    return match.group(1).strip() if match else ""
+
+
 def parse_despatch_sources(data: bytes, filename: str) -> list[dict]:
     if len(data) > 12_000_000:
         raise ValueError("File exceeds 12 MB")
@@ -171,7 +185,8 @@ def parse_despatch_sources(data: bytes, filename: str) -> list[dict]:
                 continue
             fields = {field: _text(row[col]) if col < len(row) else ""
                       for field, col in mapping.items()}
-            day = _day(fields.get("report_date")) or sheet_day
+            raw_source_date = fields.get("report_date", "")
+            day = _day(raw_source_date) or sheet_day
             if not day:
                 raise ValueError("Missing/invalid report date for E-Pass " + epass)
             if fields.get("report_date") and not _day(fields["report_date"]):
@@ -182,7 +197,7 @@ def parse_despatch_sources(data: bytes, filename: str) -> list[dict]:
             if role == "enrichment" and not fields.get("transporter"):
                 raise ValueError("Transporter missing for E-Pass " + epass)
             if role == "detailed" and not fields.get("dispatch_time"):
-                fields["dispatch_time"] = fields.get("dispatch_date", "")
+                fields["dispatch_time"] = _embedded_weighment_time(raw_source_date)
             fields["_role"] = role
             fields["source"] = (filename + " / " + sheet)[:200]
             extracted.append(fields)
