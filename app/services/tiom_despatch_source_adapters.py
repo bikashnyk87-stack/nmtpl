@@ -145,7 +145,7 @@ def _embedded_weighment_time(raw_date: str) -> str:
     """
     value = _text(raw_date)
     match = re.search(
-        r"(?<!\\d)(\\d{1,2}:[0-5]\\d:[0-5]\\d(?::\\d{1,3})?\\s*(?:AM|PM)?)(?![A-Za-z0-9])",
+        r"(?<!\d)(\d{1,2}:[0-5]\d:[0-5]\d(?::\d{1,3})?\s*(?:AM|PM)?)(?![A-Za-z0-9])",
         value, re.IGNORECASE,
     )
     return match.group(1).strip() if match else ""
