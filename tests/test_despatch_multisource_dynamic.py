@@ -72,6 +72,7 @@ def test_provider_header_detection_for_both_independent_source_layouts():
     assert datewise[0]["report_date"]==transporter[0]["report_date"]=="2026-10-27"
     assert datewise[0]["net_mt"]=="31.91"
     assert datewise[0]["tare_mt"]=="15.57"
+    assert datewise[0]["dispatch_time"]=="11:15:31:910AM"
     assert transporter[0]["transporter"]=="RIDHICON LOGISTICS PRIVATE LIMITED"
     assert normalize_header("  E-Pass No. ")=="epassno"
 
