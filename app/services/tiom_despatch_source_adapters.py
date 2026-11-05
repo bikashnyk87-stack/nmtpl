@@ -25,7 +25,8 @@ COLUMN_ALIASES = {
     "epass_no": ("epassno", "epassnumber", "epass", "passno", "passnumber",
                  "pass", "passid", "gatepassno", "ewaypass"),
     "permit_no": ("permitno", "permitnumber", "permit", "permitid"),
-    "permit_qty": ("permitqty", "permitquantity", "permitmt", "permittonnage"),
+    "permit_qty": ("permitqty", "permitquantity", "permitmt", "permittonnage",
+                   "permittedqty", "permittedquantity", "permitquantitymt", "permitqtymt"),
     "buyer": ("buyer", "buyername", "purchaser", "purchasername"),
     "vehicle_no": ("vehicleregno", "vehicleregistrationno", "vehicleno",
                    "vehiclenumber", "vehicle", "truckno", "trucknumber", "regno"),
@@ -43,7 +44,8 @@ COLUMN_ALIASES = {
                "weightmt", "dispatchqty"),
     "report_date": ("date", "reportdate", "dispatchdate", "despatchdate",
                     "transportingdate", "dateofdispatch", "dateofdespatch"),
-    "dispatch_time": ("time", "dispatcheddate", "dispatchtime", "despatchtime"),
+    "dispatch_time": ("time", "dispatcheddate", "dispatchtime", "despatchtime",
+                      "wbtime", "weighbridgetime", "weighmenttime", "weighingtime"),
 }
 _ALIAS_TO_FIELD = {alias: field for field, aliases in COLUMN_ALIASES.items()
                    for alias in aliases}
