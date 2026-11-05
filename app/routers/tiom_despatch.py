@@ -693,12 +693,13 @@ def _amns_material(material: str, grade: str, report_date: date) -> str:
     from app.services.tiom_despatch_client_layout import (
         MATERIAL_COLUMNS, normalized, material_normalized,
     )
+    approved_grades = MATERIAL_COLUMNS + ["5-18mm(62-65)"]
     cleaned = str(grade or "").strip().rstrip("%")
     # Historical confirmed rows predate the MIS numerical-grade field.
     # Their *explicit* approved reporting material code already contains
     # the grade band; accept it without inventing a numerical percentage.
     if not cleaned:
-        for candidate in MATERIAL_COLUMNS:
+        for candidate in approved_grades:
             if material_normalized(candidate, report_date) == material_normalized(material, report_date):
                 return candidate
         raise ValueError("Historical permit has no grade % and no approved material-grade code; MIS must verify it")
@@ -720,11 +721,11 @@ def _amns_material(material: str, grade: str, report_date: date) -> str:
             value = f"{family}({low}-{high})"
             if Decimal(low) <= percent < Decimal(high) and any(
                 material_normalized(value, report_date) == material_normalized(x, report_date)
-                for x in MATERIAL_COLUMNS
+                for x in approved_grades
             ):
                 return value
         raise ValueError("Material and grade do not match an approved reporting band")
-    for candidate in MATERIAL_COLUMNS:
+    for candidate in approved_grades:
         if material_normalized(candidate, report_date) == material_normalized(material, report_date):
             match = re.search(r"\((\d+)-(\d+)\)", candidate)
             if match and Decimal(match[1]) <= percent < Decimal(match[2]):
