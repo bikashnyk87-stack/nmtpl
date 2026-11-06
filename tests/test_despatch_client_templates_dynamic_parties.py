@@ -58,7 +58,7 @@ def test_all_five_client_templates_keep_contracts_and_uniform_headings():
                     "Sl.No.","Permit No.","Permit Qty.","Buyer Name",
                     "E-Pass No","Vehicle RegNo","Transporter Name",
                     "Destination","Material/Grade","Stack No.",
-                    "Consignee Name","Tare Wt.","Gross Wt.","Net Wt.","Date ","Time",
+                    "Consignee Name","Tare Wt.","Gross Wt.","Net Wt.","Date ","WB Time",
                 ]
                 assert sheet.row_dimensions[2].height>=30
                 assert sheet["A3"].value==1
