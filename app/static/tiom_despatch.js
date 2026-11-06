@@ -255,13 +255,21 @@ window.tiomDDPanel=async function(which){
           (p.editable?'<button class="btn primary small" onclick="tiomDDOpenPermitFix(\''+
             h(p.reportDate)+'\',\''+h(p.permitNo)+'\')">Open in MIS Permit Entry</button>':
             '<small>Protected historical permit</small>')+'</div>').join('')+
-        '<p class="dd-note">MIS Permit Entry is the single source for buyer, destination and material/grade. Existing E-Pass weights, dates and trip counts are preserved. Report downloads read the approved MIS values.</p></section>';
+        '<p class="dd-note">MIS Permit Entry is the single source for buyer, destination, material/grade and approved Permit Qty. Original E-Pass weights, dates and trip counts remain unchanged.</p>'+
+        (issues.tripFields?'<div class="dd-tools" style="padding-top:10px"><b>Trip Summary source fields · '+h(issues.tripFields.reportDate)+'</b>'+
+          '<span>Permit Qty: '+f(issues.tripFields.permitQty||0,0)+' / '+f(issues.tripFields.trips||0,0)+' trips</span>'+
+          '<span>WB Time: '+f(issues.tripFields.wbTime||0,0)+' / '+f(issues.tripFields.trips||0,0)+' trips</span></div>'+
+          ((issues.tripFields.permitQty||0)<(issues.tripFields.trips||0)?
+            '<p class="dd-note">Missing Permit Qty must come from the approved MIS permit record or a verified detailed source; it cannot be calculated from despatch MT. Update the actual permit in MIS Entry if its approved quantity is available.</p>':'')+
+          ((issues.tripFields.wbTime||0)<(issues.tripFields.trips||0)?
+            '<p class="dd-note">Missing WB Time must come from a detailed Date Wise / Trip Summary source with a real time. You can re-import a verified source through Gmail & Evidence; the importer fills missing values only after matching E-Pass, date, vehicle and net MT.</p>':''):'')+
+        '</section>';
       $('dd_body').innerHTML=summary+'<section class="dd-box"><b>Five Client-Format Reports</b>'+
        '<p>Client report headings expand automatically for new verified buyers, destinations and transporters. Daily and monthly cumulative totals include every added category. FTM totals exclude cancelled trips.</p>'+
        '<div class="dd-tools"><label>Export basis <select id="dd_reportbasis"><option value="daily">Daily submission (To date + MTD)</option><option value="month">Month-to-date workbook (all daily sheets)</option></select></label>'+
        '<span>Reporting date: '+h(v('dd_to'))+' · Client submission next day</span></div>'+
        [['trip','Trip Summary · Daily, Cumulative, Cancellation'],['transporter','Transporter-wise Dispatch · FTD / FTM'],['material','Material-wise Dispatch · Date & Total'],['destination','Destination-wise · Buyers, Trips, Quantity'],['despatch','Captive / Non-captive · Date & Cumulative']].map(x=>
-       '<div class="dd-report"><strong>'+x[1]+'</strong><button class="btn primary small" onclick="tiomDDExport(\''+x[0]+'\')">Export Client XLSX</button></div>').join('')+
+       '<div class="dd-report"><strong>'+x[1]+'</strong><a class="btn primary small" href="#" target="_blank" rel="noopener noreferrer" onclick="return tiomDDNativeLink(this,\''+x[0]+'\')">Download Client XLSX</a></div>').join('')+
        '<p class="dd-note">If a remaining source field needs verification, use Open in MIS Permit Entry above. Five Reports does not accept duplicate classifications.</p></section>';
     } else {
       const users=await api('senders');last.senders=users;
@@ -332,6 +340,27 @@ window.tiomDDOpenPermitFix=async(date,permit)=>{
   await window.tiomDDPanel('permits');
   $('dd_fix_material')?.focus();
   $('dd_repair_panel')?.scrollIntoView({block:'start',behavior:'smooth'});
+};
+// A real anchor click keeps the browser's user activation for Excel downloads.
+// The previous fetch-check -> a.click() sequence could silently be blocked by
+// Chrome even if the server returned HTTP 200.
+window.tiomDDNativeLink=(anchor,type)=>{
+  const to=v('dd_to');
+  if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(to)){
+    say('Choose a valid Despatch reporting date.',true);
+    return false;
+  }
+  if(type!=='trip'&&last.mappingIssues?.items?.length){
+    say('Some permits still need MIS classification. Open them in MIS Permit Entry above before downloading this report.',true);
+    return false;
+  }
+  const mode=v('dd_reportbasis')||'daily';
+  const from=mode==='daily'?to:to.slice(0,7)+'-01';
+  anchor.href='/api/tiom/despatch/export/'+encodeURIComponent(type)+'?'+new URLSearchParams({
+    from_date:from,to_date:to
+  });
+  say('Opening the '+type+' Excel download for '+to+' in your browser. If a source error occurs, the opened tab will show the reason.');
+  return true;
 };
 window.tiomDDExport=async type=>{
   const to=v('dd_to');
