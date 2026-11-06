@@ -818,7 +818,16 @@ def _report_verified_amns(db: Session, rows, *, strict=True):
         if len(source_identities) != 1:
             continue  # No verifiable or consistent consignee identity.
         latest = max(candidates, key=lambda x: x[0].report_date)
-        reusable[permit] = (*latest, next(iter(source_identities)))
+        # Permit Qty is an approved permit-level value, not individual trip MT.
+        # Share it across days only when all positive confirmed quantities
+        # agree; a differing amount may indicate a permit amendment.
+        positive_qty = {
+            Decimal(str(saved.permit_qty))
+            for saved, _, _, _ in candidates
+            if saved.permit_qty is not None and Decimal(str(saved.permit_qty)) > 0
+        }
+        verified_qty = next(iter(positive_qty)) if len(positive_qty) == 1 else None
+        reusable[permit] = (*latest, next(iter(source_identities)), verified_qty)
     result = []
     for row in rows:
         key = (row.report_date, row.permit_no.strip().upper())
@@ -835,10 +844,20 @@ def _report_verified_amns(db: Session, rows, *, strict=True):
                     ) from exc
                 result.append(row)
                 continue
+            source_qty = saved.permit_qty
+            reuse = reusable.get(key[1])
+            if (not source_qty and reuse
+                    and normalized(getattr(row, "consignee", "") or "") == reuse[4]
+                    and (normalized(_amns_buyer(saved.buyer)),
+                         normalized(saved.destination),
+                         material_normalized(classified, row.report_date)) ==
+                        (normalized(reuse[1]), normalized(reuse[2]),
+                         material_normalized(reuse[3], row.report_date))):
+                source_qty = reuse[5]
             projected = _ReportTripView(
                 row, _amns_buyer(saved.buyer), saved.destination.strip(),
                 classified, mis_source_date=saved.report_date,
-                permit_qty=saved.permit_qty,
+                permit_qty=source_qty,
             )
             if report_destination_bucket_index(
                 projected, report_destination_buckets([projected])
@@ -854,13 +873,29 @@ def _report_verified_amns(db: Session, rows, *, strict=True):
             result.append(projected)
             continue
         if reportable_category(row):
-            result.append(row)
+            # Detailed source category can already be complete while permit
+            # quantity is absent. Attach the same verified permit quantity,
+            # without replacing any existing source value or category.
+            reference = reusable.get(key[1])
+            if (reference and reference[5] is not None
+                    and normalized(getattr(row, "consignee", "") or "") == reference[4]
+                    and (normalized(row.buyer), normalized(row.destination),
+                         material_normalized(row.material_grade, row.report_date)) ==
+                        (normalized(reference[1]), normalized(reference[2]),
+                         material_normalized(reference[3], row.report_date))):
+                result.append(_ReportTripView(
+                    row, row.buyer, row.destination, row.material_grade,
+                    permit_qty=reference[5],
+                    mis_source_date=row.report_date,
+                ))
+            else:
+                result.append(row)
             continue
         source = reusable.get(key[1])
         if not source:
             result.append(row)
             continue
-        reference, buyer, destination, grade, source_consignee = source
+        reference, buyer, destination, grade, source_consignee, verified_qty = source
         current_consignee = normalized(getattr(row, "consignee", "") or "")
         if not current_consignee or current_consignee != source_consignee:
             result.append(row)
@@ -880,7 +915,7 @@ def _report_verified_amns(db: Session, rows, *, strict=True):
         result.append(_ReportTripView(
             row, buyer, destination, grade,
             mis_source_date=reference.report_date,
-            permit_qty=reference.permit_qty,
+            permit_qty=verified_qty,
         ))
     return result
 
@@ -1404,6 +1439,20 @@ def source_mapping_issues(request: Request, to_date: date,
     }
     projected = _report_verified_amns(db, rows, strict=False)
     issues = _month_mapping_issue_rows(projected, saved)
+    # Use the exact report-time field projection, including approved MIS
+    # permit quantities. Only present real WB times from validated sources.
+    selected = [x for x in projected if x.report_date == to_date]
+    field_coverage = {
+        "reportDate": to_date.isoformat(),
+        "trips": len(selected),
+        "permitQty": sum(1 for x in selected if
+                         getattr(x, "permit_qty", None) is not None
+                         and Decimal(str(getattr(x, "permit_qty"))) > 0),
+        "wbTime": sum(1 for x in selected if
+                      str(getattr(x, "dispatch_time", "") or "").strip()),
+        "missingQtyPermits": sorted({x.permit_no for x in selected
+                                    if not (getattr(x, "permit_qty", None) or 0)}),
+    }
     known = list(db.execute(select(DespatchPermitDay.buyer,
                                    DespatchPermitDay.destination).where(
         DespatchPermitDay.review_status == "CONFIRMED").distinct()))
@@ -1423,7 +1472,7 @@ def source_mapping_issues(request: Request, to_date: date,
         "reusedPermits": len({(x.report_date, x.permit_no) for x in projected
                               if getattr(x, "inherited_from_mis", False)}),
         "buyerOptions": buyers, "destinationOptions": destinations,
-        "materialOptions": MATERIAL_COLUMNS,
+        "materialOptions": MATERIAL_COLUMNS, "tripFields": field_coverage,
     }
 
 
