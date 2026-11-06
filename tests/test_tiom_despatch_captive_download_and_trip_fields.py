@@ -81,7 +81,7 @@ def test_captive_client_xlsx_and_trip_source_fields_with_confirmed_permit_qty():
                     assert "NOVEMBER-2026" in ws["A1"].value
                     assert ws["B2"].value=="DABUNA PLANT"
                     assert ws["V2"].value=="CUMMULATIVE"
-                    assert ws["H7"].value==31.125  # S.Fines(60-62) captive
+                    assert ws["F8"].value==31.125  # S.Fines(60-62) captive
             finally:
                 book.close()
         with Session(engine) as db:
