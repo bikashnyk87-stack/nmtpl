@@ -1568,7 +1568,9 @@ def export_check(report_type: str, request: Request,
                 "fixPermit": match.group(1) if match else None,
                 "fixDate": match.group(2) if match else None}
     from app.services.tiom_despatch_client_reports import _keymap, _material_counts
-    from app.services.tiom_despatch_client_layout import report_destination_buckets
+    from app.services.tiom_despatch_client_layout import (
+        report_destination_buckets, reportable_category,
+    )
     errors=[]
     if report_type in {"destination","transporter"}:
         _, missing = _keymap(rows, report_destination_buckets(rows))
@@ -1578,6 +1580,16 @@ def export_check(report_type: str, request: Request,
         _, missing = _material_counts(rows)
         if missing:
             errors.append(f"{len(missing)} unmatched material grades (e.g. {missing[0].epass_no})")
+    if report_type == "despatch":
+        # Export-check must match _build_captive's reportable-category guard.
+        # Previously it returned ready=True while export itself rejected
+        # missing Captive/Non-captive classifications with HTTP 409.
+        incomplete = [r for r in rows if not reportable_category(r)]
+        if incomplete:
+            errors.append(
+                f"Captive/Non-captive needs verified MIS buyer/material for "
+                f"{len(incomplete)} E-Passes (e.g. {incomplete[0].epass_no})"
+            )
     if errors:
         return {"ready":False,"activeTrips":len(rows),"activeMt":float(total_mt),
                 "reportDate":to_date.isoformat(),
