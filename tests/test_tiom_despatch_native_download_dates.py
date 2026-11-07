@@ -53,6 +53,11 @@ values.dd_to = '07-11-2026'; // screen display format is not HTML input value
 assert.equal(window.tiomDDNativeLink({href: '#'}, 'trip'), false);
 values.dd_to = '';
 assert.equal(window.tiomDDNativeLink({href: '#'}, 'trip'), false);
+values.dd_to = '2026-11-07';
+last.mappingIssues.tripFields = {reportDate: '2026-11-07', trips: 0};
+last.mappingIssues.latestImportedDate = '2026-11-06';
+assert.equal(window.tiomDDNativeLink({href: '#'}, 'trip'), false);
+assert.match(notices.at(-1).message, /2026-11-06/);
 values.dd_to = '2026-11-06';
 last.mappingIssues.items = [{permitNo: 'UNVERIFIED'}];
 assert.equal(window.tiomDDNativeLink({href: '#'}, 'despatch'), false);
