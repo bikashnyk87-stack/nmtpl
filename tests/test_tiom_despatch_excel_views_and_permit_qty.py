@@ -60,9 +60,11 @@ def test_trip_summary_all_three_sheet_views_are_valid_and_qty_is_unmodified():
         assert book.sheetnames==["06.11.26","Cummulative","Cancellation"]
         ws=book["06.11.26"]
         assert ws["C2"].value=="Permit Qty."
-        assert ws["C3"].value==8000.62
+        assert ws["C3"].value is None  # no approved quantity on this source row
         assert ws["P3"].value=="11:30:05"
         assert ws.freeze_panes=="A3"
+        assert book["Cummulative"]["C3"].value==8000.62  # first row is 5 Nov
+        assert book["Cummulative"]["C4"].value is None   # second row is 6 Nov
         assert book["Cummulative"].freeze_panes=="A3"
         assert book["Cancellation"].freeze_panes=="A3"
     finally:
