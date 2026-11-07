@@ -133,7 +133,8 @@ window.tiomDDPanel=async function(which){
         '<datalist id="dd_pe_buyers">'+Array.from(new Set(['AMNS','DNA MINERALS','SNN MINERALS',...(data.buyerOptions||[])])).map(x=>'<option value="'+h(x)+'">').join('')+'</datalist>'+
         '<datalist id="dd_pe_destinations">'+Array.from(new Set(['DABUNA','TUIDUNGRI (SARAIKELA)',...(data.destinationOptions||[])])).map(x=>'<option value="'+h(x)+'">').join('')+'</datalist>'+
         '<datalist id="dd_pe_materials"><option value="SCREENED FINES"><option value="5X18">'+(data.materialOptions||[]).map(x=>'<option value="'+h(x)+'">').join('')+'</datalist>'+
-        (last.repairTarget?.date===reportDate?'<div id="dd_repair_panel"></div>':'')+
+        (last.repairTarget?.date===reportDate&&!last.repairTarget?.qtyOnly?'<div id="dd_repair_panel"></div>':'')+
+        (last.repairTarget?.date===reportDate&&last.repairTarget?.qtyOnly?'<p class="dd-warning"><b>Permit Qty correction:</b> enter the authorised full Permit MT for the highlighted permit below, then click Save permit on that same row. Do not enter despatch MT as permit quantity.</p>':'')+
         '<div class="dd-scroll"><table><thead><tr><th>Permit No.</th><th>Buyer (AMNS)</th><th>Destination (AMNS)</th><th>Material / Grade</th><th>Grade % (optional if band selected)</th><th>Permit MT</th><th>AMNS Trips</th><th>Dispatch MT</th><th>Balance MT</th><th>Gmail E-Pass Reference</th><th>Action</th></tr></thead>'+
         '<tbody id="dd_pe_rows"></tbody></table></div>'+
         '<div class="dd-tools"><button class="btn secondary small" onclick="tiomDDAddPermitRow()">+ Add permit</button>'+
@@ -174,7 +175,7 @@ window.tiomDDPanel=async function(which){
       const target=last.repairTarget;
       const ix=target&&target.date===reportDate?
         data.permits.findIndex(x=>x.permit_no.toUpperCase()===target.permit.toUpperCase()):-1;
-      if(ix>=0){
+      if(ix>=0&&!target.qtyOnly){
         const p=data.permits[ix];
         const options=(data.materialOptions||[]).map(x=>
           '<option value="'+h(x)+'"'+(x===p.material?' selected':'')+'>'+h(x)+'</option>').join('');
@@ -205,7 +206,7 @@ window.tiomDDPanel=async function(which){
           return say('Check trips and MT against the company report.',true);
         try{
           const saved=await api('permit-entry-one',JSON.stringify({report_date:reportDate,permit:row}));
-          if(fromRepair&&last.repairTarget){
+          if((fromRepair||last.repairTarget?.qtyOnly)&&last.repairTarget){
             const returnTo=last.repairTarget.returnTo;
             last.repairTarget=null;
             if(returnTo)$('dd_to').value=returnTo;
@@ -264,7 +265,12 @@ window.tiomDDPanel=async function(which){
           '<span>Permit Qty: '+f(issues.tripFields.permitQty||0,0)+' / '+f(issues.tripFields.trips||0,0)+' trips</span>'+
           '<span>WB Time: '+f(issues.tripFields.wbTime||0,0)+' / '+f(issues.tripFields.trips||0,0)+' trips</span></div>'+
           ((issues.tripFields.permitQty||0)<(issues.tripFields.trips||0)?
-            '<p class="dd-note">Missing Permit Qty must come from the approved MIS permit record or a verified detailed source; it cannot be calculated from despatch MT. Update the actual permit in MIS Entry if its approved quantity is available.</p>':'')+
+            '<p class="dd-note">Only an approved full Permit Qty may be used. Do not substitute dispatched MT or a daily total. Enter it once in MIS for the actual permit; consistent continuing permits will reuse it automatically.</p>'+
+            '<div class="dd-tools" style="flex-wrap:wrap"><b>Missing Permit Qty · '+h(issues.tripFields.reportDate)+':</b>'+
+            (issues.tripFields.missingQtyPermits||[]).map(p=>
+              '<button type="button" class="btn secondary small" onclick="tiomDDOpenPermitQty(\''+
+              h(issues.tripFields.reportDate)+'\',\''+h(p)+'\')">'+h(p)+' · Enter approved Qty</button>'
+            ).join('')+'</div>':'')+
           ((issues.tripFields.wbTime||0)<(issues.tripFields.trips||0)?
             '<p class="dd-note">Missing WB Time must come from a detailed Date Wise / Trip Summary source with a real time. You can re-import a verified source through Gmail & Evidence; the importer fills missing values only after matching E-Pass, date, vehicle and net MT.</p>':''):'')+
         '</section>';
@@ -336,6 +342,24 @@ window.tiomDDConfirmCategory=async i=>{
       (r.changedTripCount||0)+' E-Pass classifications across '+(r.changedDates||[]).join(', ')+
       '. All E-Pass trips and quantities preserved.');
   }catch(e){say(e.message,true);}
+};
+window.tiomDDOpenPermitQty=async(date,permit)=>{
+  const returnTo=v('dd_to');
+  last.repairTarget={date,permit,returnTo,qtyOnly:true};
+  $('dd_to').value=date;
+  await window.tiomDDPanel('permits');
+  const i=last.permitEntry?.permits?.findIndex(p=>p.permit_no.toUpperCase()===permit.toUpperCase());
+  if(i===undefined||i<0){
+    say('Permit '+permit+' not found on '+date+' in MIS. Refresh Gmail permits.',true);
+    return;
+  }
+  const input=$('dd_pe_qty_'+i);
+  if(input){
+    input.scrollIntoView({block:'center',inline:'center',behavior:'smooth'});
+    input.focus();
+    input.select();
+    say('Enter verified full Permit Qty for '+permit+'; click Save permit on this row.');
+  }
 };
 window.tiomDDOpenPermitFix=async(date,permit)=>{
   const returnTo=v('dd_to');
