@@ -256,6 +256,10 @@ window.tiomDDPanel=async function(which){
             h(p.reportDate)+'\',\''+h(p.permitNo)+'\')">Open in MIS Permit Entry</button>':
             '<small>Protected historical permit</small>')+'</div>').join('')+
         '<p class="dd-note">MIS Permit Entry is the single source for buyer, destination, material/grade and approved Permit Qty. Original E-Pass weights, dates and trip counts remain unchanged.</p>'+
+        (issues.tripFields?.trips===0?
+          '<p class="dd-warning">No E-Pass trips have been imported for '+h(issues.tripFields.reportDate)+
+          '. Latest imported date: <b>'+h(issues.latestImportedDate||'none')+
+          '</b>. Select a date with imported data before downloading.</p>':'')+
         (issues.tripFields?'<div class="dd-tools" style="padding-top:10px"><b>Trip Summary source fields · '+h(issues.tripFields.reportDate)+'</b>'+
           '<span>Permit Qty: '+f(issues.tripFields.permitQty||0,0)+' / '+f(issues.tripFields.trips||0,0)+' trips</span>'+
           '<span>WB Time: '+f(issues.tripFields.wbTime||0,0)+' / '+f(issues.tripFields.trips||0,0)+' trips</span></div>'+
@@ -345,9 +349,17 @@ window.tiomDDOpenPermitFix=async(date,permit)=>{
 // The previous fetch-check -> a.click() sequence could silently be blocked by
 // Chrome even if the server returned HTTP 200.
 window.tiomDDNativeLink=(anchor,type)=>{
+  // HTML date inputs display DD-MM-YYYY in some browsers but their .value is YYYY-MM-DD.
+  // Single backslashes are essential: /\\d/ in a regex literal matches a literal slash + d.
   const to=v('dd_to');
-  if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(to)){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(to)){
     say('Choose a valid Despatch reporting date.',true);
+    return false;
+  }
+  const info=last.mappingIssues;
+  if(info?.tripFields?.reportDate===to && info.tripFields.trips===0){
+    say('No Despatch E-Pass trips imported for '+to+'. Latest imported day: '+
+        (info.latestImportedDate||'none')+'. Select a date with imported trips.',true);
     return false;
   }
   if(type!=='trip'&&last.mappingIssues?.items?.length){
