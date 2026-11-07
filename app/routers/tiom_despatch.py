@@ -1473,6 +1473,12 @@ def source_mapping_issues(request: Request, to_date: date,
                               if getattr(x, "inherited_from_mis", False)}),
         "buyerOptions": buyers, "destinationOptions": destinations,
         "materialOptions": MATERIAL_COLUMNS, "tripFields": field_coverage,
+        "latestImportedDate": (
+            latest.isoformat() if (latest := db.scalar(
+                select(func.max(DespatchTrip.report_date)).where(
+                    DespatchTrip.status == "ACTIVE")
+            )) else None
+        ),
     }
 
 
