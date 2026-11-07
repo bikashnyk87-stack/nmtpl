@@ -345,8 +345,10 @@ window.tiomDDOpenPermitFix=async(date,permit)=>{
 // The previous fetch-check -> a.click() sequence could silently be blocked by
 // Chrome even if the server returned HTTP 200.
 window.tiomDDNativeLink=(anchor,type)=>{
+  // HTML date inputs display DD-MM-YYYY in some browsers but their .value is YYYY-MM-DD.
+  // Single backslashes are essential: /\\d/ in a regex literal matches a literal slash + d.
   const to=v('dd_to');
-  if(!/^\\d{4}-\\d{2}-\\d{2}$/.test(to)){
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(to)){
     say('Choose a valid Despatch reporting date.',true);
     return false;
   }
