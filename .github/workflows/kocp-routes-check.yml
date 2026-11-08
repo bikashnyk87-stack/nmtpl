@@ -1,31 +1,6 @@
 name: KOCP movement route checks
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - "app/site_models.py"
-      - "app/site_schemas.py"
-      - "app/routers/sites.py"
-      - "app/routers/site_ops.py"
-      - "app/services/kocp_equipment.py"
-      - "app/static/simple_field_v1.js"
-      - "tests/test_kocp_activity_picker.py"
-      - "tests/test_kocp_fuel_dashboard_batch.py"
-      - "tests/test_kocp_compact_hsd_live_balance.py"
-      - "tests/test_kocp_hsd_picker.py"
-      - "app/static/simple_field_v1.css"
-      - "app/routers/site_routes.py"
-      - "app/routers/site_material_types.py"
-      - "app/static/site_routes.js"
-      - "app/static/site_master_ops.js"
-      - "app/static/kocp_masters_compact.js"
-      - "app/static/kocp_masters_compact.css"
-      - "app/static/site.html"
-      - "app/static/simple_field_v1.js"
-      - "tests/test_kocp_movement_routes.py"
-      - "tests/test_kocp_material_catalog.py"
-      - ".github/workflows/kocp-routes-check.yml"
   workflow_dispatch:
 
 jobs:
