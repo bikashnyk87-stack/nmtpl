@@ -12,14 +12,17 @@
   const x=v=>esc(v===undefined||v===null?'':String(v));
   const st=v=>'<span class="kcm-status'+(v?'':' off')+'">'+(v?'Active':'Inactive')+'</span>';
   const action=(label,fn,cls)=>'<button type="button" class="kcm-btn '+(cls||'')+'" onclick="'+fn+'">'+label+'</button>';
-  const typeKey=()=>vm.tab==='MATERIALS'?vm.materialKind:vm.tab;
+  const typeKey=()=>vm.tab==='MATERIALS'?vm.materialKind:vm.tab==='LOCATIONS'?'LOCATION':vm.tab;
   const count=t=>t==='COAL'||t==='OB'?(vm.routes[t]||[]).length:t==='MATERIALS'?vm.summary.materials||0:
     t==='EMPLOYEE'?vm.summary.employees||0:t==='EQUIPMENT'?vm.summary.equipment||0:
     t==='LOCATIONS'?vm.locations.length:(vm.summary.imports||[]).length;
   const title=()=>tabs.find(t=>t[0]===vm.tab)?.[1]||'Master';
   function currentRows(){
     if(vm.tab==='COAL'||vm.tab==='OB')return vm.routes[vm.tab]||[];
-    if(vm.tab==='MATERIALS')return (vm.materials[vm.materialKind]||[]);
+    if(vm.tab==='MATERIALS')return vm.existingMaterials.filter(r=>{
+      const unit=String(r.defaultUnit||'').toUpperCase();
+      return vm.materialKind==='OB'?['CUM','M3','M³'].includes(unit):unit==='MT';
+    });
     if(vm.tab==='LOCATIONS')return vm.locations;
     if(vm.tab==='HISTORY')return vm.summary.imports||[];
     return vm.records||[];
@@ -32,10 +35,10 @@
     switch(vm.tab){
       case'COAL':return ['Movement group','Destination','Category','Distance range','Status',''];
       case'OB':return ['Category / Group','From','To','Distance range','Status',''];
-      case'MATERIALS':return ['Material','Canonical code','Unit','Saved code','Status'];
+      case'MATERIALS':return ['Material','Code','Group','Unit','Status',''];
       case'EMPLOYEE':return ['Employee ID','Name','Role','Department','Mobile','Status',''];
       case'EQUIPMENT':return ['ID','Type','Category','Make / Model','Ownership','Status',''];
-      case'LOCATIONS':return ['Location','Used in','Status'];
+      case'LOCATIONS':return ['Location','Code','Used in','Status'];
       default:return ['Batch','Type','Rows','Errors','Status','Uploaded by'];
     }
   }
@@ -46,9 +49,9 @@
     if(vm.tab==='OB')return ['<b class="kcm-primary">'+x(r.group)+'</b>',x(r.source),x(r.destination),
       '<span class="kcm-pill">'+x(r.distanceRange)+'</span>',st(r.active),
       action('Edit','kcmEdit(\''+r.routeId+'\')','small')];
-    if(vm.tab==='MATERIALS')return ['<b class="kcm-primary">'+x(r.name)+'</b>',x(r.typeCode),x(r.unit),
-      x(r.storedCode||'—'),'<span class="kcm-tag '+(r.status==='EXISTS'?'ok':'missing')+'">'+
-      (r.status==='EXISTS'?(r.active?'Saved':'Inactive'):'Not added')+'</span>'];
+    if(vm.tab==='MATERIALS')return ['<b class="kcm-primary">'+x(r.name)+'</b>',x(r.code),
+      x(r.materialGroup||'—'),x(r.defaultUnit),st(r.active),
+      action('Edit','kcmEdit(\''+x(r.recordId)+'\')','small')];
     if(vm.tab==='EMPLOYEE')return ['<b class="kcm-primary">'+x(r.employeeId)+'</b>',x(r.name),x(r.role),
       x(r.department||'—'),x(r.mobile||'—'),st(r.active),action('Edit','kcmEdit(\''+x(r.employeeId)+'\')','small')];
     if(vm.tab==='EQUIPMENT'){
@@ -58,8 +61,8 @@
         x(r.group),x(r.makeModel||'—'),x(r.ownership||'—'),st(r.active),
         action(wrong?'Correct Type':'Edit','kcmEdit(\''+x(r.machineId)+'\')','small')];
     }
-    if(vm.tab==='LOCATIONS')return ['<b class="kcm-primary">'+x(r.name)+'</b>',
-      (r.usedIn||[]).map(v=>'<span class="kcm-tag">'+x(v)+'</span>').join(' ')||'Existing',st(r.active)];
+    if(vm.tab==='LOCATIONS')return ['<b class="kcm-primary">'+x(r.name)+'</b>',x(r.code),
+      (r.usedIn||[]).map(v=>'<span class="kcm-tag">'+x(v)+'</span>').join(' ')||'Not assigned',st(r.active)];
     return ['<span class="kcm-primary">'+x(r.batchId)+'</span>',x(r.masterType),x(r.totalRows),
       x(r.errorRows),'<span class="kcm-tag">'+x(r.status)+'</span>',x(r.uploadedBy)];
   }
@@ -82,26 +85,24 @@
   function searchBar(){return '<input class="kcm-search" type="search" id="kcmSearchBox" placeholder="Search '+x(title()).toLowerCase()+
     '..." value="'+x(vm.search)+'" oninput="kcmSearch(this.value)">'}
   function toolbar(){
-    const route=vm.tab==='COAL'||vm.tab==='OB';
-    const regular=vm.tab==='EMPLOYEE'||vm.tab==='EQUIPMENT';
+    const interactive=vm.tab!=='HISTORY';
     const materials=vm.tab==='MATERIALS';
-    const interactive=route||regular||materials;
-    const importAction=interactive?action('Import Excel','kcmToggleImport()',vm.importOpen?'':'primary'):'';
-    const addAction=regular?action('+ Add / edit','kcmToggleForm()',''):'';
-    const hint=vm.tab==='LOCATIONS'?'<span class="kcm-muted">Automatically combined from Coal and OB routes</span>':'';
+    const importAction=interactive?action('Import Excel','kcmToggleImport()',''):'';
+    const addAction=interactive?action('+ Add Single Entry','kcmToggleForm()',vm.formOpen?'':'primary'):'';
+    const hint=vm.tab==='LOCATIONS'?'<span class="kcm-muted">Shared physical locations for Coal and OB routes</span>':'';
     const subTab=materials?'<div class="kcm-subtabs">'+
       ['COAL','OB'].map(k=>'<button type="button" class="'+(vm.materialKind===k?'active':'')+
-      '" onclick="kcmKind(\''+k+'\')">'+k+' · '+(vm.materials[k]||[]).length+' types</button>').join('')+
+      '" onclick="kcmKind(\''+k+'\')">'+k+' · '+vm.existingMaterials.filter(r=>
+        k==='OB'?['CUM','M3','M³'].includes(String(r.defaultUnit||'').toUpperCase()):
+        String(r.defaultUnit||'').toUpperCase()==='MT').length+' records</button>').join('')+
       '</div>':'';
     return subTab+'<div class="kcm-toolbar"><h2>'+x(title())+'</h2>'+hint+
-      '<span class="kcm-spacer"></span>'+searchBar()+
-      addAction+importAction+'</div>';
+      '<span class="kcm-spacer"></span>'+searchBar()+addAction+importAction+'</div>';
   }
   function sourceNote(){
-    if(vm.tab==='MATERIALS')
-      return '<div class="kcm-note"><b>Material types are separate from routes.</b> The original Coal file has 21 distance variations but only 2 types; OB has 11 variations but 3 types. Existing saved materials are not overwritten.</div>';
-    if(vm.tab==='COAL'||vm.tab==='OB')
-      return '<div class="kcm-note">Distances, sources and movement categories stay separate for Coal and OB. Shared physical locations are generated automatically.</div>';
+    if(vm.tab==='MATERIALS')return '<div class="kcm-note">Saved Material Masters are shown below. Add one material or import Excel; existing codes cannot be overwritten through Add Single Entry.</div>';
+    if(vm.tab==='COAL'||vm.tab==='OB')return '<div class="kcm-note">Add one route with its movement group, unloading point and distance. Existing physical locations are reused; Excel import is optional.</div>';
+    if(vm.tab==='LOCATIONS')return '<div class="kcm-note">Add physical locations only once. Coal and OB movement routes share these locations.</div>';
     return '';
   }
   function importSection(){
@@ -124,6 +125,17 @@
     let input='';
     if(type==='checkbox'){
       input='<label><input id="kcmF_'+id+'" type="checkbox" '+(val?'checked':'')+'> Active</label>';
+    }else if(type==='location_suggest'){
+      const list='kcmLocations_'+id;
+      const choices=[...new Set(vm.locations.filter(loc=>loc.active).map(loc=>String(loc.name||'').trim()).filter(Boolean))];
+      input='<input id="kcmF_'+id+'" type="text" list="'+list+'" value="'+x(val)+'">'+
+        '<datalist id="'+list+'">'+choices.map(loc=>'<option value="'+x(loc)+'"></option>').join('')+'</datalist>';
+    }else if(type==='route_suggest'){
+      const list='kcmRouteOptions_'+id;
+      const choices=[...new Set((vm.routes[vm.tab]||[]).filter(route=>route.active)
+        .map(route=>String(route[id]||'').trim()).filter(Boolean))];
+      input='<input id="kcmF_'+id+'" type="text" list="'+list+'" value="'+x(val)+'">'+
+        '<datalist id="'+list+'">'+choices.map(value=>'<option value="'+x(value)+'"></option>').join('')+'</datalist>';
     }else if(type==='equipment_class'){
       // Suggestions are live Equipment Master types, not a built-in category list.
       const types=[...new Set((vm.records||[]).filter(e=>e.active&&e.type)
@@ -146,10 +158,33 @@
     if(!vm.formOpen)return '';
     const r=vm.edit||{},route=vm.tab==='COAL'||vm.tab==='OB';
     let fields=[];
-    if(route)fields=[
+    if(route&&vm.edit)fields=[
       field('category','Movement category',r.category),
       field('distanceRange','Distance range',r.distanceRange),
       field('active','Status',r.active,'checkbox')
+    ];
+    else if(route)fields=[
+      field('group','Movement group *','','route_suggest'),
+      ...(vm.tab==='OB'?[field('source','From / source location *','','location_suggest')]:[]),
+      field('destination','Destination / unloading point *','','location_suggest'),
+      field('category','Movement category *','','route_suggest'),
+      field('distanceRange','Distance range *'),
+      field('locationType','Location type'),
+      field('active','Active',true,'checkbox')
+    ];
+    else if(vm.tab==='MATERIALS')fields=[
+      field('code','Material code *',r.code),
+      field('name','Material name *',r.name),
+      field('materialGroup','Material group',r.materialGroup),
+      field('defaultUnit','Default unit *',r.defaultUnit||(vm.materialKind==='OB'?'CUM':'MT')),
+      field('billableUnit','Billable unit',r.billableUnit||(vm.materialKind==='OB'?'CUM':'MT')),
+      field('active','Active',r.active??true,'checkbox')
+    ];
+    else if(vm.tab==='LOCATIONS')fields=[
+      field('code','Location code *'),
+      field('name','Physical location name *'),
+      field('locationType','Location type'),
+      field('active','Active',true,'checkbox')
     ];
     else if(vm.tab==='EMPLOYEE')fields=[
       field('employeeId','Employee ID *',r.employeeId),
@@ -174,6 +209,9 @@
       field('effectiveFrom','Effective From',r.effectiveFrom?.slice(0,10),'date'),
       field('active','Active',r.active??true,'checkbox')
     ];
+    if(vm.tab==='MATERIALS'&&vm.edit){
+      fields.unshift('<div class="kcm-note">Editing the selected material. Its code identifies linked production records; change descriptive fields here. Create a separate material with Add Single Entry if a new code is needed.</div>');
+    }
     if(vm.tab==='EQUIPMENT'){
       fields.unshift('<div class="kcm-note"><b>Vehicle classes come from this Equipment Master.</b> For transport vehicles, enter the full approved type (for example, the manufacturer and tipper type) consistently. The MCL dropdown uses active KOCP vehicle types only. There are no built-in class options.</div>');
     }
@@ -185,18 +223,7 @@
       '</div><div class="kcm-actions">'+action('Cancel','kcmToggleForm()','')+
       action('Save changes','kcmSave()','primary')+'</div></div>';
   }
-  function materialExisting(){
-    if(vm.tab!=='MATERIALS')return '';
-    const rows=vm.existingMaterials.filter(r=>{
-      const unit=String(r.defaultUnit||'').toUpperCase();
-      return vm.materialKind==='OB'?['CUM','M3','M³'].includes(unit):unit==='MT';
-    });
-    return '<details class="kcm-details"><summary>Current saved '+vm.materialKind+' records ('+rows.length+') — read only</summary>'+
-      '<div class="kcm-table-wrap"><table class="kcm-table"><thead><tr><th>Code</th><th>Material name</th><th>Group</th><th>Unit</th><th>Active</th></tr></thead><tbody>'+
-      (rows.map(r=>'<tr><td>'+x(r.code)+'</td><td>'+x(r.name)+'</td><td>'+x(r.materialGroup)+
-        '</td><td>'+x(r.defaultUnit)+'</td><td>'+st(r.active)+'</td></tr>').join('')||
-       '<tr><td colspan="5">No saved records</td></tr>')+'</tbody></table></div></details>';
-  }
+  function materialExisting(){return '';} // Grid above shows all actual saved materials.
   async function refreshData(){
     const calls=[
       api('/api/sites/KOCP/master-summary'),
@@ -239,13 +266,13 @@
     updateGrid();
   }
   function kcmGo(tab){vm.tab=tab;vm.search='';vm.page=1;vm.importOpen=false;vm.formOpen=false;vm.edit=null;vm.preview=null;render()}
-  function kcmKind(kind){vm.materialKind=kind;vm.search='';vm.page=1;vm.importOpen=false;vm.preview=null;render()}
+  function kcmKind(kind){vm.materialKind=kind;vm.search='';vm.page=1;vm.importOpen=false;vm.preview=null;vm.formOpen=false;vm.edit=null;render()}
   function kcmSearch(v){vm.search=v;vm.page=1;updateGrid()}
   function kcmPage(n){vm.page+=n;updateGrid()}
   function kcmToggleImport(){vm.importOpen=!vm.importOpen;vm.formOpen=false;vm.preview=null;render()}
   function kcmToggleForm(){vm.formOpen=!vm.formOpen;vm.importOpen=false;vm.edit=null;render()}
   function kcmEdit(id){
-    vm.edit=currentRows().find(r=>r.routeId===id||r.employeeId===id||r.machineId===id)||null;
+    vm.edit=currentRows().find(r=>r.routeId===id||r.employeeId===id||r.machineId===id||r.recordId===id)||null;
     vm.formOpen=true;vm.importOpen=false;render();
   }
   function kcmSyncGroup(){
@@ -261,13 +288,24 @@
     try{
       const body={},idFields=[...document.querySelectorAll('.kcm-form [id^=kcmF_]')];
       idFields.forEach(el=>body[el.id.replace('kcmF_','')]=el.type==='checkbox'?el.checked:el.value.trim()||null);
+      if(vm.tab==='MATERIALS'&&vm.edit&&String(body.code||'').toUpperCase()!==String(vm.edit.code||'').toUpperCase())
+        throw new Error('Material code cannot change on Edit. Use Add Single Entry for a new code.');
       if(vm.tab==='COAL'||vm.tab==='OB'){
-        if(!vm.edit)throw new Error('Choose route to edit.');
-        await api('/api/sites/KOCP/routes/'+vm.edit.routeId,{method:'POST',
+        const url=vm.edit?'/api/sites/KOCP/routes/'+vm.edit.routeId:
+          '/api/sites/KOCP/routes/'+vm.tab+'/records';
+        await api(url,{method:'POST',
           headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       }else{
-        if(!body.employeeId&&!body.machineId)throw new Error('ID is required.');
-        await api('/api/sites/KOCP/masters/'+vm.tab+'/records',{method:'POST',
+        const kind=vm.tab==='MATERIALS'?'MATERIAL':vm.tab==='LOCATIONS'?'LOCATION':vm.tab;
+        if(vm.tab==='MATERIALS'){
+          body.materialKind=vm.materialKind;
+          const expected=vm.materialKind==='OB'?'CUM':'MT';
+          if(String(body.defaultUnit||'').toUpperCase()!==expected||
+            String(body.billableUnit||expected).toUpperCase()!==expected)
+            throw new Error('Choose '+expected+' for '+vm.materialKind+' materials; update the unit in its master.');
+        }
+        body.createOnly=!vm.edit;
+        await api('/api/sites/KOCP/masters/'+kind+'/records',{method:'POST',
           headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       }
       toast('Master saved successfully');vm.formOpen=false;vm.edit=null;await render();

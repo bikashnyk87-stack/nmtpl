@@ -1026,7 +1026,45 @@ def save_single_master_record(site_id: str, master_type: str, payload: dict, req
     # CREATE allows first entry; EDIT allows subsequent maintenance. Admin bypasses both.
     if not user.admin and not (has_permission(db, user, site_id, "MASTERS", "CREATE") or has_permission(db, user, site_id, "MASTERS", "EDIT")):
         raise HTTPException(403, "Master create/edit permission is required.")
-    created, record = _single_master_save(db, user, site_id, key, payload or {})
+    payload = payload or {}
+    # Explicit single-entry ADD must never silently overwrite an existing
+    # master (the older generic endpoint is intentionally an upsert for EDIT).
+    if payload.get("createOnly"):
+        if not user.admin and not has_permission(db, user, site_id, "MASTERS", "CREATE"):
+            raise HTTPException(403, "Master create permission required.")
+        if key == "MATERIAL":
+            code = str(payload.get("code") or "").upper().strip()
+            name = " ".join(str(payload.get("name") or "").split())
+            if not code or len(code) > 50 or not name or len(name) > 120:
+                raise HTTPException(422, "Material code (max 50) and name (max 120) are required.")
+            duplicate = db.scalar(select(SiteMaterial.site_material_id).where(
+                SiteMaterial.site_id == site_id,
+                func.upper(SiteMaterial.code) == code,
+            ).limit(1))
+            if duplicate:
+                raise HTTPException(409, "Material code already exists. Edit the existing master record instead.")
+        elif key == "LOCATION":
+            code = str(payload.get("code") or "").upper().strip()
+            name = " ".join(str(payload.get("name") or "").split())
+            if not code or len(code) > 50 or not name or len(name) > 160:
+                raise HTTPException(422, "Location code (max 50) and name (max 160) are required.")
+            locations = db.scalars(select(SiteLocation).where(
+                SiteLocation.site_id == site_id
+            )).all() if site_id != "TIOM" else []
+            if any(str(row.code).upper() == code for row in locations):
+                raise HTTPException(409, "Location code already exists. Edit the existing location instead.")
+            if any(" ".join(str(row.name or "").casefold().split()) == name.casefold()
+                   for row in locations):
+                raise HTTPException(409, "This physical location already exists under another code. Reuse it instead.")
+        elif key in {"VEHICLE", "EQUIPMENT"}:
+            machine_id = str(payload.get("machineId") or "").strip()
+            if machine_id and db.get(Equipment, machine_id):
+                raise HTTPException(409, "Equipment ID already exists. Use Edit rather than Add Single Entry.")
+        elif key == "EMPLOYEE":
+            employee_id = str(payload.get("employeeId") or "").strip()
+            if employee_id and db.get(Person, employee_id):
+                raise HTTPException(409, "Employee ID already exists. Use Edit rather than Add Single Entry.")
+    created, record = _single_master_save(db, user, site_id, key, payload)
     db.commit()
     return {"ok": True, "created": created, "masterType": key, "record": record}
 

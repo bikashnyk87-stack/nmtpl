@@ -267,6 +267,60 @@ def route_confirm(site_id:str,batch_id:str,request:Request,db:Session=Depends(ge
     return {"ok":True,"created":created,"updated":updated,"rows":len(parsed)}
 
 
+@router.post("/{site_id}/routes/{kind}/records")
+def create_route_record(site_id: str, kind: str, payload: dict, request: Request,
+                        db: Session = Depends(get_db)):
+    """Create one Coal/OB route with the same validation and identity as Excel imports.
+
+    Physical SiteLocation records are reused by normalized name, so adding
+    another route never creates duplicate unloading points.
+    """
+    csrf(request)
+    user = _access(db, request, site_id, "CREATE")
+    kind = _kind(kind)
+    item = {
+        "kind": kind,
+        "group": _str(payload.get("group")),
+        "source": _str(payload.get("source")) if kind == "OB" else "",
+        "destination": _str(payload.get("destination")),
+        "category": _str(payload.get("category")),
+        "distance": _str(payload.get("distanceRange")),
+        "locationType": _str(payload.get("locationType")),
+        "active": _flag(payload.get("active", True)),
+    }
+    issues = _issues(item)
+    if issues:
+        raise HTTPException(422, "; ".join(issues))
+    route_id = _identity(item)
+    if db.get(SiteMovementRoute, route_id):
+        raise HTTPException(409, "This Coal/OB movement and distance already exist. Edit its existing record.")
+    by_name = {
+        _norm(loc.name): loc for loc in db.scalars(select(SiteLocation).where(
+            SiteLocation.site_id == "KOCP"
+        ).order_by(SiteLocation.site_location_id))
+    }
+    source = _physical_location(db, item["source"], by_name, None) if kind == "OB" else None
+    destination = _physical_location(db, item["destination"], by_name, None)
+    if not destination.active or (source is not None and not source.active):
+        raise HTTPException(422, "This route references an inactive physical location. Activate it in Locations first.")
+    route = SiteMovementRoute(
+        route_id=route_id, site_id="KOCP", movement_kind=kind,
+        route_group=item["group"], category=item["category"],
+        source_label=item["source"] or None,
+        destination_label=item["destination"],
+        source_location_id=source.site_location_id if source else None,
+        destination_location_id=destination.site_location_id,
+        distance_range=_distance(item["distance"]),
+        location_type=item["locationType"] or None,
+        active=item["active"],
+    )
+    db.add(route)
+    _audit(db, user, "ROUTE_SINGLE_CREATE", "site_movement_route",
+           route_id, _route_dict(route))
+    db.commit()
+    return {"ok": True, "created": True, "record": _route_dict(route)}
+
+
 @router.get("/{site_id}/routes")
 def list_routes(site_id:str,request:Request,kind:str|None=None,db:Session=Depends(get_db)):
     user=get_user(db,request)
