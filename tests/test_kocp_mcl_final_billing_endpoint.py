@@ -37,7 +37,7 @@ def setup_db():
         db.add(SiteWeightFactor(
             factor_id="MCL-M1",site_id="KOCP",factor_type="COAL_AVG_MT_PER_TRIP",
             factor_value=Decimal("35.92"),factor_unit="MT/TRIP",material_id="COAL",
-            destination_location_id="KN5",vehicle_class="EICHER",status="APPROVED",
+            destination_location_id="KN5",vehicle_class="EICHER TIPPER",status="APPROVED",
             source_org="MCL_MONTHLY",reference_no="MCL November approved",
             effective_from=START,effective_to=END,entered_by="ADMIN",
         ))
