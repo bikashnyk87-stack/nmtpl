@@ -1031,15 +1031,14 @@ def save_single_master_record(site_id: str, master_type: str, payload: dict, req
     return {"ok": True, "created": created, "masterType": key, "record": record}
 
 
-@router.get("/KOCP/factor-vehicle-classes")
-def kocp_factor_vehicle_classes(request: Request, db: Session = Depends(get_db)):
-    """MCL users need vehicle classes without broad access to Equipment Masters."""
-    user = get_user(db, request)
-    require_site(db, user, "KOCP")
-    if not user.admin and not has_permission(db, user, "KOCP", "MCL_FACTOR", "VIEW"):
-        raise HTTPException(403, "MCL factor view permission required.")
-    from app.services.kocp_equipment import kocp_equipment_category, kocp_vehicle_classes
-    equipment = db.scalars(select(Equipment).join(
+def _kocp_master_mcl_vehicle_classes(db: Session) -> list[str]:
+    """MCL vehicle classes are distinct types from *active KOCP equipment*.
+
+    Equipment.type is maintained in Equipment Masters. No brand, category,
+    synthetic class or hardcoded fallback is inserted into the class list.
+    """
+    from app.services.kocp_equipment import kocp_role_allowed
+    machines = db.scalars(select(Equipment).join(
         EquipmentSiteAssignment,
         EquipmentSiteAssignment.machine_id == Equipment.machine_id,
     ).where(
@@ -1047,12 +1046,24 @@ def kocp_factor_vehicle_classes(request: Request, db: Session = Depends(get_db))
         EquipmentSiteAssignment.active.is_(True),
         Equipment.active.is_(True),
     )).all()
-    values = {"EICHER", "BHARAT BENZ", "TATA", "VOLVO TIPPER", "VOLVO", "ASHOK LEYLAND"}
-    for machine in equipment:
-        if kocp_equipment_category(machine.type, machine.make_model) != "TIPPER":
+    options = set()
+    for machine in machines:
+        if not kocp_role_allowed(machine.type, "TRANSPORT", machine.make_model):
             continue
-        values.update(kocp_vehicle_classes(machine.type, None, machine.make_model))
-    return sorted(v for v in values if v and v not in {"COAL", "OB", "TRANSPORT"})
+        master_type = " ".join(str(machine.type or "").upper().split())
+        if master_type:
+            options.add(master_type)
+    return sorted(options)
+
+
+@router.get("/KOCP/factor-vehicle-classes")
+def kocp_factor_vehicle_classes(request: Request, db: Session = Depends(get_db)):
+    """MCL readers see only approved Equipment Master types for the site."""
+    user = get_user(db, request)
+    require_site(db, user, "KOCP")
+    if not user.admin and not has_permission(db, user, "KOCP", "MCL_FACTOR", "VIEW"):
+        raise HTTPException(403, "MCL factor view permission required.")
+    return _kocp_master_mcl_vehicle_classes(db)
 
 
 @router.get("/{site_id}/weight-factors")
@@ -1120,6 +1131,13 @@ def create_weight_factor(site_id: str, p: WeightFactorIn, request: Request, db: 
         kind = "OB" if is_ob else "COAL"
         if (typ == "OB_CUM_PER_TRIP") != is_ob:
             raise HTTPException(422, "Coal factors require MT materials; OB factors require CuM materials.")
+        if p.vehicleClass:
+            requested = " ".join(p.vehicleClass.upper().split())
+            if requested not in _kocp_master_mcl_vehicle_classes(db):
+                raise HTTPException(
+                    422, "Vehicle class must be an active KOCP Equipment Master type. "
+                         "Correct the vehicle type in Masters first; no custom or generated classes."
+                )
         if p.routeId:
             route = db.get(SiteMovementRoute, p.routeId)
             if not route or not route.active or route.site_id != site_id:
@@ -1150,7 +1168,7 @@ def create_weight_factor(site_id: str, p: WeightFactorIn, request: Request, db: 
         material_id=p.materialId,
         destination_location_id=p.destinationLocationId,
         route_id=p.routeId,
-        vehicle_class=p.vehicleClass.strip() if p.vehicleClass else None,
+        vehicle_class=" ".join(p.vehicleClass.upper().split()) if p.vehicleClass else None,
         source_org=p.sourceOrg.strip().upper(),
         reference_no=p.referenceNo,
         reference_date=p.referenceDate,
@@ -1178,6 +1196,11 @@ def decide_weight_factor(site_id: str, factor_id: str, p: WeightFactorDecisionIn
             raise HTTPException(409, "This rule has no unloading point/material; create a scoped rule first.")
         if row.status != "DRAFT":
             raise HTTPException(409, "Only draft rules can be approved.")
+        if row.vehicle_class and " ".join(row.vehicle_class.upper().split()) not in _kocp_master_mcl_vehicle_classes(db):
+            raise HTTPException(
+                409, "Vehicle class no longer exists among active KOCP equipment types. "
+                     "Correct Equipment Masters before approval."
+            )
         # Daily and monthly approved rules are separate. Reject overlapping equally scoped rules from the SAME source.
         others = db.scalars(select(SiteWeightFactor).where(
             SiteWeightFactor.site_id == site_id,

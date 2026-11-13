@@ -47,17 +47,14 @@ def kocp_ownership_category(ownership: str | None) -> str:
 
 def kocp_vehicle_classes(asset_type: str | None, group: str | None = None,
                           make_model: str | None = None) -> set[str]:
-    """Matches exact legacy type AND controlled brand/type classes for factors."""
-    text = " ".join((str(asset_type or ""), str(make_model or ""))).upper()
-    classes = {str(asset_type or "").strip().upper(), str(group or "").strip().upper()}
-    category = kocp_equipment_category(asset_type, make_model)
-    classes.add(category)
-    for brand in ("EICHER", "TATA", "BHARAT BENZ", "VOLVO", "ASHOK LEYLAND"):
-        if brand in text:
-            classes.add(brand)
-            classes.add(brand + " " + category)
-    if "BENZ" in text: classes.add("BHARAT BENZ")
-    return {x for x in classes if x}
+    """MCL class is exactly Equipment Master.type, never a generated brand.
+
+    group identifies the Coal/OB operating area and make_model describes the
+    machine, so neither must invent a separate MCL vehicle class. Keeping this
+    normalization in one place makes factor dropdowns and trip valuation agree.
+    """
+    master_type = " ".join(str(asset_type or "").upper().split())
+    return {master_type} if master_type else set()
 
 
 def kocp_role_allowed(asset_type: str | None, role: str,
