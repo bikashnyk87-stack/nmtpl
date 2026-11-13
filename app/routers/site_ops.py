@@ -1107,8 +1107,23 @@ def build_billing(site_id: str, request: Request, period_start: date, period_end
         if site_id == "KOCP":
             stmt = stmt.where(SiteSurveyMeasurement.material_id == material_id)
         survey = db.scalars(stmt.order_by(SiteSurveyMeasurement.approved_at.desc()).limit(1)).first()
+    monthly = None
+    # MCL's final approved *average per unloading point/vehicle type* is a
+    # second certified basis. Never substitute daily operating averages.
+    if site_id == "KOCP" and not survey:
+        monthly = month_end_factor_reconciliation(
+            db, site_id=site_id, material_id=material_id,
+            from_date=period_start, to_date=period_end, is_ob=is_ob,
+        )
     cert_mt = _decimal(survey.measured_mt) if survey and survey.measured_mt is not None and (site_id != "KOCP" or not is_ob) else None
     cert_cum = _decimal(survey.measured_cum) if survey and (site_id != "KOCP" or is_ob) else None
+    if monthly:
+        if is_ob:
+            cert_cum = Decimal(monthly["total"])
+        else:
+            cert_mt = Decimal(monthly["total"])
+    basis = "MCL_SURVEY" if survey else ("MCL_MONTHLY_AVERAGE" if monthly else None)
+    snapshot = json.dumps(monthly, sort_keys=True) if monthly else None
     bid = f"BILL-{site_id}-{uuid4().hex[:14].upper()}"
     row = SiteBillingReconciliation(
         billing_id=bid, site_id=site_id, period_start=period_start, period_end=period_end,
@@ -1119,6 +1134,7 @@ def build_billing(site_id: str, request: Request, period_start: date, period_end
         variance_mt=(cert_mt - _decimal(op_mt)) if cert_mt is not None else None,
         variance_cum=(cert_cum - _decimal(op_cum)) if cert_cum is not None else None,
         source_measurement_id=survey.measurement_id if survey else None,
+        billing_basis=basis, factor_snapshot_json=snapshot,
         status="DRAFT", created_by=user.login_id,
     )
     db.add(row)
@@ -1126,15 +1142,18 @@ def build_billing(site_id: str, request: Request, period_start: date, period_end
            after={"periodStart": period_start, "periodEnd": period_end,
                   "materialId": material_id, "operationalMt": str(op_mt),
                   "operationalCum": str(op_cum),
-                  "surveyId": survey.measurement_id if survey else None})
+                  "surveyId": survey.measurement_id if survey else None,
+                  "billingBasis": basis, "monthlyFactorSnapshot": monthly})
     db.commit()
-    return {"ok": True, "billingId": bid, "certified": survey is not None}
+    return {"ok": True, "billingId": bid, "certified": survey is not None or monthly is not None, "billingBasis": basis}
 
 @router.get("/{site_id}/billing")
 def list_billing(site_id:str,request:Request,db:Session=Depends(get_db)):
     user=get_user(db,request); site_id=require_site(db,user,site_id); _require_any(db,user,site_id,"BILLING")
     rows=db.scalars(select(SiteBillingReconciliation).where(SiteBillingReconciliation.site_id==site_id).order_by(SiteBillingReconciliation.period_end.desc(),SiteBillingReconciliation.created_at.desc()).limit(1000)).all()
-    return [{"billingId":r.billing_id,"periodStart":r.period_start,"periodEnd":r.period_end,"materialId":r.material_id,"operationalMt":r.operational_mt,"operationalCum":r.operational_cum,"certifiedMt":r.certified_mt,"certifiedCum":r.certified_cum,"billableMt":r.billable_mt,"billableCum":r.billable_cum,"varianceMt":r.variance_mt,"varianceCum":r.variance_cum,"surveyId":r.source_measurement_id,"status":r.status} for r in rows]
+    return [{"billingId":r.billing_id,"periodStart":r.period_start,"periodEnd":r.period_end,"materialId":r.material_id,"operationalMt":r.operational_mt,"operationalCum":r.operational_cum,"certifiedMt":r.certified_mt,"certifiedCum":r.certified_cum,"billableMt":r.billable_mt,"billableCum":r.billable_cum,"varianceMt":r.variance_mt,"varianceCum":r.variance_cum,"surveyId":r.source_measurement_id,"billingBasis":r.billing_basis,
+             "factorBreakdown":json.loads(r.factor_snapshot_json) if r.factor_snapshot_json else None,
+             "status":r.status} for r in rows]
 
 
 @router.post("/{site_id}/billing/{billing_id}/decision")
@@ -1143,11 +1162,38 @@ def decide_billing(site_id:str,billing_id:str,p:SiteDecisionIn,request:Request,d
     row=db.get(SiteBillingReconciliation,billing_id)
     if not row or row.site_id!=site_id: raise HTTPException(404,"Billing reconciliation not found")
     if p.action == "APPROVE" and site_id == "KOCP":
-        if not row.source_measurement_id or (row.billable_mt is None and row.billable_cum is None):
-            raise HTTPException(409, "Cannot approve without matching MCL certified Coal MT or OB CuM.")
-        survey = db.get(SiteSurveyMeasurement, row.source_measurement_id)
-        if not survey or survey.status != "APPROVED" or survey.material_id != row.material_id:
-            raise HTTPException(409, "The MCL survey is missing, unapproved or belongs to another material.")
+        if row.status != "DRAFT":
+            raise HTTPException(409, "Only draft billing periods can be approved.")
+        if row.billing_basis == "MCL_MONTHLY_AVERAGE":
+            material = db.get(SiteMaterial, row.material_id)
+            if not material or not row.factor_snapshot_json:
+                raise HTTPException(409, "Final approved MCL factor snapshot is missing.")
+            is_ob = str(material.default_unit or "").upper() in {"CUM","M3","M³"}
+            latest = month_end_factor_reconciliation(
+                db, site_id=site_id, material_id=row.material_id,
+                from_date=row.period_start, to_date=row.period_end, is_ob=is_ob,
+            )
+            if not latest or json.dumps(latest, sort_keys=True) != row.factor_snapshot_json:
+                raise HTTPException(409, "MCL month-end averages or posted trips changed. Rebuild the billing draft.")
+            certified = row.billable_cum if is_ob else row.billable_mt
+            if certified is None or Decimal(str(certified)) != Decimal(latest["total"]):
+                raise HTTPException(409, "Final MCL certified billing value does not match approved factors.")
+        else:
+            if not row.source_measurement_id or (row.billable_mt is None and row.billable_cum is None):
+                raise HTTPException(409, "Cannot approve without matching approved MCL certified quantity or monthly averages.")
+            survey = db.get(SiteSurveyMeasurement, row.source_measurement_id)
+            if not survey or survey.status != "APPROVED" or survey.material_id != row.material_id:
+                raise HTTPException(409, "The MCL survey is missing, unapproved or belongs to another material.")
+        existing = db.scalar(select(SiteBillingReconciliation.billing_id).where(
+            SiteBillingReconciliation.site_id == site_id,
+            SiteBillingReconciliation.material_id == row.material_id,
+            SiteBillingReconciliation.period_start == row.period_start,
+            SiteBillingReconciliation.period_end == row.period_end,
+            SiteBillingReconciliation.status == "APPROVED",
+            SiteBillingReconciliation.billing_id != row.billing_id,
+        ).limit(1))
+        if existing:
+            raise HTTPException(409, "This Coal/OB period is already approved. Revise the existing billing control first.")
     if p.action not in {"APPROVE","REJECT"}: raise HTTPException(422,"Only APPROVE or REJECT is supported")
     row.status="APPROVED" if p.action=="APPROVE" else "REJECTED"; row.approved_by=user.login_id if p.action=="APPROVE" else None; row.approved_at=datetime.now(timezone.utc) if p.action=="APPROVE" else None; _audit(db,user,site_id,p.action+"_BILLING","site_billing_reconciliation",billing_id,reason=p.reason); db.commit(); return {"ok":True,"status":row.status}
 
