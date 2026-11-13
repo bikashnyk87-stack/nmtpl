@@ -79,11 +79,11 @@ async function renderKocpPointFactors(){
     api('/api/sites/KOCP/weight-factors'),
     api('/api/sites/KOCP/routes'),
     api('/api/sites/KOCP/material-types'),
-    api('/api/sites/KOCP/masters/EQUIPMENT/records?limit=1000')
+    api('/api/sites/KOCP/factor-vehicle-classes')
   ]);
   koPointState.rules=rules;koPointState.routes=routes;
   koPointState.materials=catalog;
-  koPointState.vehicleClasses=koFactorClassesFromEquipment(equipment);
+  koPointState.vehicleClasses=equipment;
   const date=state.ctx.operatingDate;
   const form=`<p class="simple-note">Enter DAILY provisional averages for operating trips and FINAL MCL monthly averages for billing in separate records. Each must be approved and supported by its source document; neither silently overwrites the other.</p>
     <div class="form-grid">
