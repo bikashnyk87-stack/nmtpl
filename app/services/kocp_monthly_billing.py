@@ -6,6 +6,7 @@ calculate the final billable amount. All trips must have a matching rule.
 """
 from __future__ import annotations
 from decimal import Decimal, ROUND_HALF_UP
+from hashlib import sha256
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -50,7 +51,15 @@ def month_end_factor_reconciliation(db: Session, *, site_id: str, material_id: s
     } if machine_ids else {}
     total = Decimal("0")
     details = {}
+    trip_digest = sha256()
     for trip in trips:
+        # Bind the approval to the source trip identities and revisions,
+        # not only the aggregate count (which could stay the same).
+        trip_digest.update((
+            f"{trip.trip_id}|{trip.version}|{trip.operating_date}|"
+            f"{trip.vehicle_id}|{trip.destination_location_id}|"
+            f"{trip.route_id}|{trip.material_id}|{trip.shift}\n"
+        ).encode("utf-8"))
         machine = vehicles.get(trip.vehicle_id)
         try:
             rate = choose_point_factor(
@@ -82,6 +91,7 @@ def month_end_factor_reconciliation(db: Session, *, site_id: str, material_id: s
         "basis": "MCL_MONTHLY_AVERAGE",
         "total": str(total.quantize(QTY, rounding=ROUND_HALF_UP)),
         "trips": len(trips),
+        "tripChecksum": trip_digest.hexdigest(),
         "unit": "CuM" if is_ob else "MT",
         "rules": list(details.values()),
         "periodStart": from_date.isoformat(), "periodEnd": to_date.isoformat(),
