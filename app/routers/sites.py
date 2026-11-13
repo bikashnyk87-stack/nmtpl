@@ -1031,6 +1031,30 @@ def save_single_master_record(site_id: str, master_type: str, payload: dict, req
     return {"ok": True, "created": created, "masterType": key, "record": record}
 
 
+@router.get("/KOCP/factor-vehicle-classes")
+def kocp_factor_vehicle_classes(request: Request, db: Session = Depends(get_db)):
+    """MCL users need vehicle classes without broad access to Equipment Masters."""
+    user = get_user(db, request)
+    require_site(db, user, "KOCP")
+    if not user.admin and not has_permission(db, user, "KOCP", "MCL_FACTOR", "VIEW"):
+        raise HTTPException(403, "MCL factor view permission required.")
+    from app.services.kocp_equipment import kocp_equipment_category, kocp_vehicle_classes
+    equipment = db.scalars(select(Equipment).join(
+        EquipmentSiteAssignment,
+        EquipmentSiteAssignment.machine_id == Equipment.machine_id,
+    ).where(
+        EquipmentSiteAssignment.site_id == "KOCP",
+        EquipmentSiteAssignment.active.is_(True),
+        Equipment.active.is_(True),
+    )).all()
+    values = {"EICHER", "BHARAT BENZ", "TATA", "VOLVO TIPPER", "VOLVO", "ASHOK LEYLAND"}
+    for machine in equipment:
+        if kocp_equipment_category(machine.type, machine.make_model) != "TIPPER":
+            continue
+        values.update(kocp_vehicle_classes(machine.type, None, machine.make_model))
+    return sorted(v for v in values if v and v not in {"COAL", "OB", "TRANSPORT"})
+
+
 @router.get("/{site_id}/weight-factors")
 def get_weight_factors(site_id: str, request: Request, db: Session = Depends(get_db)):
     user = get_user(db, request)
