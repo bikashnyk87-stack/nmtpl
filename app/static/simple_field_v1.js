@@ -575,7 +575,7 @@ function syncKocpRoutes(){
 function tripGridRows(kind,count=10,start=0){
   const isSocp=siteId==='SOCP';
   return Array.from({length:count},(_,index)=>{const i=start+index;return `<tr class="simple-trip-row" data-i="${i}">
-    <td>${i+1}${siteId==='KOCP'?`<button type="button" class="kocp-row-copy" title="Copy selections into next blank row (GP is not copied)" onclick="copyKocpTripRow(${i})">Copy ↓</button>`:''}</td>
+    <td>${i+1}</td>
     <td><select class="stShift">${shiftOpts(simpleShift())}</select></td>
     <td>${lookupMarkup(`stVehicle${i}`,'ASSET','Vehicle','TRANSPORT,VEHICLE,TIPPER,DUMPER')}</td>
     <td>${lookupMarkup(`stLoader${i}`,'ASSET',siteId==='KOCP'?'Loader / Excavator':'Loader','LOADING,LOADER,EXCAVATOR')}</td>
@@ -628,6 +628,7 @@ async function renderSimpleTrips(kind='TRIP'){
         ${defaultLookupBox('stDefaultMaterial','Default Material','MATERIAL')}
         <div class="field"><span>Rows</span><select id="stRows" onchange="rebuildSimpleTripRows()"><option>5</option><option selected>10</option><option>20</option><option>30</option></select></div>
         <button class="btn outline apply-defaults-btn" onclick="applyTripDefaults()">Apply Defaults to Blank Rows</button>
+        <button class="btn outline kocp-copy-down" type="button" onclick="copyKocpLastTripRow()" title="Copy last entered row into next blank row; GP/reference remains empty">Copy Down ↓</button>
         <button class="btn outline" type="button" onclick="addSimpleTripRows(10)">+10 Rows</button>
         <button class="btn outline" type="button" onclick="addSimpleTripRows(20)">+20 Rows</button>
         <span class="row-count-badge" id="stRowCount">10 rows</span>
@@ -638,7 +639,7 @@ async function renderSimpleTrips(kind='TRIP'){
   const recentHeads=isSocp?['Shift','Vehicle','Loader','Destination','GP','MT','CuM','Basis']:['Shift','Vehicle','Loader/Excavator','Route / Distance','Source','Destination','Material','GP','MT','CuM','Basis','Status','Correct'];
   return simplePageHead(title,desc)+`<div id="simpleTripForm" class="simple-form batch-entry-form">
     ${defaults}
-    <div class="entry-grid-note"><b>Fast entry:</b> Set repeated values above, apply defaults, then use <b>Copy ↓</b> on any row to duplicate its selections into the next blank row. GP stays blank to prevent duplicate references.</div>
+    <div class="entry-grid-note"><b>Fast entry:</b> Set repeated values above, apply defaults, then use the single <b>Copy Down</b> button to copy the last entered row to the next blank row. GP/reference stays blank.</div>
     ${siteId==='KOCP'?'<div class="kocp-entry-search"><label>Find in entry rows <input type="search" id="koTripEntrySearch" placeholder="Vehicle, loader, source, destination, GP" oninput="filterKocpEntryRows()"></label><button type="button" class="btn outline" onclick="if($(\'koTripEntrySearch\')){$(\'koTripEntrySearch\').value=\'\';filterKocpEntryRows()}">Show all rows</button></div>':''}
     <div class="simple-table-wrap"><table class="simple-grid-table software-entry-grid trip-entry-grid"><thead><tr>${heads}</tr></thead><tbody id="simpleTripRows">${tripGridRows('TRIP',10)}</tbody></table></div>
     ${siteId==='KOCP'?`<div class="kocp-hmr-inline">
@@ -817,6 +818,17 @@ function rebuildSimpleTripRows(){
   saveDraft('simpleTripForm',draftKey(state.module));
   refreshEntryRowCounts();
 }
+function copyKocpLastTripRow(){
+  if(siteId!=='KOCP')return;
+  const rows=[...document.querySelectorAll('#simpleTripRows .simple-trip-row')];
+  const source=[...rows].reverse().find(r=>{
+    const i=r.dataset.i;
+    const v=$('stVehicle'+i),gp=$('stGp'+i);
+    return !r.dataset.saved && (Boolean(v?.value) || Boolean(gp?.value.trim()));
+  });
+  if(!source)return toast('Enter or select a vehicle in a row before using Copy Down.','bad');
+  copyKocpTripRow(Number(source.dataset.i));
+}
 function copyKocpTripRow(index){
   if(siteId!=='KOCP')return;
   const rows=[...document.querySelectorAll('.simple-trip-row')];
@@ -824,8 +836,10 @@ function copyKocpTripRow(index){
   if(!from)return;
   let after=rows.filter(r=>Number(r.dataset.i)>Number(index)).find(r=>{
     const i=r.dataset.i;
-    return !['stVehicle','stLoader','stSource','stDest','stMaterial'].some(id=>$(id+i)?.value||
-      $(id+i+'Text')?.value.trim())&&!$('stGp'+i)?.value.trim();
+    // Default loader/material/location values may already be prefilled.
+    // A row with no vehicle and no GP is still the next blank trip.
+    return !r.dataset.saved && !$('stVehicle'+i)?.value &&
+      !$('stVehicle'+i+'Text')?.value.trim() && !$('stGp'+i)?.value.trim();
   });
   if(!after){
     if(rows.length>=200)return toast('Maximum 200 rows. Save the current sheet first.','bad');
@@ -1653,7 +1667,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,applyKocpFuelVehicleFilters,setKocpFuelMonthToDate,filterKocpFuelVehicles,downloadKocpFuelVehicleCsv,filterKocpFuelDetails,filterKocpHsdEntryRows,filterKocpHsdSavedRecords,filterKocpSavedTrips,filterKocpEntryRows,loadKocpTripHistory,copyKocpTripRow,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,applyKocpFuelVehicleFilters,setKocpFuelMonthToDate,filterKocpFuelVehicles,downloadKocpFuelVehicleCsv,filterKocpFuelDetails,filterKocpHsdEntryRows,filterKocpHsdSavedRecords,filterKocpSavedTrips,filterKocpEntryRows,loadKocpTripHistory,copyKocpTripRow,copyKocpLastTripRow,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
