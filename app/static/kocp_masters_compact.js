@@ -12,7 +12,7 @@
   const x=v=>esc(v===undefined||v===null?'':String(v));
   const st=v=>'<span class="kcm-status'+(v?'':' off')+'">'+(v?'Active':'Inactive')+'</span>';
   const action=(label,fn,cls)=>'<button type="button" class="kcm-btn '+(cls||'')+'" onclick="'+fn+'">'+label+'</button>';
-  const typeKey=()=>vm.tab==='MATERIALS'?vm.materialKind:vm.tab;
+  const typeKey=()=>vm.tab==='MATERIALS'?vm.materialKind:vm.tab==='LOCATIONS'?'LOCATION':vm.tab;
   const count=t=>t==='COAL'||t==='OB'?(vm.routes[t]||[]).length:t==='MATERIALS'?vm.summary.materials||0:
     t==='EMPLOYEE'?vm.summary.employees||0:t==='EQUIPMENT'?vm.summary.equipment||0:
     t==='LOCATIONS'?vm.locations.length:(vm.summary.imports||[]).length;
@@ -209,6 +209,9 @@
       field('effectiveFrom','Effective From',r.effectiveFrom?.slice(0,10),'date'),
       field('active','Active',r.active??true,'checkbox')
     ];
+    if(vm.tab==='MATERIALS'&&vm.edit){
+      fields.unshift('<div class="kcm-note">Editing the selected material. Its code identifies linked production records; change descriptive fields here. Create a separate material with Add Single Entry if a new code is needed.</div>');
+    }
     if(vm.tab==='EQUIPMENT'){
       fields.unshift('<div class="kcm-note"><b>Vehicle classes come from this Equipment Master.</b> For transport vehicles, enter the full approved type (for example, the manufacturer and tipper type) consistently. The MCL dropdown uses active KOCP vehicle types only. There are no built-in class options.</div>');
     }
@@ -285,6 +288,8 @@
     try{
       const body={},idFields=[...document.querySelectorAll('.kcm-form [id^=kcmF_]')];
       idFields.forEach(el=>body[el.id.replace('kcmF_','')]=el.type==='checkbox'?el.checked:el.value.trim()||null);
+      if(vm.tab==='MATERIALS'&&vm.edit&&String(body.code||'').toUpperCase()!==String(vm.edit.code||'').toUpperCase())
+        throw new Error('Material code cannot change on Edit. Use Add Single Entry for a new code.');
       if(vm.tab==='COAL'||vm.tab==='OB'){
         const url=vm.edit?'/api/sites/KOCP/routes/'+vm.edit.routeId:
           '/api/sites/KOCP/routes/'+vm.tab+'/records';
