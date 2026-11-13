@@ -678,8 +678,68 @@ def kocp_point_wise_report(
     totals = {kind: {"trips": vals["trips"], "quantity": str(vals["quantity"]),
                      "weightedAverage": str(vals["quantity"] / vals["trips"]) if vals["trips"] else None,
                      "unit": "CuM" if kind == "OB" else "MT"} for kind, vals in overall.items()}
+    # A separate categorical view shows movement by actual physical category,
+    # make/vehicle class and unloading point. This does not change saved trips.
+    vehicle_groups = db.execute(select(
+        SiteTrip.vehicle_id, SiteTrip.material_id, SiteTrip.destination_location_id,
+        SiteTrip.route_id, func.count(SiteTrip.trip_id),
+        func.coalesce(func.sum(SiteTrip.quantity_mt), 0),
+        func.coalesce(func.sum(SiteTrip.quantity_cum), 0),
+    ).where(
+        SiteTrip.site_id == "KOCP", SiteTrip.status == "POSTED",
+        SiteTrip.operating_date >= from_date, SiteTrip.operating_date <= to_date,
+    ).group_by(
+        SiteTrip.vehicle_id, SiteTrip.material_id,
+        SiteTrip.destination_location_id, SiteTrip.route_id,
+    )).all()
+    if len(vehicle_groups) > 10000:
+        raise HTTPException(422, "Too many category groups. Choose a shorter range.")
+    vehicle_ids = sorted({x[0] for x in vehicle_groups if x[0]})
+    equipment_by_id = {
+        e.machine_id: e for e in db.scalars(select(Equipment).where(
+            Equipment.machine_id.in_(vehicle_ids)
+        ))
+    } if vehicle_ids else {}
+    category_agg = {}
+    for machine_id, mid, dest, route_id, ntrips, mt, cum in vehicle_groups:
+        machine = equipment_by_id.get(machine_id)
+        raw = (" ".join((str(machine.type or ""), str(machine.make_model or ""))).upper()
+               if machine else "")
+        category = kocp_equipment_category(machine.type, machine.make_model) if machine else "UNMAPPED"
+        brands = ("BHARAT BENZ", "EICHER", "TATA", "VOLVO", "ASHOK LEYLAND")
+        make = next((brand for brand in brands if brand in raw),
+                    str(machine.type or "Unmapped").upper() if machine else "UNMAPPED")
+        owner = kocp_ownership_category(machine.ownership if machine else None)
+        material = materials.get(mid)
+        ob = bool(material and str(material.default_unit or "").upper() in {"CUM","M3","M³"})
+        kind = "OB" if ob else "COAL"
+        qty = Decimal(str(cum if ob else mt))
+        key = (kind, mid, dest, route_id, category, make, owner)
+        if key not in category_agg:
+            category_agg[key] = {
+                "kind": kind, "materialId": mid,
+                "material": material.name if material else "Unknown",
+                "destination": destinations[dest].name if dest in destinations else "Unmapped",
+                "routeId": route_id,
+                "movement": routes[route_id].route_group if route_id in routes else "Unclassified",
+                "equipmentCategory": category, "vehicleClass": make,
+                "ownership": owner, "unit": "CuM" if ob else "MT",
+                "trips": 0, "quantity": Decimal("0"),
+            }
+        category_agg[key]["trips"] += int(ntrips)
+        category_agg[key]["quantity"] += qty
+    category_summary = []
+    for row in sorted(category_agg.values(), key=lambda r: (
+        r["kind"], r["material"], r["destination"], r["vehicleClass"], r["ownership"]
+    )):
+        ntrips = row["trips"]
+        category_summary.append({
+            **row, "quantity": str(row["quantity"]),
+            "weightedAverage": str(row["quantity"] / ntrips) if ntrips else None,
+        })
     return {"fromDate": from_date, "toDate": to_date,
-            "pointSummary": summaries, "dailyShift": daily, "totals": totals}
+            "pointSummary": summaries, "dailyShift": daily, "totals": totals,
+            "categorySummary": category_summary}
 
 
 @router.get("/TIOM/production/simple")
