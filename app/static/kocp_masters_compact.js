@@ -266,7 +266,7 @@
     updateGrid();
   }
   function kcmGo(tab){vm.tab=tab;vm.search='';vm.page=1;vm.importOpen=false;vm.formOpen=false;vm.edit=null;vm.preview=null;render()}
-  function kcmKind(kind){vm.materialKind=kind;vm.search='';vm.page=1;vm.importOpen=false;vm.preview=null;render()}
+  function kcmKind(kind){vm.materialKind=kind;vm.search='';vm.page=1;vm.importOpen=false;vm.preview=null;vm.formOpen=false;vm.edit=null;render()}
   function kcmSearch(v){vm.search=v;vm.page=1;updateGrid()}
   function kcmPage(n){vm.page+=n;updateGrid()}
   function kcmToggleImport(){vm.importOpen=!vm.importOpen;vm.formOpen=false;vm.preview=null;render()}
@@ -297,6 +297,13 @@
           headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
       }else{
         const kind=vm.tab==='MATERIALS'?'MATERIAL':vm.tab==='LOCATIONS'?'LOCATION':vm.tab;
+        if(vm.tab==='MATERIALS'){
+          body.materialKind=vm.materialKind;
+          const expected=vm.materialKind==='OB'?'CUM':'MT';
+          if(String(body.defaultUnit||'').toUpperCase()!==expected||
+            String(body.billableUnit||expected).toUpperCase()!==expected)
+            throw new Error('Choose '+expected+' for '+vm.materialKind+' materials; update the unit in its master.');
+        }
         body.createOnly=!vm.edit;
         await api('/api/sites/KOCP/masters/'+kind+'/records',{method:'POST',
           headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
