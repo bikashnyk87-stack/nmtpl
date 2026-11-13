@@ -16,13 +16,56 @@ def kocp_asset_allowed(group: str | None, activity: str) -> bool:
     return activity in labels
 
 
-def kocp_role_allowed(asset_type: str | None, role: str) -> bool:
-    kind = str(asset_type or "").strip().upper()
+def kocp_equipment_category(asset_type: str | None, make_model: str | None = None) -> str:
+    """Canonical *physical* category. Never confuse Coal/OB group or ownership."""
+    typ = str(asset_type or "").upper()
+    model = str(make_model or "").upper()
+    # The L150H wheel loader has accidentally been called 'Tripper' in masters.
+    if "L150H" in model or "L150H" in typ or "LOADER" in typ or "LOADER" in model:
+        return "LOADER"
+    if any(k in typ + " " + model for k in ("EXCAVATOR", "EC480", "BACKHOE", "HITACHI")):
+        return "EXCAVATOR"
+    if any(k in typ for k in ("TIPPER", "TRIPPER", "DUMPER")):
+        return "TIPPER"
+    if "DOZER" in typ: return "DOZER"
+    if "GRADER" in typ: return "GRADER"
+    if "DRILL" in typ: return "DRILL"
+    if "TANKER" in typ: return "TANKER"
+    if any(k in typ for k in ("BOLERO", "PICK", "CAR", "VAN", "SUV", "BIKE", "HERO", "TVS")):
+        return "LMV"
+    return "OTHER"
+
+
+def kocp_ownership_category(ownership: str | None) -> str:
+    raw = str(ownership or "").strip().upper()
+    if raw in {"OWN", "OWNED", "NMTPL", "COMPANY", "OWN VEHICLE"}:
+        return "OWN"
+    if raw in {"HIRED", "HIRE", "RENTED", "RENTAL"}:
+        return "HIRED"
+    return "THIRD PARTY" if raw else "UNSPECIFIED"
+
+
+def kocp_vehicle_classes(asset_type: str | None, group: str | None = None,
+                          make_model: str | None = None) -> set[str]:
+    """Matches exact legacy type AND controlled brand/type classes for factors."""
+    text = " ".join((str(asset_type or ""), str(make_model or ""))).upper()
+    classes = {str(asset_type or "").strip().upper(), str(group or "").strip().upper()}
+    category = kocp_equipment_category(asset_type, make_model)
+    classes.add(category)
+    for brand in ("EICHER", "TATA", "BHARAT BENZ", "VOLVO", "ASHOK LEYLAND"):
+        if brand in text:
+            classes.add(brand)
+            classes.add(brand + " " + category)
+    if "BENZ" in text: classes.add("BHARAT BENZ")
+    return {x for x in classes if x}
+
+
+def kocp_role_allowed(asset_type: str | None, role: str,
+                      make_model: str | None = None) -> bool:
+    category = kocp_equipment_category(asset_type, make_model)
     role = str(role or "").strip().upper()
-    if role == "LOADING":
-        return any(x in kind for x in ("LOADER", "EXCAVATOR", "BACKHOE", "HITACHI"))
-    if role == "TRANSPORT":
-        return any(x in kind for x in ("TRIPPER", "TIPPER", "DUMPER"))
+    if role == "LOADING": return category in {"LOADER", "EXCAVATOR"}
+    if role == "TRANSPORT": return category == "TIPPER"
     return False
 
 
