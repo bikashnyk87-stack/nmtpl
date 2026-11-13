@@ -146,6 +146,22 @@ def _catalog(db,kind=None):
                 "storedCode":matched.code if matched else None,
                 "active":matched.active if matched else False,
                 "status":"EXISTS" if matched else "MISSING"})
+    # Keep the imported canonical material mappings for backward compatibility.
+    # Single-entry Material Masters may include additional valid types: expose
+    # them dynamically in Coal/OB entry and MCL selectors instead of hiding them.
+    for row in allrows:
+        unit = str(row.default_unit or "").upper()
+        k = "OB" if unit in {"CUM", "M3", "M³"} else "COAL" if unit == "MT" else None
+        if not k or (kind and k != kind):
+            continue
+        if any(_norm(item["name"]) == _norm(row.name)
+               and str(item["unit"]).upper() == unit for item in result.get(k, [])):
+            continue
+        result[k].append({
+            "typeCode": row.code, "name": row.name, "unit": unit,
+            "materialId": row.site_material_id, "storedCode": row.code,
+            "active": bool(row.active), "status": "EXISTS",
+        })
     return result
 
 
