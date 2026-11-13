@@ -151,11 +151,42 @@ async function koPointSaveRule(){
     await render();
   }catch(e){toast(e.message,'bad')}
 }
+let koPointReportData=null;
+function koPointCategoryTable(rows){
+  return recentTable(
+    ['Coal / OB','Material','Unloading point','Movement','Equipment category','Vehicle make / class','Ownership','Trips','Quantity','Weighted average'],
+    (rows||[]).map(x=>`<tr><td>${esc(x.kind)}</td><td>${esc(x.material)}</td>
+      <td>${esc(x.destination)}</td><td>${esc(x.movement)}</td><td>${esc(x.equipmentCategory)}</td>
+      <td>${esc(x.vehicleClass)}</td><td>${esc(x.ownership)}</td><td>${fmt(x.trips)}</td>
+      <td>${fmt(x.quantity,3)} ${esc(x.unit)}</td>
+      <td>${x.weightedAverage==null?'—':fmt(x.weightedAverage,3)+' '+esc(x.unit)+'/trip'}</td></tr>`)
+  );
+}
+function koPointDownloadCategoryCsv(){
+  const data=koPointReportData;
+  if(!data)return toast('Open the category report first.','bad');
+  const quote=v=>'"'+String(v??'').replace(/"/g,'""')+'"';
+  const rows=[
+    ['KOCP OPERATIONAL CATEGORY SUMMARY — NOT FINAL MCL BILLING'],
+    ['From',data.fromDate,'To',data.toDate],
+    ['Kind','Material','Destination','Movement','Equipment Category','Vehicle Class','Ownership','Trips','Quantity','Unit','Weighted Average'],
+    ...(data.categorySummary||[]).map(r=>[
+      r.kind,r.material,r.destination,r.movement,r.equipmentCategory,
+      r.vehicleClass,r.ownership,r.trips,r.quantity,r.unit,r.weightedAverage,
+    ]),
+  ];
+  const csv='\uFEFF'+rows.map(row=>row.map(quote).join(',')).join('\r\n');
+  const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
+  const el=document.createElement('a');el.href=url;
+  el.download='KOCP_Operational_Category_'+data.fromDate+'_to_'+data.toDate+'.csv';
+  document.body.appendChild(el);el.click();el.remove();URL.revokeObjectURL(url);
+}
 async function renderKocpPointReport(from,to){
   const day=state.ctx.operatingDate;
   from=from||day.slice(0,8)+'01';to=to||day;
   const p=new URLSearchParams({from_date:from,to_date:to});
   const data=await api('/api/site-ops/KOCP/reports/point-wise?'+p.toString());
+  koPointReportData=data;
   function grid(rows){
     return recentTable(['Date','Shift','Material','Unloading point','Movement / Distance','Trips','Quantity','Weighted avg/trip','No MCL factor'],rows.map(x=>
       `<tr><td>${esc(x.date||'TOTAL')}</td><td>${esc(x.shift||'All')}</td><td>${esc(x.material)}</td>
@@ -176,10 +207,15 @@ async function renderKocpPointReport(from,to){
     ?'<p class="simple-note">Showing first 1,000 shift rows; narrow the date range to see the remaining '+(data.dailyShift.length-1000)+' records.</p>':'';
   const form=`<div class="toolbar"><label>From <input id="koReportFrom" type="date" value="${esc(from)}"></label>
     <label>To <input id="koReportTo" type="date" value="${esc(to)}"></label>
-    <button class="btn primary" onclick="koPointReloadReport()">Show Report</button></div>`;
+    <button class="btn primary" onclick="koPointReloadReport()">Show Report</button>
+    <button class="btn outline" onclick="koPointDownloadCategoryCsv()">Download Category CSV</button></div>`;
   return pageHead('KOCP Point-wise Production Report','Calculated from posted Coal and OB trips. MT and CuM remain separate.')+
     context()+panel('Reporting period',form)+summary('COAL')+summary('OB')+
-    panel('Date & shift details',details+grid(data.dailyShift.slice(0,1000)),data.dailyShift.length+' groups');
+    panel('Date & shift details',details+grid(data.dailyShift.slice(0,1000)),data.dailyShift.length+' groups')+
+    panel('Category-wise Coal and OB summary',
+      '<p class="simple-note">Physical machine categories and ownership aliases are standardized for reporting. Coal is in MT, OB in CuM. These remain <b>operating quantities</b>; final billable figures are set only in Billing using approved MCL monthly factors or survey.</p>'+
+      koPointCategoryTable(data.categorySummary||[]),
+      (data.categorySummary||[]).length+' category combinations');
 }
 async function koPointReloadReport(){
   try{$('workspace').innerHTML=await renderKocpPointReport($('koReportFrom').value,$('koReportTo').value);}
@@ -194,3 +230,5 @@ window.renderKocpPointReport=renderKocpPointReport;
 window.renderFactor=renderKocpPointFactors;
 
 window.koPointSourceChanged=koPointSourceChanged;
+
+window.koPointDownloadCategoryCsv=koPointDownloadCategoryCsv;
