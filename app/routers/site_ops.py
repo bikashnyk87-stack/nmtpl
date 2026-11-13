@@ -55,8 +55,10 @@ from app.site_models import (
 )
 from app.services.kocp_hsd_stock import evaluate_hsd_stock
 from app.services.kocp_factor_rules import resolve_kocp_point_factor
+from app.services.kocp_monthly_billing import month_end_factor_reconciliation
 from app.services.kocp_equipment import (
     kocp_asset_allowed, kocp_role_allowed, kocp_asset_display,
+    kocp_equipment_category, kocp_ownership_category,
 )
 from app.services.site_context import resolve_site_context
 from app.maintenance_models import MaintenanceBreakdown
@@ -230,7 +232,7 @@ def operational_lookup(site_id: str, request: Request, kind: str, q: str = "", l
                 # Other KOCP modules can use general asset search without an
                 # activity/role filter; the Coal/OB entry screen always supplies both.
                 if activity and not (kocp_asset_allowed(x.group, activity)
-                        and kocp_role_allowed(x.type, role)):
+                        and kocp_role_allowed(x.type, role, x.make_model)):
                     continue
                 label, sub, rental = kocp_asset_display(
                     x.machine_id, x.door_no, x.vehicle_no,
@@ -388,7 +390,7 @@ def _validated_simple_trip_fields(db: Session, site_id: str, payload: dict, oper
             selected_machine = db.get(Equipment, selected_id) if selected_id else None
             if selected_machine and not (
                 kocp_asset_allowed(selected_machine.group, movement_kind)
-                and kocp_role_allowed(selected_machine.type, expected_role)
+                and kocp_role_allowed(selected_machine.type, expected_role, selected_machine.make_model)
             ):
                 raise HTTPException(
                     422, f"Equipment ID {selected_id} is not a {movement_kind} "
@@ -423,6 +425,7 @@ def _validated_simple_trip_fields(db: Session, site_id: str, payload: dict, oper
             shift=shift, destination_id=destination, route_id=route_id,
             material_id=material, vehicle_type=selected_vehicle.type if selected_vehicle else None,
             vehicle_group=selected_vehicle.group if selected_vehicle else None,
+            vehicle_model=selected_vehicle.make_model if selected_vehicle else None,
         )
         if is_ob:
             mt = None
