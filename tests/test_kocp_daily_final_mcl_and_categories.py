@@ -25,7 +25,7 @@ DAY = date(2026, 11, 1)
 END = date(2026, 11, 30)
 
 
-def factor(name, source="DAILY_REPORT", vehicle_class="EICHER", value="35.92"):
+def factor(name, source="DAILY_REPORT", vehicle_class="EICHER TIPPER", value="35.92"):
     return SimpleNamespace(
         factor_id=name, status="APPROVED", source_org=source,
         effective_from=DAY, effective_to=END, operating_date=None, shift=None,
@@ -58,10 +58,10 @@ def test_ownership_aliases_are_canonical_without_rewriting_master():
     assert kocp_ownership_category("GMPL") == "THIRD PARTY"
 
 
-def test_eicher_tata_and_bharat_benz_are_valid_class_factors():
-    assert "EICHER" in kocp_vehicle_classes("EICHER TIPPER", "COAL", "PRO 8035XML")
-    assert "BHARAT BENZ" in kocp_vehicle_classes("BHARAT BENZ TIPPER", "COAL")
-    assert "TATA" in kocp_vehicle_classes("TATA TIPPER", "OB")
+def test_only_exact_equipment_master_types_are_mcl_classes():
+    assert kocp_vehicle_classes("EICHER TIPPER", "COAL", "PRO 8035XML") == {"EICHER TIPPER"}
+    assert kocp_vehicle_classes("BHARAT BENZ TIPPER", "COAL") == {"BHARAT BENZ TIPPER"}
+    assert kocp_vehicle_classes("TATA TIPPER", "OB") == {"TATA TIPPER"}
 
 
 def test_operational_factor_cannot_use_final_monthly_factor():
@@ -93,8 +93,8 @@ def test_monthly_billing_revalues_trips_without_changing_operational_rows():
                 destination_location_id="KN5", route_id=None,
                 quantity_mt=Decimal(qty), status="POSTED", entered_by="TEST",
             ))
-        for name,cls,qty in [("MCL-E","EICHER","35.92"),
-                             ("MCL-B","BHARAT BENZ","39.25")]:
+        for name,cls,qty in [("MCL-E","EICHER TIPPER","35.92"),
+                             ("MCL-B","BHARAT BENZ TIPPER","39.25")]:
             db.add(SiteWeightFactor(
                 factor_id=name,site_id="KOCP",
                 factor_type="COAL_AVG_MT_PER_TRIP",
@@ -112,7 +112,7 @@ def test_monthly_billing_revalues_trips_without_changing_operational_rows():
         assert result["basis"]=="MCL_MONTHLY_AVERAGE"
         assert result["trips"]==2
         assert Decimal(result["total"])==Decimal("75.170")
-        assert {x["vehicleClass"] for x in result["rules"]}=={"EICHER","BHARAT BENZ"}
+        assert {x["vehicleClass"] for x in result["rules"]}=={"EICHER TIPPER","BHARAT BENZ TIPPER"}
         assert db.get(SiteTrip,"TRIP-E1").quantity_mt==Decimal("33.440")
         # A missing certified factor blocks billing instead of guessing.
         final=db.get(SiteWeightFactor,"MCL-B")
@@ -139,6 +139,7 @@ def test_copy_search_and_mcl_final_category_interfaces_present():
     assert "byEquipmentCategory" in fuel_api
     assert "categorySummary" in fuel_api
     assert "MCL_MONTHLY" in mcl and "DAILY_REPORT" in mcl
-    assert "koFactorClassesFromEquipment" in mcl
+    assert "koFactorClassesFromEquipment" not in mcl
+    assert "factor-vehicle-classes" in mcl
     assert "L150H is a Loader" in masters
     assert "return '<div class=\"kcm-form\"" in masters
