@@ -124,6 +124,14 @@
     let input='';
     if(type==='checkbox'){
       input='<label><input id="kcmF_'+id+'" type="checkbox" '+(val?'checked':'')+'> Active</label>';
+    }else if(type==='equipment_class'){
+      // Suggestions are live Equipment Master types, not a built-in category list.
+      const types=[...new Set((vm.records||[]).filter(e=>e.active&&e.type)
+        .map(e=>String(e.type).trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+      input='<input id="kcmF_'+id+'" type="text" list="kcmExistingVehicleTypes" maxlength="80"'+
+        ' placeholder="Type exactly as approved in Equipment Master" value="'+x(val)+'">'+
+        '<datalist id="kcmExistingVehicleTypes">'+
+        types.map(t=>'<option value="'+x(t)+'"></option>').join('')+'</datalist>';
     }else if(options){
       const choices=(String(val).trim()&&!options.includes(String(val)))?[String(val),...options]:options;
       input='<select id="kcmF_'+id+'" '+(id==='type'?'onchange="kcmSyncGroup()"':'')+'>'+
@@ -154,9 +162,8 @@
     ];
     else if(vm.tab==='EQUIPMENT')fields=[
       field('machineId','Machine ID *',r.machineId),
-      field('type','Physical machine type *',r.type||'Tipper','select',
-        ['Loader','Excavator','Tipper','Tripper','Dumper','Truck','Dozer','Grader','Drill','Compressor','Tanker','Plant','Support','Other']),
-      field('group','Work group (COAL / OB / BOTH) *',r.group||'COAL'),
+      field('type','Physical machine type / MCL vehicle class *',r.type||'','equipment_class'),
+      field('group','Work group (COAL / OB / BOTH) *',r.group||''),
       field('makeModel','Make / Model',r.makeModel),
       field('vehicleNo','Registration',r.vehicleNo),
       field('doorNo','Door No',r.doorNo),
@@ -167,6 +174,9 @@
       field('effectiveFrom','Effective From',r.effectiveFrom?.slice(0,10),'date'),
       field('active','Active',r.active??true,'checkbox')
     ];
+    if(vm.tab==='EQUIPMENT'){
+      fields.unshift('<div class="kcm-note"><b>Vehicle classes come from this Equipment Master.</b> For transport vehicles, enter the full approved type (for example, the manufacturer and tipper type) consistently. The MCL dropdown uses active KOCP vehicle types only. There are no built-in class options.</div>');
+    }
     if(vm.tab==='EQUIPMENT'&&/L150H/i.test(r.makeModel||'')&&/TIPPER|TRIPPER|DUMPER/i.test(r.type||'')){
       fields.unshift('<div class="kcm-note"><strong>Type mismatch:</strong> Volvo L150H is a Loader, not a Tripper. Change Physical machine type to Loader, retain the Coal/OB work group, then save the master. Historical fuel entries are preserved.</div>');
     }
