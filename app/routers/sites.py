@@ -1067,6 +1067,15 @@ def create_weight_factor(site_id: str, p: WeightFactorIn, request: Request, db: 
     if site_id != "KOCP" and p.sourceOrg.upper() == "MCL":
         raise HTTPException(409, "MCL factor workflow is currently configured for KOCP.")
     if site_id == "KOCP":
+        if (p.sourceOrg or "").strip().upper() not in {"DAILY_REPORT", "MCL_MONTHLY", "MCL"}:
+            raise HTTPException(422, "Select Daily Operating Average or Final Monthly MCL Average.")
+        if p.effectiveTo and p.effectiveTo < p.effectiveFrom:
+            raise HTTPException(422, "Effective end date must not precede start date.")
+        if p.sourceOrg.upper() == "MCL_MONTHLY":
+            if not p.effectiveTo:
+                raise HTTPException(422, "Final MCL monthly average requires the full certified period.")
+            if p.operatingDate or p.shift:
+                raise HTTPException(422, "Final MCL monthly average must cover all shifts in its period.")
         expected_unit = {"COAL_AVG_MT_PER_TRIP": "MT/TRIP", "OB_CUM_PER_TRIP": "CUM/TRIP"}
         typ = p.factorType.upper()
         if typ not in expected_unit:
@@ -1118,7 +1127,7 @@ def create_weight_factor(site_id: str, p: WeightFactorIn, request: Request, db: 
         destination_location_id=p.destinationLocationId,
         route_id=p.routeId,
         vehicle_class=p.vehicleClass.strip() if p.vehicleClass else None,
-        source_org=p.sourceOrg,
+        source_org=p.sourceOrg.strip().upper(),
         reference_no=p.referenceNo,
         reference_date=p.referenceDate,
         status="DRAFT",
@@ -1145,13 +1154,19 @@ def decide_weight_factor(site_id: str, factor_id: str, p: WeightFactorDecisionIn
             raise HTTPException(409, "This rule has no unloading point/material; create a scoped rule first.")
         if row.status != "DRAFT":
             raise HTTPException(409, "Only draft rules can be approved.")
-        # Same scope and same start date cannot produce two active candidates.
+        # Daily and monthly approved rules are separate. Reject overlapping equally scoped rules from the SAME source.
         others = db.scalars(select(SiteWeightFactor).where(
             SiteWeightFactor.site_id == site_id,
             SiteWeightFactor.factor_id != row.factor_id,
             SiteWeightFactor.factor_type == row.factor_type,
+            SiteWeightFactor.source_org == row.source_org,
             SiteWeightFactor.status == "APPROVED",
-            SiteWeightFactor.effective_from == row.effective_from,
+            SiteWeightFactor.effective_from <= (row.effective_to or date.max),
+        ).where(
+            or_(
+                SiteWeightFactor.effective_to.is_(None),
+                SiteWeightFactor.effective_to >= row.effective_from,
+            ),
         )).all()
         for other in others:
             if (
@@ -1162,7 +1177,7 @@ def decide_weight_factor(site_id: str, factor_id: str, p: WeightFactorDecisionIn
                 and (other.vehicle_class or "").upper() == (row.vehicle_class or "").upper()
                 and other.operating_date == row.operating_date
             ):
-                raise HTTPException(409, "Duplicate approved point-wise rule for the same date and scope.")
+                raise HTTPException(409, "Overlapping approved point-wise factors for the same source and scope.")
     before = {"status": row.status, "approvedBy": row.approved_by}
     row.status = "APPROVED" if p.action == "APPROVE" else "REJECTED"
     row.approved_by = user.login_id if p.action == "APPROVE" else None
