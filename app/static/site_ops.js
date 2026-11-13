@@ -105,9 +105,19 @@ async function renderSurvey(){
     field('Notes','svNotes'),
     '<button class="btn primary" onclick="saveSurvey()">Create Survey Draft</button>'
   );
-  return pageHead('MCL Certified Quantity','Choose a material by name. Enter OB in CuM OR Coal in MT, not both.')+
+  // The final MCL vehicle/point averages belong alongside certification,
+  // not on the day-to-day operating-factor screen. Existing approvals and
+  // billing APIs remain unchanged.
+  let finalAveragePanel='';
+  if(siteId==='KOCP'&&typeof window.renderKocpPointFactors==='function'){
+    try{finalAveragePanel=await window.renderKocpPointFactors({final:true})}
+    catch(e){finalAveragePanel=panel('Final MCL monthly averages',
+      '<p class="simple-note">Monthly averages require MCL Quantity Rules viewing rights. Certified quantity entry remains available.</p>')}
+  }
+  return pageHead('MCL Certified Quantity','Enter the final approved Coal MT / OB CuM, with month-end vehicle-class and unloading-point averages underneath.')+
     context()+moduleHero('MCL_SURVEY')+panel('Certified quantity entry',
-      '<p class="simple-note">Material ID comes from the existing KOCP Material Master. No manual code is required.</p>'+form,'Coal MT · OB CuM')+
+      '<p class="simple-note">Enter the independently certified total from MCL, not an average per trip. Daily entry quantities are unchanged. Approved monthly averages below are used for billing reconciliation; mismatches block approval.</p>'+form,'Coal MT · OB CuM')+
+    finalAveragePanel+
     panel('Survey history',recentTable(['Period','Material','Certified Quantity','Reference','Status','Action'],tr),`${rows.length} records`);
 }
 async function saveSurvey(){
