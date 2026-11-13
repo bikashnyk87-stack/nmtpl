@@ -51,9 +51,13 @@
       (r.status==='EXISTS'?(r.active?'Saved':'Inactive'):'Not added')+'</span>'];
     if(vm.tab==='EMPLOYEE')return ['<b class="kcm-primary">'+x(r.employeeId)+'</b>',x(r.name),x(r.role),
       x(r.department||'—'),x(r.mobile||'—'),st(r.active),action('Edit','kcmEdit(\''+x(r.employeeId)+'\')','small')];
-    if(vm.tab==='EQUIPMENT')return ['<b class="kcm-primary">'+x(r.machineId)+'</b>',x(r.type),
-      x(r.group),x(r.makeModel||'—'),x(r.ownership||'—'),st(r.active),
-      action('Edit','kcmEdit(\''+x(r.machineId)+'\')','small')];
+    if(vm.tab==='EQUIPMENT'){
+      const wrong=/L150H/i.test(r.makeModel||'')&&/TRIPPER|TIPPER|DUMPER/i.test(r.type||'');
+      return ['<b class="kcm-primary">'+x(r.machineId)+'</b>',
+        x(r.type)+(wrong?'<span class="kcm-tag missing">L150H is a loader · correct type</span>':''),
+        x(r.group),x(r.makeModel||'—'),x(r.ownership||'—'),st(r.active),
+        action(wrong?'Correct Type':'Edit','kcmEdit(\''+x(r.machineId)+'\')','small')];
+    }
     if(vm.tab==='LOCATIONS')return ['<b class="kcm-primary">'+x(r.name)+'</b>',
       (r.usedIn||[]).map(v=>'<span class="kcm-tag">'+x(v)+'</span>').join(' ')||'Existing',st(r.active)];
     return ['<span class="kcm-primary">'+x(r.batchId)+'</span>',x(r.masterType),x(r.totalRows),
@@ -121,8 +125,9 @@
     if(type==='checkbox'){
       input='<label><input id="kcmF_'+id+'" type="checkbox" '+(val?'checked':'')+'> Active</label>';
     }else if(options){
+      const choices=(String(val).trim()&&!options.includes(String(val)))?[String(val),...options]:options;
       input='<select id="kcmF_'+id+'" '+(id==='type'?'onchange="kcmSyncGroup()"':'')+'>'+
-      options.map(v=>'<option value="'+x(v)+'" '+(val===v?'selected':'')+'>'+x(v)+'</option>').join('')+'</select>';
+      choices.map(v=>'<option value="'+x(v)+'" '+(val===v?'selected':'')+'>'+x(v)+'</option>').join('')+'</select>';
     }else{
       input='<input id="kcmF_'+id+'" type="'+(type||'text')+'" '+(type==='number'?'step="any"':'')+
         ' value="'+x(val)+'">';
@@ -149,19 +154,22 @@
     ];
     else if(vm.tab==='EQUIPMENT')fields=[
       field('machineId','Machine ID *',r.machineId),
-      field('type','Type *',r.type||'Tripper','select',
-        ['Tripper','Dumper','Tipper','Truck','Loader','Excavator','Dozer','Grader','Drill','Compressor','Tanker','Plant','Support','Other']),
-      field('group','ERP group *',r.group||'TRANSPORT'),
+      field('type','Physical machine type *',r.type||'Tipper','select',
+        ['Loader','Excavator','Tipper','Tripper','Dumper','Truck','Dozer','Grader','Drill','Compressor','Tanker','Plant','Support','Other']),
+      field('group','Work group (COAL / OB / BOTH) *',r.group||'COAL'),
       field('makeModel','Make / Model',r.makeModel),
       field('vehicleNo','Registration',r.vehicleNo),
       field('doorNo','Door No',r.doorNo),
-      field('ownership','Ownership',r.ownership||'OWN','select',['OWN','HIRED','CONTRACTOR','OTHER']),
+      field('ownership','Ownership class',r.ownership||'OWN','select',['OWN','NMTPL','HIRED','CONTRACTOR','THIRD PARTY','OTHER']),
       field('party','Party',r.party),
       field('bucketCum','Bucket CuM',r.bucketCum,'number'),
       field('ratedPayloadT','Payload T',r.ratedPayloadT,'number'),
       field('effectiveFrom','Effective From',r.effectiveFrom?.slice(0,10),'date'),
       field('active','Active',r.active??true,'checkbox')
     ];
+    if(vm.tab==='EQUIPMENT'&&/L150H/i.test(r.makeModel||'')&&/TIPPER|TRIPPER|DUMPER/i.test(r.type||'')){
+      fields.unshift('<div class="kcm-note"><strong>Type mismatch:</strong> Volvo L150H is a Loader, not a Tripper. Change Physical machine type to Loader, retain the Coal/OB work group, then save the master. Historical fuel entries are preserved.</div>');
+    }
     return '<div class="kcm-form"><div class="kcm-formhead"><h3>'+x(vm.edit?'Edit '+title():'New '+title())+
       '</h3>'+action('Close','kcmToggleForm()','small')+'</div><div class="kcm-formgrid">'+fields.join('')+
       '</div><div class="kcm-actions">'+action('Cancel','kcmToggleForm()','')+
@@ -231,11 +239,13 @@
     vm.formOpen=true;vm.importOpen=false;render();
   }
   function kcmSyncGroup(){
-    const t=$('kcmF_type'),g=$('kcmF_group');if(!t||!g)return;
-    const v=t.value.toUpperCase();
-    g.value=['TRIPPER','DUMPER','TIPPER','TRUCK'].includes(v)?'TRANSPORT':
-      v==='LOADER'?'LOADING':v==='EXCAVATOR'?'EXCAVATION':v==='DRILL'?'DRILLING':
-      v==='COMPRESSOR'?'COMPRESSOR':v==='TANKER'?'HSD_TANKER':v==='PLANT'?'PLANT':'SUPPORT';
+    // The group is the operating area (COAL/OB/BOTH), not the physical type.
+    // Selecting Loader or Tipper must never rewrite a Coal group to LOADING.
+    const t=$('kcmF_type'),m=$('kcmF_makeModel');
+    if(!t||!m)return;
+    const isLoader=/L150H/i.test(m.value);
+    if(isLoader&&/TIPPER|TRIPPER|DUMPER/i.test(t.value))
+      toast('L150H is a Volvo loader. Select Loader before saving the master.','bad');
   }
   async function kcmSave(){
     try{
