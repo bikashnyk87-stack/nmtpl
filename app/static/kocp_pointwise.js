@@ -49,19 +49,6 @@ function koPointChangeRoute(){
   const material=koPointMaterials(r.kind).find(x=>x.typeCode===code);
   if(material)$('pfMaterial').value=material.materialId;
 }
-function koFactorClassesFromEquipment(rows){
-  const options=new Set(['EICHER','BHARAT BENZ','TATA','VOLVO TIPPER','VOLVO','ASHOK LEYLAND']);
-  for(const x of rows||[]){
-    if(!x.active)continue;
-    const kind=String(x.type||'').trim().toUpperCase();
-    const name=(kind+' '+String(x.makeModel||'')).toUpperCase();
-    if(kind&&kind!=='OTHER'&&/(TIPPER|TRIPPER|DUMPER|TRUCK)/.test(kind))options.add(kind);
-    for(const brand of ['EICHER','BHARAT BENZ','TATA','VOLVO','ASHOK LEYLAND']){
-      if(name.includes(brand))options.add(brand);
-    }
-  }
-  return [...options].sort();
-}
 function koPointSourceChanged(){
   const final=$('pfSource')?.value==='MCL_MONTHLY';
   if($('pfOpDate')){$('pfOpDate').disabled=final;if(final)$('pfOpDate').value=''}
@@ -103,7 +90,7 @@ async function renderKocpPointFactors(options={}){
       <div class="field"><span>${final?'Month-end period end *':'Effective to (optional)'}</span><input id="pfTo" type="date" ${final?'required':''}></div>
       ${final?'':'<div class="field"><span>Operating date (optional)</span><input id="pfOpDate" type="date"></div>'}
       ${final?'':'<div class="field"><span>Shift</span><select id="pfShift"><option value="">All shifts</option>'+state.ctx.shifts.map(s=>'<option value="'+esc(s.shift)+'">'+esc(s.shift)+'</option>').join('')+'</select></div>'}
-      <div class="field"><span>Vehicle / dumper class</span><select id="pfClass"><option value="">All vehicle types</option>${koPointState.vehicleClasses.map(x=>'<option value="'+esc(x)+'">'+esc(x)+'</option>').join('')}</select><small>Choose Eicher, Bharat Benz, Tata, Volvo or a master type; one average can differ by vehicle class.</small></div>
+      <div class="field"><span>Vehicle class (Equipment Master)</span><select id="pfClass"><option value="">All active vehicle types (general rule)</option>${koPointState.vehicleClasses.map(x=>'<option value="'+esc(x)+'">'+esc(x)+'</option>').join('')}</select><small>Values come only from active KOCP Equipment Masters. Add or correct vehicle types in Masters; no built-in brand classes.</small>${koPointState.vehicleClasses.length?'':'<p class="simple-warning">No active KOCP transport vehicle types found in Equipment Masters. Check master assignments before creating a class-specific rule.</p>'}</div>
       <div class="field"><span>${final?'MCL monthly certificate reference *':'Daily production report reference *'}</span><input id="pfRef" maxlength="120" placeholder="${final?'MCL approved report / circular':'Daily report number or sheet reference'}"></div>
       <div class="form-actions"><button class="btn primary" onclick="koPointSaveRule()">Create Draft</button></div>
     </div>`;
