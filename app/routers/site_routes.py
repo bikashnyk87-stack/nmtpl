@@ -301,6 +301,8 @@ def create_route_record(site_id: str, kind: str, payload: dict, request: Request
     }
     source = _physical_location(db, item["source"], by_name, None) if kind == "OB" else None
     destination = _physical_location(db, item["destination"], by_name, None)
+    if not destination.active or (source is not None and not source.active):
+        raise HTTPException(422, "This route references an inactive physical location. Activate it in Locations first.")
     route = SiteMovementRoute(
         route_id=route_id, site_id="KOCP", movement_kind=kind,
         route_group=item["group"], category=item["category"],
