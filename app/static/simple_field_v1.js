@@ -1110,27 +1110,43 @@ function kocpVehicleReportResults(d){
     <div><span>Average / issue</span><strong>${d.averageLitres==null?'—':dashNum(d.averageLitres,2)+' L'}</strong></div>
   </div>`;
   const summary=recentTable(
-    ['#','Vehicle / registration','Ownership','Type','Issues','Litres','Avg/issue','First','Last'],
-    rows.map((v,i)=>`<tr class="kocp-fuel-vehicle-row" data-search="${esc([v.vehicle,v.assetId,v.registration,v.doorNo,v.ownership,v.equipmentType].join(' ').toLowerCase())}">
+    ['#','Vehicle / registration','Equipment Category','Ownership','Master type / warning','Issues','Litres','Avg/issue','First','Last'],
+    rows.map((v,i)=>`<tr class="kocp-fuel-vehicle-row" data-search="${esc([v.vehicle,v.assetId,v.registration,v.doorNo,v.ownership,v.ownershipCategory,v.equipmentCategory,v.equipmentType].join(' ').toLowerCase())}">
       <td>${i+1}</td><td><b>${esc(v.vehicle)}</b></td>
-      <td>${esc(v.ownership||'—')}</td><td>${esc(v.equipmentType||'—')}</td>
+      <td>${esc(v.equipmentCategory||'—')}</td><td>${esc(v.ownershipCategory||v.ownership||'—')}</td>
+      <td>${esc(v.equipmentType||'—')}${v.needsMasterCorrection?'<span class="simple-status bad">Wrong type in Masters: L150H is a Loader</span>':''}</td>
       <td>${dashNum(v.issues)}</td><td><b>${dashNum(v.litres,2)} L</b></td>
       <td>${v.averageLitres==null?'—':dashNum(v.averageLitres,2)+' L'}</td>
       <td>${esc(v.firstDate||'—')}</td><td>${esc(v.lastDate||'—')}</td>
     </tr>`)
   );
-  const details=(d.entries||[]).map((v,i)=>`<tr><td>${i+1}</td>
+  const details=(d.entries||[]).map((v,i)=>`<tr class="kocp-fuel-detail-row"><td>${i+1}</td>
     <td>${esc(v.date)}</td><td>${esc(v.shift||'—')}</td><td>${esc(v.vehicle)}</td>
     <td>${dashNum(v.litres,2)} L</td><td>${esc(v.reference||'—')}</td>
     <td>${esc(v.enteredBy||'—')}</td></tr>`);
+  const categoryGrid=(items,title)=>`<details class="kocp-fuel-detail"><summary>${esc(title)} (${(items||[]).length} categories)</summary>${recentTable(
+    ['Category','Vehicles','Issues','Total HSD litres'],
+    (items||[]).map(x=>`<tr><td><b>${esc(x.category)}</b></td><td>${dashNum(x.vehicles)}</td><td>${dashNum(x.issues)}</td><td>${dashNum(x.litres,2)} L</td></tr>`)
+  )}</details>`;
+  const categoryBreakdown=categoryGrid(d.byEquipmentCategory,'Category-wise HSD consumption')+
+    categoryGrid(d.byOwnership,'Ownership-wise HSD consumption');
   return overview+
     `<p class="simple-note">All POSTED vehicle issues between ${esc(d.fromDate)} and ${esc(d.toDate)} · Shift ${esc(d.shift)}. Voided entries excluded.</p>`+
     (rows.length?summary:'<p class="ops-empty">No posted HSD issues for these filters.</p>')+
+    (d.classificationWarnings?'<p class="simple-warning">'+dashNum(d.classificationWarnings)+' equipment record(s) have a conflicting physical type. Correct in KOCP → Masters → Equipment / Vehicles; historical fuel entries remain unchanged.</p>':'')+
+    categoryBreakdown+
     `<details class="kocp-fuel-detail">
        <summary>View individual fuel issues (${dashNum(d.issueCount)} entries)</summary>
        ${d.hasMoreEntries?'<p class="simple-warning">Only the first '+dashNum(d.detailLimit)+' details are shown; shorten date range to see every row. All vehicle totals are complete.</p>':''}
+       <label>Search individual issues <input type="search" id="koHsdDetailSearch" oninput="filterKocpFuelDetails()" placeholder="Date, vehicle, reference, entered by"></label>
        ${recentTable(['#','Date','Shift','Vehicle','Litres','Reference','Entered by'],details)}
      </details>`;
+}
+function filterKocpFuelDetails(){
+  const q=String($('koHsdDetailSearch')?.value||'').trim().toLowerCase();
+  document.querySelectorAll('.kocp-fuel-detail-row').forEach(row=>{
+    row.hidden=!!q&&!row.textContent.toLowerCase().includes(q);
+  });
 }
 function kocpVehicleReportPanel(data,today){
   const r=kocpFuelRangeFor(today);
@@ -1183,9 +1199,15 @@ function downloadKocpFuelVehicleCsv(){
   const rows=[
     ['KOCP HSD VEHICLE CONSUMPTION'],
     ['From',d.fromDate,'To',d.toDate,'Shift',d.shift],
-    ['Vehicle','Registration','Door No','Ownership','Type','Issue Count','Total Litres','Avg Litres / Issue','First Date','Last Date'],
-    ...(d.vehicles||[]).map(v=>[v.vehicle,v.registration,v.doorNo,v.ownership,v.equipmentType,v.issues,v.litres,v.averageLitres,v.firstDate,v.lastDate]),
-    ['TOTAL','','','','',d.issueCount,d.totalLitres,d.averageLitres]
+    ['Vehicle','Registration','Door No','Ownership Category','Physical Category','Master Type','Issue Count','Total Litres','Avg Litres / Issue','First Date','Last Date'],
+    ...(d.vehicles||[]).map(v=>[v.vehicle,v.registration,v.doorNo,v.ownershipCategory,v.equipmentCategory,v.equipmentType,v.issues,v.litres,v.averageLitres,v.firstDate,v.lastDate]),
+    ['TOTAL','','','','','',d.issueCount,d.totalLitres,d.averageLitres],
+    [],['CATEGORY-WISE HSD SUMMARY'],
+    ['Equipment category','Vehicles','Issues','Total litres'],
+    ...(d.byEquipmentCategory||[]).map(x=>[x.category,x.vehicles,x.issues,x.litres]),
+    [],['OWNERSHIP-WISE HSD SUMMARY'],
+    ['Ownership category','Vehicles','Issues','Total litres'],
+    ...(d.byOwnership||[]).map(x=>[x.category,x.vehicles,x.issues,x.litres])
   ];
   const csv='\uFEFF'+rows.map(r=>r.map(quote).join(',')).join('\r\n');
   const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
@@ -1629,7 +1651,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,applyKocpFuelVehicleFilters,setKocpFuelMonthToDate,filterKocpFuelVehicles,downloadKocpFuelVehicleCsv,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,applyKocpFuelVehicleFilters,setKocpFuelMonthToDate,filterKocpFuelVehicles,downloadKocpFuelVehicleCsv,filterKocpFuelDetails,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
