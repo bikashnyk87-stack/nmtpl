@@ -1815,3 +1815,14 @@ body.field-mode{
 .kocp-fuel-detail{margin-top:14px;border:1px solid #d9e4e7;border-radius:9px;padding:10px}
 .kocp-fuel-detail>summary{font-weight:750;color:#176060;cursor:pointer;font-size:12px}
 @media(max-width:750px){.kocp-vehicle-stats{grid-template-columns:repeat(2,minmax(0,1fr))}.kocp-hsd-filter-bar{align-items:stretch}}
+
+/* KOCP quick copy, live entry search and category reporting */
+.kocp-row-copy{display:block;margin:3px auto 0;background:#e8f5f3;color:#075a51;border:1px solid #a0ccc7;border-radius:6px;padding:3px 5px;font-size:10px;white-space:nowrap;font-weight:700;cursor:pointer}
+.kocp-row-copy:hover{background:#cce9e4}
+.kocp-entry-search{display:flex;align-items:end;gap:8px;flex-wrap:wrap;margin:8px 0}
+.kocp-entry-search label{font-size:11px;color:#3d6970;font-weight:700;display:flex;flex-direction:column;gap:3px;flex:1 1 250px;max-width:390px}
+.kocp-entry-search input{min-height:34px;padding:7px 9px;border:1px solid #bad4da;border-radius:7px}
+#koTripSavedList tbody tr[hidden],.koHsdRecentRecords tbody tr[hidden],
+.kocp-fuel-detail-row[hidden],#simpleTripRows tr[hidden],#simpleHsdRows tr[hidden]{display:none!important}
+#kocpFuelVehicleResults details table{width:100%}
+.kcm-tag.missing{color:#a43a2b}
