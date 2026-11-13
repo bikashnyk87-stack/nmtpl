@@ -99,12 +99,12 @@ async function renderKocpPointFactors(options={}){
       <div class="field"><span>Material *</span><select id="pfMaterial">${koPointOpts(koPointMaterials("COAL"),"materialId","name","Choose material")}</select></div>
       <div class="field"><span>Approved average / trip *</span><input id="pfValue" type="number" step="0.000001" min="0.000001" placeholder="Enter MCL-approved value"></div>
       <div class="field"><span>Unit</span><strong id="pfUnit">MT/TRIP</strong></div>
-      <div class="field"><span>Effective from *</span><input id="pfFrom" type="date" value="${date}"></div>
+      <div class="field"><span>${final?'MCL certified period start *':'Effective from *'}</span><input id="pfFrom" type="date" value="${final?date.slice(0,8)+'01':date}"></div>
       <div class="field"><span>${final?'Month-end period end *':'Effective to (optional)'}</span><input id="pfTo" type="date" ${final?'required':''}></div>
       ${final?'':'<div class="field"><span>Operating date (optional)</span><input id="pfOpDate" type="date"></div>'}
       ${final?'':'<div class="field"><span>Shift</span><select id="pfShift"><option value="">All shifts</option>'+state.ctx.shifts.map(s=>'<option value="'+esc(s.shift)+'">'+esc(s.shift)+'</option>').join('')+'</select></div>'}
       <div class="field"><span>Vehicle / dumper class</span><select id="pfClass"><option value="">All vehicle types</option>${koPointState.vehicleClasses.map(x=>'<option value="'+esc(x)+'">'+esc(x)+'</option>').join('')}</select><small>Choose Eicher, Bharat Benz, Tata, Volvo or a master type; one average can differ by vehicle class.</small></div>
-      <div class="field"><span>MCL reference no. *</span><input id="pfRef" maxlength="120" placeholder="Approved sheet / circular reference"></div>
+      <div class="field"><span>${final?'MCL monthly certificate reference *':'Daily production report reference *'}</span><input id="pfRef" maxlength="120" placeholder="${final?'MCL approved report / circular':'Daily report number or sheet reference'}"></div>
       <div class="form-actions"><button class="btn primary" onclick="koPointSaveRule()">Create Draft</button></div>
     </div>`;
   const dests=[...koPointDestinations('COAL'),...koPointDestinations('OB')];
