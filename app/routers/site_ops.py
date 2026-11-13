@@ -481,6 +481,22 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
             raise HTTPException(409, "This retry ID belongs to a different trip. The new row was NOT saved; refresh and save again.")
         return {"ok": True, "tripId": existing.trip_id, "idempotent": True}
 
+    if site_id == "KOCP":
+        # A newly inserted trip must not alter an already approved billing
+        # period. Historical changes require an explicit billing revision.
+        approved_period = db.scalar(select(SiteBillingReconciliation.billing_id).where(
+            SiteBillingReconciliation.site_id == site_id,
+            SiteBillingReconciliation.status == "APPROVED",
+            SiteBillingReconciliation.period_start <= operating_day,
+            SiteBillingReconciliation.period_end >= operating_day,
+            SiteBillingReconciliation.material_id == (
+                str(payload.get("materialId") or "").strip() or None
+            ),
+        ).limit(1))
+        if approved_period:
+            raise HTTPException(409, "This Coal/OB date is in an approved billing period. "
+                                     "Request billing revision before entering a late trip.")
+
     vehicle, loader, source, destination, material, gp_no, mt, cum, factor, basis = _validated_simple_trip_fields(db, site_id, payload, operating_day, shift, route_id)
 
     if site_id == "SOCP" and mt is None:
