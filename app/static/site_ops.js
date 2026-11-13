@@ -138,16 +138,19 @@ async function renderBilling(){
   const tr=rows.map(r=>{
     const ob=koObSurveyMaterials.has(r.materialId),unit=ob?'CuM':'MT';
     const shown=v=>v==null?'—':n(v,3);
-    return `<tr><td>${esc(r.periodStart)} → ${esc(r.periodEnd)}</td><td>${esc(koMaterialName[r.materialId]||r.materialId||'—')}</td><td>${unit}</td><td>${shown(ob?r.operationalCum:r.operationalMt)}</td><td>${shown(ob?r.certifiedCum:r.certifiedMt)}</td><td>${shown(ob?r.varianceCum:r.varianceMt)}</td><td>${shown(ob?r.billableCum:r.billableMt)}</td><td><span class="status ${r.status==='APPROVED'?'ok':'info'}">${esc(r.status)}</span></td><td>${r.status==='DRAFT'?`<button class="btn outline" onclick="decideBilling('${r.billingId}','APPROVE')" ${r.surveyId?'':'disabled title="Matching approved MCL survey required"'}>Approve</button>`:''}</td></tr>`;
+    return `<tr><td>${esc(r.periodStart)} → ${esc(r.periodEnd)}</td><td>${esc(koMaterialName[r.materialId]||r.materialId||'—')}</td><td>${unit}</td><td>${shown(ob?r.operationalCum:r.operationalMt)}</td><td>${shown(ob?r.certifiedCum:r.certifiedMt)}</td><td>${shown(ob?r.varianceCum:r.varianceMt)}</td><td>${shown(ob?r.billableCum:r.billableMt)}</td>
+      <td>${esc(r.billingBasis==='MCL_MONTHLY_AVERAGE'?'Final MCL averages':r.billingBasis==='MCL_SURVEY'?'MCL certified survey':'Not certified')}
+      ${r.factorBreakdown?.rules?.length?`<details><summary>${r.factorBreakdown.trips} trips · ${r.factorBreakdown.rules.length} approved factors</summary><table class="simple-grid-table"><thead><tr><th>Class</th><th>Destination</th><th>Trips</th><th>Rate</th><th>Reference</th></tr></thead><tbody>${r.factorBreakdown.rules.map(f=>`<tr><td>${esc(f.vehicleClass||'All')}</td><td>${esc(f.destinationLocationId)}</td><td>${n(f.trips)}</td><td>${n(f.rate,3)}</td><td>${esc(f.reference)}</td></tr>`).join('')}</tbody></table></details>`:''}</td>
+      <td><span class="status ${r.status==='APPROVED'?'ok':'info'}">${esc(r.status)}</span></td><td>${r.status==='DRAFT'?`<button class="btn outline" onclick="decideBilling('${r.billingId}','APPROVE')" ${r.surveyId||r.billingBasis==='MCL_MONTHLY_AVERAGE'?'':'disabled title="Approved MCL monthly averages or survey required"'}>Approve</button>`:''}</td></tr>`;
   });
   const form=formGrid(field('Period Start','blFrom','date',qdate().slice(0,8)+'01')+
     field('Period End','blTo','date',qdate())+
     select('Coal / OB Material *','blMaterial',opts),
     '<button class="btn primary" onclick="buildBilling()">Build Reconciliation</button>');
-  return pageHead('Billing Reconciliation','Coal MT and OB CuM are reconciled separately against the approved MCL survey for the same material and period.')+
+  return pageHead('Billing Reconciliation','Daily provisional quantities stay in operations. Month-end billable values come only from approved MCL monthly averages or the approved certified survey.')+
     context()+moduleHero('BILLING')+
-    panel('Build billing period','<p class="simple-note">Choose the material by name. The system finds its matching approved MCL survey automatically. No Survey ID required.</p>'+form)+
-    panel('Billing register',recentTable(['Period','Material','Unit','Operational','Certified','Variance','Billable','Status','Action'],tr),`${rows.length} periods`);
+    panel('Build billing period','<p class="simple-note">Choose material and month. An approved MCL certified survey is used when present; otherwise approved MCL MONTHLY vehicle/destination factors re-rate every posted trip. If any required monthly factor is missing, approval is blocked. The original trip values remain unchanged.</p>'+form)+
+    panel('Billing register',recentTable(['Period','Material','Unit','Operational','Certified','Variance','Billable','MCL billing basis','Status','Action'],tr),`${rows.length} periods`);
 }
 async function buildBilling(){
   try{

@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.site_models import SiteWeightFactor
+from app.services.kocp_equipment import kocp_vehicle_classes
 
 
 def _norm(value):
@@ -22,10 +23,14 @@ def choose_point_factor(
     candidates, *, operating_day: date, shift: str,
     destination_id: str, route_id: str | None, material_id: str,
     vehicle_type: str | None = None, vehicle_group: str | None = None,
+    vehicle_model: str | None = None, allowed_sources: tuple[str, ...] = ('DAILY_REPORT', 'MCL'),
 ):
     """Pure deterministic selection, convenient for testing and imports."""
     matches = []
+    classes = kocp_vehicle_classes(vehicle_type, vehicle_group, vehicle_model)
     for factor in candidates:
+        if str(getattr(factor, 'source_org', 'MCL') or 'MCL').upper() not in allowed_sources:
+            continue
         if factor.status != "APPROVED" or factor.effective_from > operating_day:
             continue
         if factor.effective_to and factor.effective_to < operating_day:
@@ -41,9 +46,7 @@ def choose_point_factor(
             continue
         if factor.shift and _norm(factor.shift) != _norm(shift):
             continue
-        if factor.vehicle_class and _norm(factor.vehicle_class) not in {
-            _norm(vehicle_type), _norm(vehicle_group),
-        }:
+        if factor.vehicle_class and _norm(factor.vehicle_class) not in classes:
             continue
         # Route specificity, material, shift and class all have explicit priority.
         score = (
@@ -77,6 +80,8 @@ def resolve_kocp_point_factor(
     shift: str, destination_id: str, route_id: str | None,
     material_id: str, vehicle_type: str | None = None,
     vehicle_group: str | None = None,
+    vehicle_model: str | None = None,
+    allowed_sources: tuple[str, ...] = ('DAILY_REPORT', 'MCL'),
 ):
     candidates = db.scalars(select(SiteWeightFactor).where(
         SiteWeightFactor.site_id == "KOCP",
@@ -88,5 +93,6 @@ def resolve_kocp_point_factor(
         candidates, operating_day=operating_day, shift=shift,
         destination_id=destination_id, route_id=route_id,
         material_id=material_id, vehicle_type=vehicle_type,
-        vehicle_group=vehicle_group,
+        vehicle_group=vehicle_group, vehicle_model=vehicle_model,
+        allowed_sources=allowed_sources,
     )

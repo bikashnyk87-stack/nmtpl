@@ -55,8 +55,10 @@ from app.site_models import (
 )
 from app.services.kocp_hsd_stock import evaluate_hsd_stock
 from app.services.kocp_factor_rules import resolve_kocp_point_factor
+from app.services.kocp_monthly_billing import month_end_factor_reconciliation
 from app.services.kocp_equipment import (
     kocp_asset_allowed, kocp_role_allowed, kocp_asset_display,
+    kocp_equipment_category, kocp_ownership_category,
 )
 from app.services.site_context import resolve_site_context
 from app.maintenance_models import MaintenanceBreakdown
@@ -230,7 +232,7 @@ def operational_lookup(site_id: str, request: Request, kind: str, q: str = "", l
                 # Other KOCP modules can use general asset search without an
                 # activity/role filter; the Coal/OB entry screen always supplies both.
                 if activity and not (kocp_asset_allowed(x.group, activity)
-                        and kocp_role_allowed(x.type, role)):
+                        and kocp_role_allowed(x.type, role, x.make_model)):
                     continue
                 label, sub, rental = kocp_asset_display(
                     x.machine_id, x.door_no, x.vehicle_no,
@@ -388,7 +390,7 @@ def _validated_simple_trip_fields(db: Session, site_id: str, payload: dict, oper
             selected_machine = db.get(Equipment, selected_id) if selected_id else None
             if selected_machine and not (
                 kocp_asset_allowed(selected_machine.group, movement_kind)
-                and kocp_role_allowed(selected_machine.type, expected_role)
+                and kocp_role_allowed(selected_machine.type, expected_role, selected_machine.make_model)
             ):
                 raise HTTPException(
                     422, f"Equipment ID {selected_id} is not a {movement_kind} "
@@ -423,6 +425,7 @@ def _validated_simple_trip_fields(db: Session, site_id: str, payload: dict, oper
             shift=shift, destination_id=destination, route_id=route_id,
             material_id=material, vehicle_type=selected_vehicle.type if selected_vehicle else None,
             vehicle_group=selected_vehicle.group if selected_vehicle else None,
+            vehicle_model=selected_vehicle.make_model if selected_vehicle else None,
         )
         if is_ob:
             mt = None
@@ -477,6 +480,22 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
         if not same:
             raise HTTPException(409, "This retry ID belongs to a different trip. The new row was NOT saved; refresh and save again.")
         return {"ok": True, "tripId": existing.trip_id, "idempotent": True}
+
+    if site_id == "KOCP":
+        # A newly inserted trip must not alter an already approved billing
+        # period. Historical changes require an explicit billing revision.
+        approved_period = db.scalar(select(SiteBillingReconciliation.billing_id).where(
+            SiteBillingReconciliation.site_id == site_id,
+            SiteBillingReconciliation.status == "APPROVED",
+            SiteBillingReconciliation.period_start <= operating_day,
+            SiteBillingReconciliation.period_end >= operating_day,
+            SiteBillingReconciliation.material_id == (
+                str(payload.get("materialId") or "").strip() or None
+            ),
+        ).limit(1))
+        if approved_period:
+            raise HTTPException(409, "This Coal/OB date is in an approved billing period. "
+                                     "Request billing revision before entering a late trip.")
 
     vehicle, loader, source, destination, material, gp_no, mt, cum, factor, basis = _validated_simple_trip_fields(db, site_id, payload, operating_day, shift, route_id)
 
@@ -675,8 +694,68 @@ def kocp_point_wise_report(
     totals = {kind: {"trips": vals["trips"], "quantity": str(vals["quantity"]),
                      "weightedAverage": str(vals["quantity"] / vals["trips"]) if vals["trips"] else None,
                      "unit": "CuM" if kind == "OB" else "MT"} for kind, vals in overall.items()}
+    # A separate categorical view shows movement by actual physical category,
+    # make/vehicle class and unloading point. This does not change saved trips.
+    vehicle_groups = db.execute(select(
+        SiteTrip.vehicle_id, SiteTrip.material_id, SiteTrip.destination_location_id,
+        SiteTrip.route_id, func.count(SiteTrip.trip_id),
+        func.coalesce(func.sum(SiteTrip.quantity_mt), 0),
+        func.coalesce(func.sum(SiteTrip.quantity_cum), 0),
+    ).where(
+        SiteTrip.site_id == "KOCP", SiteTrip.status == "POSTED",
+        SiteTrip.operating_date >= from_date, SiteTrip.operating_date <= to_date,
+    ).group_by(
+        SiteTrip.vehicle_id, SiteTrip.material_id,
+        SiteTrip.destination_location_id, SiteTrip.route_id,
+    )).all()
+    if len(vehicle_groups) > 10000:
+        raise HTTPException(422, "Too many category groups. Choose a shorter range.")
+    vehicle_ids = sorted({x[0] for x in vehicle_groups if x[0]})
+    equipment_by_id = {
+        e.machine_id: e for e in db.scalars(select(Equipment).where(
+            Equipment.machine_id.in_(vehicle_ids)
+        ))
+    } if vehicle_ids else {}
+    category_agg = {}
+    for machine_id, mid, dest, route_id, ntrips, mt, cum in vehicle_groups:
+        machine = equipment_by_id.get(machine_id)
+        raw = (" ".join((str(machine.type or ""), str(machine.make_model or ""))).upper()
+               if machine else "")
+        category = kocp_equipment_category(machine.type, machine.make_model) if machine else "UNMAPPED"
+        brands = ("BHARAT BENZ", "EICHER", "TATA", "VOLVO", "ASHOK LEYLAND")
+        make = next((brand for brand in brands if brand in raw),
+                    str(machine.type or "Unmapped").upper() if machine else "UNMAPPED")
+        owner = kocp_ownership_category(machine.ownership if machine else None)
+        material = materials.get(mid)
+        ob = bool(material and str(material.default_unit or "").upper() in {"CUM","M3","M³"})
+        kind = "OB" if ob else "COAL"
+        qty = Decimal(str(cum if ob else mt))
+        key = (kind, mid, dest, route_id, category, make, owner)
+        if key not in category_agg:
+            category_agg[key] = {
+                "kind": kind, "materialId": mid,
+                "material": material.name if material else "Unknown",
+                "destination": destinations[dest].name if dest in destinations else "Unmapped",
+                "routeId": route_id,
+                "movement": routes[route_id].route_group if route_id in routes else "Unclassified",
+                "equipmentCategory": category, "vehicleClass": make,
+                "ownership": owner, "unit": "CuM" if ob else "MT",
+                "trips": 0, "quantity": Decimal("0"),
+            }
+        category_agg[key]["trips"] += int(ntrips)
+        category_agg[key]["quantity"] += qty
+    category_summary = []
+    for row in sorted(category_agg.values(), key=lambda r: (
+        r["kind"], r["material"], r["destination"], r["vehicleClass"], r["ownership"]
+    )):
+        ntrips = row["trips"]
+        category_summary.append({
+            **row, "quantity": str(row["quantity"]),
+            "weightedAverage": str(row["quantity"] / ntrips) if ntrips else None,
+        })
     return {"fromDate": from_date, "toDate": to_date,
-            "pointSummary": summaries, "dailyShift": daily, "totals": totals}
+            "pointSummary": summaries, "dailyShift": daily, "totals": totals,
+            "categorySummary": category_summary}
 
 
 @router.get("/TIOM/production/simple")
@@ -1104,8 +1183,31 @@ def build_billing(site_id: str, request: Request, period_start: date, period_end
         if site_id == "KOCP":
             stmt = stmt.where(SiteSurveyMeasurement.material_id == material_id)
         survey = db.scalars(stmt.order_by(SiteSurveyMeasurement.approved_at.desc()).limit(1)).first()
+    monthly = None
+    # MCL's final approved *average per unloading point/vehicle type* is a
+    # second certified basis. Never substitute daily operating averages.
+    if site_id == "KOCP":
+        monthly = month_end_factor_reconciliation(
+            db, site_id=site_id, material_id=material_id,
+            from_date=period_start, to_date=period_end, is_ob=is_ob,
+        )
     cert_mt = _decimal(survey.measured_mt) if survey and survey.measured_mt is not None and (site_id != "KOCP" or not is_ob) else None
     cert_cum = _decimal(survey.measured_cum) if survey and (site_id != "KOCP" or is_ob) else None
+    if monthly:
+        # Final MCL averages control billing. An independently approved survey
+        # must reconcile to the same amount, never silently supersede them.
+        survey_qty = Decimal(str(survey.measured_cum if is_ob else survey.measured_mt)) if survey else None
+        if survey_qty is not None and survey_qty != Decimal(monthly["total"]):
+            raise HTTPException(
+                409, "Approved MCL survey quantity differs from the final MCL monthly averages. "
+                     "Reconcile the two MCL sources before billing."
+            )
+        if is_ob:
+            cert_cum = Decimal(monthly["total"])
+        else:
+            cert_mt = Decimal(monthly["total"])
+    basis = "MCL_MONTHLY_AVERAGE" if monthly else ("MCL_SURVEY" if survey else None)
+    snapshot = json.dumps(monthly, sort_keys=True) if monthly else None
     bid = f"BILL-{site_id}-{uuid4().hex[:14].upper()}"
     row = SiteBillingReconciliation(
         billing_id=bid, site_id=site_id, period_start=period_start, period_end=period_end,
@@ -1116,6 +1218,7 @@ def build_billing(site_id: str, request: Request, period_start: date, period_end
         variance_mt=(cert_mt - _decimal(op_mt)) if cert_mt is not None else None,
         variance_cum=(cert_cum - _decimal(op_cum)) if cert_cum is not None else None,
         source_measurement_id=survey.measurement_id if survey else None,
+        billing_basis=basis, factor_snapshot_json=snapshot,
         status="DRAFT", created_by=user.login_id,
     )
     db.add(row)
@@ -1123,15 +1226,18 @@ def build_billing(site_id: str, request: Request, period_start: date, period_end
            after={"periodStart": period_start, "periodEnd": period_end,
                   "materialId": material_id, "operationalMt": str(op_mt),
                   "operationalCum": str(op_cum),
-                  "surveyId": survey.measurement_id if survey else None})
+                  "surveyId": survey.measurement_id if survey else None,
+                  "billingBasis": basis, "monthlyFactorSnapshot": monthly})
     db.commit()
-    return {"ok": True, "billingId": bid, "certified": survey is not None}
+    return {"ok": True, "billingId": bid, "certified": survey is not None or monthly is not None, "billingBasis": basis}
 
 @router.get("/{site_id}/billing")
 def list_billing(site_id:str,request:Request,db:Session=Depends(get_db)):
     user=get_user(db,request); site_id=require_site(db,user,site_id); _require_any(db,user,site_id,"BILLING")
     rows=db.scalars(select(SiteBillingReconciliation).where(SiteBillingReconciliation.site_id==site_id).order_by(SiteBillingReconciliation.period_end.desc(),SiteBillingReconciliation.created_at.desc()).limit(1000)).all()
-    return [{"billingId":r.billing_id,"periodStart":r.period_start,"periodEnd":r.period_end,"materialId":r.material_id,"operationalMt":r.operational_mt,"operationalCum":r.operational_cum,"certifiedMt":r.certified_mt,"certifiedCum":r.certified_cum,"billableMt":r.billable_mt,"billableCum":r.billable_cum,"varianceMt":r.variance_mt,"varianceCum":r.variance_cum,"surveyId":r.source_measurement_id,"status":r.status} for r in rows]
+    return [{"billingId":r.billing_id,"periodStart":r.period_start,"periodEnd":r.period_end,"materialId":r.material_id,"operationalMt":r.operational_mt,"operationalCum":r.operational_cum,"certifiedMt":r.certified_mt,"certifiedCum":r.certified_cum,"billableMt":r.billable_mt,"billableCum":r.billable_cum,"varianceMt":r.variance_mt,"varianceCum":r.variance_cum,"surveyId":r.source_measurement_id,"billingBasis":r.billing_basis,
+             "factorBreakdown":json.loads(r.factor_snapshot_json) if r.factor_snapshot_json else None,
+             "status":r.status} for r in rows]
 
 
 @router.post("/{site_id}/billing/{billing_id}/decision")
@@ -1140,11 +1246,45 @@ def decide_billing(site_id:str,billing_id:str,p:SiteDecisionIn,request:Request,d
     row=db.get(SiteBillingReconciliation,billing_id)
     if not row or row.site_id!=site_id: raise HTTPException(404,"Billing reconciliation not found")
     if p.action == "APPROVE" and site_id == "KOCP":
-        if not row.source_measurement_id or (row.billable_mt is None and row.billable_cum is None):
-            raise HTTPException(409, "Cannot approve without matching MCL certified Coal MT or OB CuM.")
-        survey = db.get(SiteSurveyMeasurement, row.source_measurement_id)
-        if not survey or survey.status != "APPROVED" or survey.material_id != row.material_id:
-            raise HTTPException(409, "The MCL survey is missing, unapproved or belongs to another material.")
+        if row.status != "DRAFT":
+            raise HTTPException(409, "Only draft billing periods can be approved.")
+        if row.billing_basis == "MCL_MONTHLY_AVERAGE":
+            material = db.get(SiteMaterial, row.material_id)
+            if not material or not row.factor_snapshot_json:
+                raise HTTPException(409, "Final approved MCL factor snapshot is missing.")
+            is_ob = str(material.default_unit or "").upper() in {"CUM","M3","M³"}
+            latest = month_end_factor_reconciliation(
+                db, site_id=site_id, material_id=row.material_id,
+                from_date=row.period_start, to_date=row.period_end, is_ob=is_ob,
+            )
+            if not latest or json.dumps(latest, sort_keys=True) != row.factor_snapshot_json:
+                raise HTTPException(409, "MCL month-end averages or posted trips changed. Rebuild the billing draft.")
+            if row.source_measurement_id:
+                survey = db.get(SiteSurveyMeasurement, row.source_measurement_id)
+                if not survey or survey.status != "APPROVED" or survey.material_id != row.material_id:
+                    raise HTTPException(409, "The matching MCL survey is no longer approved.")
+                survey_qty = survey.measured_cum if is_ob else survey.measured_mt
+                if survey_qty is None or Decimal(str(survey_qty)) != Decimal(latest["total"]):
+                    raise HTTPException(409, "MCL survey and final monthly average quantities differ.")
+            certified = row.billable_cum if is_ob else row.billable_mt
+            if certified is None or Decimal(str(certified)) != Decimal(latest["total"]):
+                raise HTTPException(409, "Final MCL certified billing value does not match approved factors.")
+        else:
+            if not row.source_measurement_id or (row.billable_mt is None and row.billable_cum is None):
+                raise HTTPException(409, "Cannot approve without matching approved MCL certified quantity or monthly averages.")
+            survey = db.get(SiteSurveyMeasurement, row.source_measurement_id)
+            if not survey or survey.status != "APPROVED" or survey.material_id != row.material_id:
+                raise HTTPException(409, "The MCL survey is missing, unapproved or belongs to another material.")
+        existing = db.scalar(select(SiteBillingReconciliation.billing_id).where(
+            SiteBillingReconciliation.site_id == site_id,
+            SiteBillingReconciliation.material_id == row.material_id,
+            SiteBillingReconciliation.period_start == row.period_start,
+            SiteBillingReconciliation.period_end == row.period_end,
+            SiteBillingReconciliation.status == "APPROVED",
+            SiteBillingReconciliation.billing_id != row.billing_id,
+        ).limit(1))
+        if existing:
+            raise HTTPException(409, "This Coal/OB period is already approved. Revise the existing billing control first.")
     if p.action not in {"APPROVE","REJECT"}: raise HTTPException(422,"Only APPROVE or REJECT is supported")
     row.status="APPROVED" if p.action=="APPROVE" else "REJECTED"; row.approved_by=user.login_id if p.action=="APPROVE" else None; row.approved_at=datetime.now(timezone.utc) if p.action=="APPROVE" else None; _audit(db,user,site_id,p.action+"_BILLING","site_billing_reconciliation",billing_id,reason=p.reason); db.commit(); return {"ok":True,"status":row.status}
 
@@ -1554,6 +1694,8 @@ def kocp_hsd_vehicle_report(
         )
     } if ids else {}
     asset_rows = []
+    category_totals = {}
+    ownership_totals = {}
     total_litres = Decimal("0")
     issue_count = 0
     for asset, count, litres, first_day, last_day in grouped:
@@ -1570,12 +1712,28 @@ def kocp_hsd_vehicle_report(
                 ) if x
             ) if eq else (asset or "Unmapped equipment")
         )
+        physical_type = kocp_equipment_category(eq.type, eq.make_model) if eq else "OTHER"
+        ownership_group = kocp_ownership_category(eq.ownership) if eq else "UNSPECIFIED"
+        raw_type = str(eq.type or "") if eq else "Unmapped"
+        mismatch = bool(eq and physical_type == "LOADER" and
+                        any(tag in raw_type.upper() for tag in ("TIPPER", "TRIPPER", "DUMPER")))
+        for group, key in ((category_totals, physical_type),
+                           (ownership_totals, ownership_group)):
+            rec = group.setdefault(key, {"category": key, "vehicles": 0,
+                                          "issues": 0, "litres": Decimal("0")})
+            rec["vehicles"] += 1
+            rec["issues"] += int(count)
+            rec["litres"] += qty
         asset_rows.append({
             "assetId": asset, "vehicle": display,
             "registration": eq.vehicle_no if eq else None,
             "doorNo": eq.door_no if eq else None,
             "ownership": eq.ownership if eq else "Unknown",
+            "ownershipCategory": ownership_group,
+            "equipmentCategory": physical_type,
             "equipmentType": eq.type if eq else "Unmapped",
+            "makeModel": eq.make_model if eq else None,
+            "needsMasterCorrection": mismatch,
             "issues": int(count),
             "litres": str(qty),
             "averageLitres": str(qty / count) if count else None,
@@ -1616,6 +1774,15 @@ def kocp_hsd_vehicle_report(
         "averageLitres": str(total_litres / issue_count) if issue_count else None,
         "entries": detail, "hasMoreEntries": has_more,
         "detailLimit": detail_limit,
+        "byEquipmentCategory": [
+            {**v, "litres": str(v["litres"])}
+            for v in sorted(category_totals.values(), key=lambda x: (-x["litres"], x["category"]))
+        ],
+        "byOwnership": [
+            {**v, "litres": str(v["litres"])}
+            for v in sorted(ownership_totals.values(), key=lambda x: (-x["litres"], x["category"]))
+        ],
+        "classificationWarnings": sum(int(x["needsMasterCorrection"]) for x in asset_rows),
     }
 
 

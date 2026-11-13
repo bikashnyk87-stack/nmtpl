@@ -575,7 +575,7 @@ function syncKocpRoutes(){
 function tripGridRows(kind,count=10,start=0){
   const isSocp=siteId==='SOCP';
   return Array.from({length:count},(_,index)=>{const i=start+index;return `<tr class="simple-trip-row" data-i="${i}">
-    <td>${i+1}</td>
+    <td>${i+1}${siteId==='KOCP'?`<button type="button" class="kocp-row-copy" title="Copy selections into next blank row (GP is not copied)" onclick="copyKocpTripRow(${i})">Copy ↓</button>`:''}</td>
     <td><select class="stShift">${shiftOpts(simpleShift())}</select></td>
     <td>${lookupMarkup(`stVehicle${i}`,'ASSET','Vehicle','TRANSPORT,VEHICLE,TIPPER,DUMPER')}</td>
     <td>${lookupMarkup(`stLoader${i}`,'ASSET',siteId==='KOCP'?'Loader / Excavator':'Loader','LOADING,LOADER,EXCAVATOR')}</td>
@@ -603,7 +603,8 @@ async function renderSimpleTrips(kind='TRIP'){
     kocpRouteList[kind]=routes;
     kocpMaterialTypes[kind]=catalog[kind]||[];
   }
-  const rec=await api(`/api/sites/${siteId}/records/trips?operating_date=${state.ctx.operatingDate}&limit=60`).catch(()=>[]);
+  const historyDay=siteId==='KOCP'?(kocpTripHistoryDay||state.ctx.operatingDate):state.ctx.operatingDate;
+  const rec=await api(`/api/sites/${siteId}/records/trips?operating_date=${historyDay}&limit=${siteId==='KOCP'?500:60}`).catch(()=>[]);
   const viewRec=siteId==='KOCP'?rec.filter(r=>{const isOB=(r.quantityCum!==null&&r.quantityCum!==undefined)||kocpMaterialTypes.OB.some(x=>x.materialId===r.materialId);return obMode?isOB:!isOB}):rec;
   if(siteId==='KOCP')kocpRecentTripRows=rec;
   const kocpRouteLabel=routeId=>{const r=[...kocpRouteList.COAL,...kocpRouteList.OB].find(x=>x.routeId===routeId);return r?r.group+' · '+r.distanceRange:'—'};
@@ -637,14 +638,17 @@ async function renderSimpleTrips(kind='TRIP'){
   const recentHeads=isSocp?['Shift','Vehicle','Loader','Destination','GP','MT','CuM','Basis']:['Shift','Vehicle','Loader/Excavator','Route / Distance','Source','Destination','Material','GP','MT','CuM','Basis','Status','Correct'];
   return simplePageHead(title,desc)+`<div id="simpleTripForm" class="simple-form batch-entry-form">
     ${defaults}
-    <div class="entry-grid-note"><b>Fast entry:</b> Set repeated values above, click <b>Apply Defaults</b>, then enter only the changing vehicle/GP/quantity fields.</div>
+    <div class="entry-grid-note"><b>Fast entry:</b> Set repeated values above, apply defaults, then use <b>Copy ↓</b> on any row to duplicate its selections into the next blank row. GP stays blank to prevent duplicate references.</div>
+    ${siteId==='KOCP'?'<div class="kocp-entry-search"><label>Find in entry rows <input type="search" id="koTripEntrySearch" placeholder="Vehicle, loader, source, destination, GP" oninput="filterKocpEntryRows()"></label><button type="button" class="btn outline" onclick="if($(\'koTripEntrySearch\')){$(\'koTripEntrySearch\').value=\'\';filterKocpEntryRows()}">Show all rows</button></div>':''}
     <div class="simple-table-wrap"><table class="simple-grid-table software-entry-grid trip-entry-grid"><thead><tr>${heads}</tr></thead><tbody id="simpleTripRows">${tripGridRows('TRIP',10)}</tbody></table></div>
     ${siteId==='KOCP'?`<div class="kocp-hmr-inline">
       <div class="kocp-hmr-head"><div><b>Machine HMR</b><span>Enter readings for every machine used in this sheet.</span></div><button class="btn outline" type="button" onclick="syncKocpHmrMachines()">Load Used Machines</button><button class="btn outline" type="button" onclick="addKocpHmrRows(1)">+1 Row</button><button class="btn outline" type="button" onclick="addKocpHmrRows(5)">+5 Rows</button><button class="btn outline" type="button" onclick="addKocpHmrRows(10)">+10 Rows</button><span class="row-count-badge" id="khRowCount">5 machines</span></div>
       <div class="simple-table-wrap"><table class="simple-grid-table software-entry-grid kocp-hmr-table"><thead><tr><th>#</th><th>Loader / Excavator</th><th>Shift</th><th>HMR Open</th><th>HMR Close</th><th>Run</th><th>Status</th></tr></thead><tbody id="kocpHmrRows">${kocpHmrRows(5)}</tbody></table></div>
     </div>`:''}
     <div class="simple-actions"><button id="stSave" class="btn primary" onclick="saveSimpleTrips('TRIP')">Save ${siteId==='KOCP'?(obMode?'OB':'Coal'):'Production'} Sheet</button><button class="btn outline" onclick="clearSimpleTripDraft()">Clear</button><span class="draft-state">Draft autosaves on this PC</span></div>
-  </div>`+panel('Today’s Entries',recentTable(recentHeads,rows),`${viewRec.length} recent records`)+(siteId==='KOCP'?kocpTripCorrectionMarkup():'')
+  </div>`+(siteId==='KOCP'?panel('Find saved Coal / OB trips',
+    '<div class="kocp-hsd-filter-bar"><label>Date <input type="date" id="koTripFindDate" value="'+esc(historyDay)+'"></label><button type="button" class="btn primary" onclick="loadKocpTripHistory()">Show date</button><label class="kocp-hsd-filter-search">Search saved trips <input type="search" id="koTripSearch" placeholder="Vehicle ID, route, GP, material" oninput="filterKocpSavedTrips()"></label></div><div id="koTripSavedList">'+recentTable(recentHeads,rows)+'</div>',
+    viewRec.length+' records'):panel('Today’s Entries',recentTable(recentHeads,rows),viewRec.length+' recent records'))+(siteId==='KOCP'?kocpTripCorrectionMarkup():'')
 }
 
 function kocpTripCorrectionMarkup(){
@@ -733,6 +737,39 @@ async function saveKocpTripCorrection(action){
   finally{for(const id of ['keSave','keVoid'])if($(id))$(id).disabled=false}
 }
 
+let kocpTripHistoryDay='';
+function loadKocpTripHistory(){
+  kocpTripHistoryDay=$('koTripFindDate')?.value||state.ctx.operatingDate;
+  render();
+}
+function filterKocpSavedTrips(){
+  const q=String($('koTripSearch')?.value||'').trim().toLowerCase();
+  document.querySelectorAll('#koTripSavedList tbody tr').forEach(row=>{
+    row.hidden=!!q&&!row.textContent.toLowerCase().includes(q);
+  });
+}
+function filterKocpEntryRows(){
+  const q=String($('koTripEntrySearch')?.value||'').trim().toLowerCase();
+  document.querySelectorAll('#simpleTripRows .simple-trip-row').forEach(row=>{
+    const texts=[...row.querySelectorAll('input:not([type=hidden]),select')].map(v=>
+      v.tagName==='SELECT'?v.selectedOptions?.[0]?.text||'':v.value).join(' ').toLowerCase();
+    row.hidden=!!q&&!texts.includes(q);
+  });
+}
+function filterKocpHsdEntryRows(){
+  const q=String($('koHsdEntrySearch')?.value||'').trim().toLowerCase();
+  document.querySelectorAll('#simpleHsdRows .simple-hsd-row').forEach(row=>{
+    const texts=[...row.querySelectorAll('input:not([type=hidden]),select')].map(v=>
+      v.tagName==='SELECT'?v.selectedOptions?.[0]?.text||'':v.value).join(' ').toLowerCase();
+    row.hidden=!!q&&!texts.includes(q);
+  });
+}
+function filterKocpHsdSavedRecords(){
+  const q=String($('koHsdSavedSearch')?.value||'').trim().toLowerCase();
+  document.querySelectorAll('.koHsdRecentRecords tbody tr').forEach(row=>{
+    row.hidden=!!q&&!row.textContent.toLowerCase().includes(q);
+  });
+}
 function refreshEntryRowCounts(){
   for(const [bodyId,countId,klass] of [
     ['simpleTripRows','stRowCount','.simple-trip-row'],
@@ -779,6 +816,44 @@ function rebuildSimpleTripRows(){
   }
   saveDraft('simpleTripForm',draftKey(state.module));
   refreshEntryRowCounts();
+}
+function copyKocpTripRow(index){
+  if(siteId!=='KOCP')return;
+  const rows=[...document.querySelectorAll('.simple-trip-row')];
+  const from=rows.find(r=>Number(r.dataset.i)===Number(index));
+  if(!from)return;
+  let after=rows.filter(r=>Number(r.dataset.i)>Number(index)).find(r=>{
+    const i=r.dataset.i;
+    return !['stVehicle','stLoader','stSource','stDest','stMaterial'].some(id=>$(id+i)?.value||
+      $(id+i+'Text')?.value.trim())&&!$('stGp'+i)?.value.trim();
+  });
+  if(!after){
+    if(rows.length>=200)return toast('Maximum 200 rows. Save the current sheet first.','bad');
+    addSimpleTripRows(1);
+    after=[...document.querySelectorAll('.simple-trip-row')].slice(-1)[0];
+  }
+  const source=String(index),dest=after.dataset.i;
+  const sh=from.querySelector('.stShift'),toSh=after.querySelector('.stShift');
+  if(sh&&toSh)toSh.value=sh.value;
+  for(const name of ['stVehicle','stLoader','stSource','stDest','stMaterial']){
+    const src=$(name+source),dst=$(name+dest),st=$(name+source+'Text'),dt=$(name+dest+'Text');
+    if(!src||!dst||!src.value)continue;
+    dst.value=src.value;
+    if(st&&dt){
+      dt.value=st.value;
+      dt.dataset.selected=src.value;
+      for(const attr of ['vehicleNo','doorNo','group','type'])
+        if(st.dataset[attr])dt.dataset[attr]=st.dataset[attr];
+    }
+  }
+  if($('stRoute'+source)&&$('stRoute'+dest))
+    $('stRoute'+dest).value=$('stRoute'+source).value;
+  // GP is deliberately NOT copied: silently duplicating trip references is unsafe.
+  const gp=$('stGp'+dest);if(gp)gp.value='';
+  const status=$('stStatus'+dest);if(status){status.textContent='Ready · copied';status.className='simple-status muted'}
+  saveDraft('simpleTripForm',draftKey(state.module));
+  if($('stVehicle'+dest+'Text'))$('stVehicle'+dest+'Text').focus();
+  toast('Copied selections into row '+(Number(dest)+1)+' — enter/verify GP before saving.');
 }
 function copyLookupDefault(srcId,dstId){
   const src=$(srcId),dst=$(dstId),srcText=$(srcId+'Text'),dstText=$(dstId+'Text');
@@ -1035,27 +1110,43 @@ function kocpVehicleReportResults(d){
     <div><span>Average / issue</span><strong>${d.averageLitres==null?'—':dashNum(d.averageLitres,2)+' L'}</strong></div>
   </div>`;
   const summary=recentTable(
-    ['#','Vehicle / registration','Ownership','Type','Issues','Litres','Avg/issue','First','Last'],
-    rows.map((v,i)=>`<tr class="kocp-fuel-vehicle-row" data-search="${esc([v.vehicle,v.assetId,v.registration,v.doorNo,v.ownership,v.equipmentType].join(' ').toLowerCase())}">
+    ['#','Vehicle / registration','Equipment Category','Ownership','Master type / warning','Issues','Litres','Avg/issue','First','Last'],
+    rows.map((v,i)=>`<tr class="kocp-fuel-vehicle-row" data-search="${esc([v.vehicle,v.assetId,v.registration,v.doorNo,v.ownership,v.ownershipCategory,v.equipmentCategory,v.equipmentType].join(' ').toLowerCase())}">
       <td>${i+1}</td><td><b>${esc(v.vehicle)}</b></td>
-      <td>${esc(v.ownership||'—')}</td><td>${esc(v.equipmentType||'—')}</td>
+      <td>${esc(v.equipmentCategory||'—')}</td><td>${esc(v.ownershipCategory||v.ownership||'—')}</td>
+      <td>${esc(v.equipmentType||'—')}${v.needsMasterCorrection?'<span class="simple-status bad">Wrong type in Masters: L150H is a Loader</span>':''}</td>
       <td>${dashNum(v.issues)}</td><td><b>${dashNum(v.litres,2)} L</b></td>
       <td>${v.averageLitres==null?'—':dashNum(v.averageLitres,2)+' L'}</td>
       <td>${esc(v.firstDate||'—')}</td><td>${esc(v.lastDate||'—')}</td>
     </tr>`)
   );
-  const details=(d.entries||[]).map((v,i)=>`<tr><td>${i+1}</td>
+  const details=(d.entries||[]).map((v,i)=>`<tr class="kocp-fuel-detail-row"><td>${i+1}</td>
     <td>${esc(v.date)}</td><td>${esc(v.shift||'—')}</td><td>${esc(v.vehicle)}</td>
     <td>${dashNum(v.litres,2)} L</td><td>${esc(v.reference||'—')}</td>
     <td>${esc(v.enteredBy||'—')}</td></tr>`);
+  const categoryGrid=(items,title)=>`<details class="kocp-fuel-detail"><summary>${esc(title)} (${(items||[]).length} categories)</summary>${recentTable(
+    ['Category','Vehicles','Issues','Total HSD litres'],
+    (items||[]).map(x=>`<tr><td><b>${esc(x.category)}</b></td><td>${dashNum(x.vehicles)}</td><td>${dashNum(x.issues)}</td><td>${dashNum(x.litres,2)} L</td></tr>`)
+  )}</details>`;
+  const categoryBreakdown=categoryGrid(d.byEquipmentCategory,'Category-wise HSD consumption')+
+    categoryGrid(d.byOwnership,'Ownership-wise HSD consumption');
   return overview+
     `<p class="simple-note">All POSTED vehicle issues between ${esc(d.fromDate)} and ${esc(d.toDate)} · Shift ${esc(d.shift)}. Voided entries excluded.</p>`+
     (rows.length?summary:'<p class="ops-empty">No posted HSD issues for these filters.</p>')+
+    (d.classificationWarnings?'<p class="simple-warning">'+dashNum(d.classificationWarnings)+' equipment record(s) have a conflicting physical type. Correct in KOCP → Masters → Equipment / Vehicles; historical fuel entries remain unchanged.</p>':'')+
+    categoryBreakdown+
     `<details class="kocp-fuel-detail">
        <summary>View individual fuel issues (${dashNum(d.issueCount)} entries)</summary>
        ${d.hasMoreEntries?'<p class="simple-warning">Only the first '+dashNum(d.detailLimit)+' details are shown; shorten date range to see every row. All vehicle totals are complete.</p>':''}
+       <label>Search individual issues <input type="search" id="koHsdDetailSearch" oninput="filterKocpFuelDetails()" placeholder="Date, vehicle, reference, entered by"></label>
        ${recentTable(['#','Date','Shift','Vehicle','Litres','Reference','Entered by'],details)}
      </details>`;
+}
+function filterKocpFuelDetails(){
+  const q=String($('koHsdDetailSearch')?.value||'').trim().toLowerCase();
+  document.querySelectorAll('.kocp-fuel-detail-row').forEach(row=>{
+    row.hidden=!!q&&!row.textContent.toLowerCase().includes(q);
+  });
 }
 function kocpVehicleReportPanel(data,today){
   const r=kocpFuelRangeFor(today);
@@ -1108,9 +1199,15 @@ function downloadKocpFuelVehicleCsv(){
   const rows=[
     ['KOCP HSD VEHICLE CONSUMPTION'],
     ['From',d.fromDate,'To',d.toDate,'Shift',d.shift],
-    ['Vehicle','Registration','Door No','Ownership','Type','Issue Count','Total Litres','Avg Litres / Issue','First Date','Last Date'],
-    ...(d.vehicles||[]).map(v=>[v.vehicle,v.registration,v.doorNo,v.ownership,v.equipmentType,v.issues,v.litres,v.averageLitres,v.firstDate,v.lastDate]),
-    ['TOTAL','','','','',d.issueCount,d.totalLitres,d.averageLitres]
+    ['Vehicle','Registration','Door No','Ownership Category','Physical Category','Master Type','Issue Count','Total Litres','Avg Litres / Issue','First Date','Last Date'],
+    ...(d.vehicles||[]).map(v=>[v.vehicle,v.registration,v.doorNo,v.ownershipCategory,v.equipmentCategory,v.equipmentType,v.issues,v.litres,v.averageLitres,v.firstDate,v.lastDate]),
+    ['TOTAL','','','','','',d.issueCount,d.totalLitres,d.averageLitres],
+    [],['CATEGORY-WISE HSD SUMMARY'],
+    ['Equipment category','Vehicles','Issues','Total litres'],
+    ...(d.byEquipmentCategory||[]).map(x=>[x.category,x.vehicles,x.issues,x.litres]),
+    [],['OWNERSHIP-WISE HSD SUMMARY'],
+    ['Ownership category','Vehicles','Issues','Total litres'],
+    ...(d.byOwnership||[]).map(x=>[x.category,x.vehicles,x.issues,x.litres])
   ];
   const csv='\uFEFF'+rows.map(r=>r.map(quote).join(',')).join('\r\n');
   const url=URL.createObjectURL(new Blob([csv],{type:'text/csv;charset=utf-8'}));
@@ -1204,10 +1301,11 @@ async function saveKocpHsdCorrection(action){
 let kocpRecentHsdRows=[];
 let kocpHsdHistoryDate='';
 function kocpHsdHistoryControls(){
-  if(!kocpHsdAdmin())return '';
-  return `<div class="hsd-history-tools"><label>Find records by date <input type="date" id="hsdHistoryDate" value="${esc(kocpHsdHistoryDate)}"></label>
-     <button class="btn outline" onclick="reloadKocpHsdHistory()">Find Entries</button>
-     <button class="btn outline" onclick="clearKocpHsdHistory()">Latest Records</button></div>`;
+  if(siteId!=='KOCP')return '';
+  return `<div class="hsd-history-tools"><label>Find fuel records by date <input type="date" id="hsdHistoryDate" value="${esc(kocpHsdHistoryDate)}"></label>
+     <button class="btn outline" onclick="reloadKocpHsdHistory()">Show Date</button>
+     <button class="btn outline" onclick="clearKocpHsdHistory()">Latest Records</button>
+     <label class="kocp-hsd-filter-search">Search records <input type="search" id="koHsdSavedSearch" placeholder="Vehicle ID / ref / litres / status" oninput="filterKocpHsdSavedRecords()"></label></div>`;
 }
 function reloadKocpHsdHistory(){
   kocpHsdHistoryDate=$('hsdHistoryDate')?.value||'';
@@ -1273,7 +1371,7 @@ async function renderSimpleHsd(){
         </div>
         <div id="rcSaveStatus" class="hsd-entry-feedback" aria-live="polite"></div>
       </section>`+
-      panel('Recent Fuel Receipts',kocpHsdHistoryControls()+recentTable(hsdHead,rows.slice(0,100)),`${rows.length} recent records`)+kocpHsdCorrectionPanel();
+      panel('Recent Fuel Receipts',kocpHsdHistoryControls()+'<div class="koHsdRecentRecords">'+recentTable(hsdHead,rows.slice(0,100))+'</div>',`${rows.length} recent records`)+kocpHsdCorrectionPanel();
   }
   return simplePageHead(`${siteId} Fuel / HSD`,'Separate diesel issue and receipt registers; batch entry with saved drafts.')+
   `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
@@ -1289,6 +1387,7 @@ async function renderSimpleHsd(){
       <div class="batch-hint"><b>${esc(modeLabel)} entry</b><span>${activeHsdEntryType==='RECEIPT'?'Supplier, litres and challan reference.':'Select equipment, fill litres and reference. Tab completes vehicle selections.'}</span></div>
     </div>
     ${siteId==='KOCP'?`<p class="simple-note">Choose any active KOCP-assigned vehicle or machine, including hired vehicles and LMVs. Search registration, Door No or party. Not listed? Add or activate the vehicle and its KOCP assignment in Equipment Masters. <button type="button" class="btn outline" onclick="openSiteModule(\'MASTERS\')">Open Equipment Masters</button></p>`:'' }
+    ${siteId==='KOCP'?'<div class="kocp-entry-search"><label>Find in fuel entry rows <input type="search" id="koHsdEntrySearch" oninput="filterKocpHsdEntryRows()" placeholder="Search selected equipment / vehicle / reference"></label><button type="button" class="btn outline" onclick="if($(\'koHsdEntrySearch\')){$(\'koHsdEntrySearch\').value=\'\';filterKocpHsdEntryRows()}">Show all rows</button></div>':''}
     <div class="simple-table-wrap"><table class="simple-grid-table software-entry-grid hsd-entry-grid">
       <thead><tr><th>#</th><th>Shift</th><th>Type</th><th>${activeHsdEntryType==='RECEIPT'?'Supplier':'Equipment / Supplier'}</th><th>Litres</th><th>Reference</th><th>Status</th></tr></thead>
       <tbody id="simpleHsdRows">${hsdGridRows(10)}</tbody>
@@ -1296,7 +1395,7 @@ async function renderSimpleHsd(){
     <div class="simple-actions"><button type="button" id="shSave" class="btn primary" onclick="saveSimpleHsd()" ${siteId==='KOCP'&&activeHsdEntryType==='ISSUE'&&!kocpHsdCanIssue(fuel)?'disabled title="Opening stock must be verified before issuing fuel"':''}>Save ${esc(modeLabel)} Rows</button><button type="button" class="btn outline" onclick="clearSimpleHsdDraft()">Clear This Draft</button><span class="draft-state">Draft autosaves on this PC</span></div>
     <div class="simple-note">Live balance refreshes from posted Neon transactions after every successful issue; unfinished rows are retained.</div>
   </div>`+
-  panel('Recent '+modeLabel+' records',kocpHsdHistoryControls()+recentTable(hsdHead,rows),`${rows.length} recent records`)+
+  panel('Recent '+modeLabel+' records',kocpHsdHistoryControls()+'<div class="koHsdRecentRecords">'+recentTable(hsdHead,rows)+'</div>',`${rows.length} recent records`)+
   (siteId==='KOCP'?panel('All HSD-consuming vehicles / equipment',kocpVehicleReportPanel(vehicleReport,today),'Complete list · From–To filters'):panel('Top HSD-consuming equipment',fuelAssetBreakdown(fuel),'Selected month'))+(siteId==='KOCP'?kocpHsdCorrectionPanel():'');
 }
 async function saveHsdOpening(){
@@ -1554,7 +1653,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,applyKocpFuelVehicleFilters,setKocpFuelMonthToDate,filterKocpFuelVehicles,downloadKocpFuelVehicleCsv,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,applyKocpFuelVehicleFilters,setKocpFuelMonthToDate,filterKocpFuelVehicles,downloadKocpFuelVehicleCsv,filterKocpFuelDetails,filterKocpHsdEntryRows,filterKocpHsdSavedRecords,filterKocpSavedTrips,filterKocpEntryRows,loadKocpTripHistory,copyKocpTripRow,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});

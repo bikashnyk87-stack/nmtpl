@@ -573,6 +573,8 @@ class SiteBillingReconciliation(Base):
     variance_mt: Mapped[Decimal | None] = mapped_column(Numeric(16, 3))
     variance_cum: Mapped[Decimal | None] = mapped_column(Numeric(16, 3))
     source_measurement_id: Mapped[str | None] = mapped_column(ForeignKey("site_survey_measurement.measurement_id"), index=True)
+    billing_basis: Mapped[str | None] = mapped_column(String(40))
+    factor_snapshot_json: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(30), default="DRAFT", index=True)
     notes: Mapped[str | None] = mapped_column(Text)
     created_by: Mapped[str] = mapped_column(String(60))
@@ -1075,6 +1077,10 @@ def ensure_tiom_entry_columns(engine) -> None:
         'site_weight_factor': {
             'destination_location_id': 'VARCHAR(80)',
             'route_id': 'VARCHAR(80)',
+        },
+        'site_billing_reconciliation': {
+            'billing_basis': 'VARCHAR(40)',
+            'factor_snapshot_json': 'TEXT',
         },
         'tiom_drilling_shift': {
             'rom_ob_holes': 'INTEGER',
