@@ -1170,7 +1170,7 @@ def build_billing(site_id: str, request: Request, period_start: date, period_end
     monthly = None
     # MCL's final approved *average per unloading point/vehicle type* is a
     # second certified basis. Never substitute daily operating averages.
-    if site_id == "KOCP" and not survey:
+    if site_id == "KOCP":
         monthly = month_end_factor_reconciliation(
             db, site_id=site_id, material_id=material_id,
             from_date=period_start, to_date=period_end, is_ob=is_ob,
@@ -1178,11 +1178,19 @@ def build_billing(site_id: str, request: Request, period_start: date, period_end
     cert_mt = _decimal(survey.measured_mt) if survey and survey.measured_mt is not None and (site_id != "KOCP" or not is_ob) else None
     cert_cum = _decimal(survey.measured_cum) if survey and (site_id != "KOCP" or is_ob) else None
     if monthly:
+        # Final MCL averages control billing. An independently approved survey
+        # must reconcile to the same amount, never silently supersede them.
+        survey_qty = Decimal(str(survey.measured_cum if is_ob else survey.measured_mt)) if survey else None
+        if survey_qty is not None and survey_qty != Decimal(monthly["total"]):
+            raise HTTPException(
+                409, "Approved MCL survey quantity differs from the final MCL monthly averages. "
+                     "Reconcile the two MCL sources before billing."
+            )
         if is_ob:
             cert_cum = Decimal(monthly["total"])
         else:
             cert_mt = Decimal(monthly["total"])
-    basis = "MCL_SURVEY" if survey else ("MCL_MONTHLY_AVERAGE" if monthly else None)
+    basis = "MCL_MONTHLY_AVERAGE" if monthly else ("MCL_SURVEY" if survey else None)
     snapshot = json.dumps(monthly, sort_keys=True) if monthly else None
     bid = f"BILL-{site_id}-{uuid4().hex[:14].upper()}"
     row = SiteBillingReconciliation(
@@ -1235,6 +1243,13 @@ def decide_billing(site_id:str,billing_id:str,p:SiteDecisionIn,request:Request,d
             )
             if not latest or json.dumps(latest, sort_keys=True) != row.factor_snapshot_json:
                 raise HTTPException(409, "MCL month-end averages or posted trips changed. Rebuild the billing draft.")
+            if row.source_measurement_id:
+                survey = db.get(SiteSurveyMeasurement, row.source_measurement_id)
+                if not survey or survey.status != "APPROVED" or survey.material_id != row.material_id:
+                    raise HTTPException(409, "The matching MCL survey is no longer approved.")
+                survey_qty = survey.measured_cum if is_ob else survey.measured_mt
+                if survey_qty is None or Decimal(str(survey_qty)) != Decimal(latest["total"]):
+                    raise HTTPException(409, "MCL survey and final monthly average quantities differ.")
             certified = row.billable_cum if is_ob else row.billable_mt
             if certified is None or Decimal(str(certified)) != Decimal(latest["total"]):
                 raise HTTPException(409, "Final MCL certified billing value does not match approved factors.")
