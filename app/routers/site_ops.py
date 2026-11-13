@@ -1603,6 +1603,8 @@ def kocp_hsd_vehicle_report(
         )
     } if ids else {}
     asset_rows = []
+    category_totals = {}
+    ownership_totals = {}
     total_litres = Decimal("0")
     issue_count = 0
     for asset, count, litres, first_day, last_day in grouped:
@@ -1619,12 +1621,28 @@ def kocp_hsd_vehicle_report(
                 ) if x
             ) if eq else (asset or "Unmapped equipment")
         )
+        physical_type = kocp_equipment_category(eq.type, eq.make_model) if eq else "OTHER"
+        ownership_group = kocp_ownership_category(eq.ownership) if eq else "UNSPECIFIED"
+        raw_type = str(eq.type or "") if eq else "Unmapped"
+        mismatch = bool(eq and physical_type == "LOADER" and
+                        any(tag in raw_type.upper() for tag in ("TIPPER", "TRIPPER", "DUMPER")))
+        for group, key in ((category_totals, physical_type),
+                           (ownership_totals, ownership_group)):
+            rec = group.setdefault(key, {"category": key, "vehicles": 0,
+                                          "issues": 0, "litres": Decimal("0")})
+            rec["vehicles"] += 1
+            rec["issues"] += int(count)
+            rec["litres"] += qty
         asset_rows.append({
             "assetId": asset, "vehicle": display,
             "registration": eq.vehicle_no if eq else None,
             "doorNo": eq.door_no if eq else None,
             "ownership": eq.ownership if eq else "Unknown",
+            "ownershipCategory": ownership_group,
+            "equipmentCategory": physical_type,
             "equipmentType": eq.type if eq else "Unmapped",
+            "makeModel": eq.make_model if eq else None,
+            "needsMasterCorrection": mismatch,
             "issues": int(count),
             "litres": str(qty),
             "averageLitres": str(qty / count) if count else None,
@@ -1665,6 +1683,15 @@ def kocp_hsd_vehicle_report(
         "averageLitres": str(total_litres / issue_count) if issue_count else None,
         "entries": detail, "hasMoreEntries": has_more,
         "detailLimit": detail_limit,
+        "byEquipmentCategory": [
+            {**v, "litres": str(v["litres"])}
+            for v in sorted(category_totals.values(), key=lambda x: (-x["litres"], x["category"]))
+        ],
+        "byOwnership": [
+            {**v, "litres": str(v["litres"])}
+            for v in sorted(ownership_totals.values(), key=lambda x: (-x["litres"], x["category"]))
+        ],
+        "classificationWarnings": sum(int(x["needsMasterCorrection"]) for x in asset_rows),
     }
 
 
