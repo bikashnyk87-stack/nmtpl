@@ -1,6 +1,6 @@
 /* KOCP unloading-point MCL factors, approved rule calculation and reporting.
    All values are loaded from the existing KOCP masters, never hardcoded. */
-const koPointState={routes:[],materials:{COAL:[],OB:[]},rules:[]};
+const koPointState={routes:[],materials:{COAL:[],OB:[]},rules:[],vehicleClasses:[]};
 const koPointKinds={COAL:"COAL_AVG_MT_PER_TRIP",OB:"OB_CUM_PER_TRIP"};
 const koUnit=k=>k==="OB"?"CUM/TRIP":"MT/TRIP";
 
@@ -49,20 +49,46 @@ function koPointChangeRoute(){
   const material=koPointMaterials(r.kind).find(x=>x.typeCode===code);
   if(material)$('pfMaterial').value=material.materialId;
 }
+function koFactorClassesFromEquipment(rows){
+  const options=new Set(['EICHER','BHARAT BENZ','TATA','VOLVO TIPPER','VOLVO','ASHOK LEYLAND']);
+  for(const x of rows||[]){
+    if(!x.active)continue;
+    const kind=String(x.type||'').trim().toUpperCase();
+    const name=(kind+' '+String(x.makeModel||'')).toUpperCase();
+    if(kind&&kind!=='OTHER'&&/(TIPPER|TRIPPER|DUMPER|TRUCK)/.test(kind))options.add(kind);
+    for(const brand of ['EICHER','BHARAT BENZ','TATA','VOLVO','ASHOK LEYLAND']){
+      if(name.includes(brand))options.add(brand);
+    }
+  }
+  return [...options].sort();
+}
+function koPointSourceChanged(){
+  const final=$('pfSource')?.value==='MCL_MONTHLY';
+  if($('pfOpDate')){$('pfOpDate').disabled=final;if(final)$('pfOpDate').value=''}
+  if($('pfShift')){$('pfShift').disabled=final;if(final)$('pfShift').value=''}
+  const hint=$('pfSourceHint');
+  if(hint)hint.textContent=final
+    ?'Final approved MCL month-end averages re-rate trips for billing only. They never change saved operational trips. Set the full period and MCL document reference.'
+    :'Approved daily provisional averages are used when posting Coal/OB trips. The final MCL month-end report controls billing separately.';
+}
 function koPointName(id,list,key,label){
   const found=list.find(x=>x[key]===id);return found?found[label]:id||'—';
 }
 async function renderKocpPointFactors(){
-  const [rules,routes,catalog]=await Promise.all([
+  const [rules,routes,catalog,equipment]=await Promise.all([
     api('/api/sites/KOCP/weight-factors'),
     api('/api/sites/KOCP/routes'),
-    api('/api/sites/KOCP/material-types')
+    api('/api/sites/KOCP/material-types'),
+    api('/api/sites/KOCP/masters/EQUIPMENT/records?limit=1000')
   ]);
   koPointState.rules=rules;koPointState.routes=routes;
   koPointState.materials=catalog;
+  koPointState.vehicleClasses=koFactorClassesFromEquipment(equipment);
   const date=state.ctx.operatingDate;
-  const form=`<p class="simple-note">Set a separate approved average for each unloading point. Choose a route/distance only if its average differs from other routes to the same point. No mine-wide default is used.</p>
+  const form=`<p class="simple-note">Enter DAILY provisional averages for operating trips and FINAL MCL monthly averages for billing in separate records. Each must be approved and supported by its source document; neither silently overwrites the other.</p>
     <div class="form-grid">
+      <div class="field"><span>Average source / use *</span><select id="pfSource" onchange="koPointSourceChanged()"><option value="DAILY_REPORT">Daily operational report · provisional</option><option value="MCL_MONTHLY">MCL approved month-end · final billing</option></select></div>
+      <p id="pfSourceHint" class="simple-note">Daily approved provisional averages are applied to new trips. Final MCL averages are billed separately.</p>
       <div class="field"><span>Material type</span><select id="pfKind" onchange="koPointChangeKind()">
         <option value="COAL">Coal / Reject (MT)</option><option value="OB">OB (CuM)</option></select></div>
       <div class="field"><span>Unloading point *</span><select id="pfDest" onchange="koPointChangeDestination()">${koPointOpts(koPointDestinations("COAL"),"id","name","Choose unloading point")}</select></div>
@@ -75,7 +101,7 @@ async function renderKocpPointFactors(){
       <div class="field"><span>Operating date (optional)</span><input id="pfOpDate" type="date"></div>
       <div class="field"><span>Shift</span><select id="pfShift">
         <option value="">All shifts</option>${state.ctx.shifts.map(s=>'<option value="'+esc(s.shift)+'">'+esc(s.shift)+'</option>').join('')}</select></div>
-      <div class="field"><span>Vehicle class (optional, exact type/group)</span><input id="pfClass" placeholder="Blank = all classes"></div>
+      <div class="field"><span>Vehicle / dumper class</span><select id="pfClass"><option value="">All vehicle types</option>${koPointState.vehicleClasses.map(x=>'<option value="'+esc(x)+'">'+esc(x)+'</option>').join('')}</select><small>Choose Eicher, Bharat Benz, Tata, Volvo or a master type; one average can differ by vehicle class.</small></div>
       <div class="field"><span>MCL reference no. *</span><input id="pfRef" maxlength="120" placeholder="Approved sheet / circular reference"></div>
       <div class="form-actions"><button class="btn primary" onclick="koPointSaveRule()">Create Draft</button></div>
     </div>`;
@@ -91,12 +117,13 @@ async function renderKocpPointFactors(){
       <td>${esc(r.factorValue)} ${esc(r.factorUnit)}</td>
       <td>${esc(r.shift||'All')} / ${esc(r.vehicleClass||'All classes')}</td>
       <td>${esc(r.effectiveFrom)}${r.effectiveTo?' – '+esc(r.effectiveTo):''}</td>
+      <td>${esc(r.sourceOrg==='MCL_MONTHLY'?'MCL final':r.sourceOrg==='DAILY_REPORT'?'Daily provisional':'Legacy operational')}</td>
       <td>${esc(r.referenceNo||'—')}</td><td>${esc(r.status)}</td>
       <td>${r.status==='DRAFT'?'<button class="btn outline" onclick="decideFactor(\''+esc(r.factorId)+'\',\'APPROVE\')">Approve</button>':'—'}</td></tr>`;
   });
   const html=pageHead('MCL Quantity Rules','Destination-specific Coal MT/trip and OB CuM/trip averages with optional route, shift and vehicle class.')+
     context()+panel('Create MCL average',form,'Approval required')+
-    panel('Approved & draft rule register',recentTable(['Type','Material','Unloading','Route / Distance','Average','Shift / Class','Effective','MCL Ref','Status','Action'],items),rules.length+' rules');
+    panel('Approved & draft rule register',recentTable(['Material type','Material','Unloading','Route / Distance','Average','Shift / Class','Effective','Purpose','Report Ref','Status','Action'],items),rules.length+' rules');
   return html;
 }
 async function koPointSaveRule(){
@@ -106,17 +133,21 @@ async function koPointSaveRule(){
     if(!$('pfDest').value||!$('pfMaterial').value)throw Error('Choose unloading point and material.');
     const ref=$('pfRef').value.trim();
     if(!ref)throw Error('Enter the MCL source reference.');
+    const source=$('pfSource').value;
+    const from=$('pfFrom').value,to=$('pfTo').value;
+    if(source==='MCL_MONTHLY'&&(!from||!to))throw Error('Final MCL average needs start and end dates.');
+    if(to&&to<from)throw Error('Effective end date must not precede the start.');
     const body={
       factorType:koPointKinds[kind],factorValue:val,factorUnit:koUnit(kind),
       destinationLocationId:$('pfDest').value,routeId:$('pfRoute').value||null,
       materialId:$('pfMaterial').value,effectiveFrom:$('pfFrom').value,
       effectiveTo:$('pfTo').value||null,operatingDate:$('pfOpDate').value||null,
       shift:$('pfShift').value||null,vehicleClass:$('pfClass').value.trim()||null,
-      referenceNo:ref,sourceOrg:'MCL'
+      referenceNo:ref,sourceOrg:source
     };
     await api('/api/sites/KOCP/weight-factors',{method:'POST',
       headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-    toast('Point-wise MCL rule saved as draft. Approval is required.');
+    toast((source==='MCL_MONTHLY'?'Final MCL monthly':'Daily operational')+' factor draft saved. Approval required.');
     await render();
   }catch(e){toast(e.message,'bad')}
 }
@@ -161,3 +192,5 @@ window.koPointSaveRule=koPointSaveRule;
 window.koPointReloadReport=koPointReloadReport;
 window.renderKocpPointReport=renderKocpPointReport;
 window.renderFactor=renderKocpPointFactors;
+
+window.koPointSourceChanged=koPointSourceChanged;
