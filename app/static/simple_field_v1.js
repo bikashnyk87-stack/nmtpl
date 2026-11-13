@@ -1301,10 +1301,11 @@ async function saveKocpHsdCorrection(action){
 let kocpRecentHsdRows=[];
 let kocpHsdHistoryDate='';
 function kocpHsdHistoryControls(){
-  if(!kocpHsdAdmin())return '';
-  return `<div class="hsd-history-tools"><label>Find records by date <input type="date" id="hsdHistoryDate" value="${esc(kocpHsdHistoryDate)}"></label>
-     <button class="btn outline" onclick="reloadKocpHsdHistory()">Find Entries</button>
-     <button class="btn outline" onclick="clearKocpHsdHistory()">Latest Records</button></div>`;
+  if(siteId!=='KOCP')return '';
+  return `<div class="hsd-history-tools"><label>Find fuel records by date <input type="date" id="hsdHistoryDate" value="${esc(kocpHsdHistoryDate)}"></label>
+     <button class="btn outline" onclick="reloadKocpHsdHistory()">Show Date</button>
+     <button class="btn outline" onclick="clearKocpHsdHistory()">Latest Records</button>
+     <label class="kocp-hsd-filter-search">Search records <input type="search" id="koHsdSavedSearch" placeholder="Vehicle ID / ref / litres / status" oninput="filterKocpHsdSavedRecords()"></label></div>`;
 }
 function reloadKocpHsdHistory(){
   kocpHsdHistoryDate=$('hsdHistoryDate')?.value||'';
@@ -1370,7 +1371,7 @@ async function renderSimpleHsd(){
         </div>
         <div id="rcSaveStatus" class="hsd-entry-feedback" aria-live="polite"></div>
       </section>`+
-      panel('Recent Fuel Receipts',kocpHsdHistoryControls()+recentTable(hsdHead,rows.slice(0,100)),`${rows.length} recent records`)+kocpHsdCorrectionPanel();
+      panel('Recent Fuel Receipts',kocpHsdHistoryControls()+'<div class="koHsdRecentRecords">'+recentTable(hsdHead,rows.slice(0,100))+'</div>',`${rows.length} recent records`)+kocpHsdCorrectionPanel();
   }
   return simplePageHead(`${siteId} Fuel / HSD`,'Separate diesel issue and receipt registers; batch entry with saved drafts.')+
   `<div class="hsd-tabs" role="tablist" aria-label="HSD transaction type">${tab('ISSUE','Fuel Issues')}${tab('RECEIPT','Fuel Receipts')}${siteId==='KOCP'?tab('OPENING','Opening Balance'):''}${hasPreviousReceiptDraft()?tab('RECOVERY','Recover Old Receipts'):''}${legacyExists?tab('LEGACY','Recover Previous Draft'):''}</div>`+
@@ -1386,6 +1387,7 @@ async function renderSimpleHsd(){
       <div class="batch-hint"><b>${esc(modeLabel)} entry</b><span>${activeHsdEntryType==='RECEIPT'?'Supplier, litres and challan reference.':'Select equipment, fill litres and reference. Tab completes vehicle selections.'}</span></div>
     </div>
     ${siteId==='KOCP'?`<p class="simple-note">Choose any active KOCP-assigned vehicle or machine, including hired vehicles and LMVs. Search registration, Door No or party. Not listed? Add or activate the vehicle and its KOCP assignment in Equipment Masters. <button type="button" class="btn outline" onclick="openSiteModule(\'MASTERS\')">Open Equipment Masters</button></p>`:'' }
+    ${siteId==='KOCP'?'<div class="kocp-entry-search"><label>Find in fuel entry rows <input type="search" id="koHsdEntrySearch" oninput="filterKocpHsdEntryRows()" placeholder="Search selected equipment / vehicle / reference"></label><button type="button" class="btn outline" onclick="if($(\'koHsdEntrySearch\')){$(\'koHsdEntrySearch\').value=\'\';filterKocpHsdEntryRows()}">Show all rows</button></div>':''}
     <div class="simple-table-wrap"><table class="simple-grid-table software-entry-grid hsd-entry-grid">
       <thead><tr><th>#</th><th>Shift</th><th>Type</th><th>${activeHsdEntryType==='RECEIPT'?'Supplier':'Equipment / Supplier'}</th><th>Litres</th><th>Reference</th><th>Status</th></tr></thead>
       <tbody id="simpleHsdRows">${hsdGridRows(10)}</tbody>
@@ -1393,7 +1395,7 @@ async function renderSimpleHsd(){
     <div class="simple-actions"><button type="button" id="shSave" class="btn primary" onclick="saveSimpleHsd()" ${siteId==='KOCP'&&activeHsdEntryType==='ISSUE'&&!kocpHsdCanIssue(fuel)?'disabled title="Opening stock must be verified before issuing fuel"':''}>Save ${esc(modeLabel)} Rows</button><button type="button" class="btn outline" onclick="clearSimpleHsdDraft()">Clear This Draft</button><span class="draft-state">Draft autosaves on this PC</span></div>
     <div class="simple-note">Live balance refreshes from posted Neon transactions after every successful issue; unfinished rows are retained.</div>
   </div>`+
-  panel('Recent '+modeLabel+' records',kocpHsdHistoryControls()+recentTable(hsdHead,rows),`${rows.length} recent records`)+
+  panel('Recent '+modeLabel+' records',kocpHsdHistoryControls()+'<div class="koHsdRecentRecords">'+recentTable(hsdHead,rows)+'</div>',`${rows.length} recent records`)+
   (siteId==='KOCP'?panel('All HSD-consuming vehicles / equipment',kocpVehicleReportPanel(vehicleReport,today),'Complete list · From–To filters'):panel('Top HSD-consuming equipment',fuelAssetBreakdown(fuel),'Selected month'))+(siteId==='KOCP'?kocpHsdCorrectionPanel():'');
 }
 async function saveHsdOpening(){
@@ -1651,7 +1653,7 @@ async function simpleRender(){
   afterSimpleRender();
 }
 render=simpleRender;window.render=simpleRender;
-Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,applyKocpFuelVehicleFilters,setKocpFuelMonthToDate,filterKocpFuelVehicles,downloadKocpFuelVehicleCsv,filterKocpFuelDetails,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
+Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,applyKocpFuelVehicleFilters,setKocpFuelMonthToDate,filterKocpFuelVehicles,downloadKocpFuelVehicleCsv,filterKocpFuelDetails,filterKocpHsdEntryRows,filterKocpHsdSavedRecords,filterKocpSavedTrips,filterKocpEntryRows,loadKocpTripHistory,copyKocpTripRow,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
 (function activateHardSimpleMode(attempt){
   if(state.ctx && state.bootstrap){
     simpleRender().catch(e=>{console.error('Simple UX init',e);toast(e.message||'Unable to open Simple Field Mode','bad')});
