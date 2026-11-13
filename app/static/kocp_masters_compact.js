@@ -19,7 +19,10 @@
   const title=()=>tabs.find(t=>t[0]===vm.tab)?.[1]||'Master';
   function currentRows(){
     if(vm.tab==='COAL'||vm.tab==='OB')return vm.routes[vm.tab]||[];
-    if(vm.tab==='MATERIALS')return (vm.materials[vm.materialKind]||[]);
+    if(vm.tab==='MATERIALS')return vm.existingMaterials.filter(r=>{
+      const unit=String(r.defaultUnit||'').toUpperCase();
+      return vm.materialKind==='OB'?['CUM','M3','M³'].includes(unit):unit==='MT';
+    });
     if(vm.tab==='LOCATIONS')return vm.locations;
     if(vm.tab==='HISTORY')return vm.summary.imports||[];
     return vm.records||[];
@@ -32,10 +35,10 @@
     switch(vm.tab){
       case'COAL':return ['Movement group','Destination','Category','Distance range','Status',''];
       case'OB':return ['Category / Group','From','To','Distance range','Status',''];
-      case'MATERIALS':return ['Material','Canonical code','Unit','Saved code','Status'];
+      case'MATERIALS':return ['Material','Code','Group','Unit','Status',''];
       case'EMPLOYEE':return ['Employee ID','Name','Role','Department','Mobile','Status',''];
       case'EQUIPMENT':return ['ID','Type','Category','Make / Model','Ownership','Status',''];
-      case'LOCATIONS':return ['Location','Used in','Status'];
+      case'LOCATIONS':return ['Location','Code','Used in','Status'];
       default:return ['Batch','Type','Rows','Errors','Status','Uploaded by'];
     }
   }
@@ -46,9 +49,9 @@
     if(vm.tab==='OB')return ['<b class="kcm-primary">'+x(r.group)+'</b>',x(r.source),x(r.destination),
       '<span class="kcm-pill">'+x(r.distanceRange)+'</span>',st(r.active),
       action('Edit','kcmEdit(\''+r.routeId+'\')','small')];
-    if(vm.tab==='MATERIALS')return ['<b class="kcm-primary">'+x(r.name)+'</b>',x(r.typeCode),x(r.unit),
-      x(r.storedCode||'—'),'<span class="kcm-tag '+(r.status==='EXISTS'?'ok':'missing')+'">'+
-      (r.status==='EXISTS'?(r.active?'Saved':'Inactive'):'Not added')+'</span>'];
+    if(vm.tab==='MATERIALS')return ['<b class="kcm-primary">'+x(r.name)+'</b>',x(r.code),
+      x(r.materialGroup||'—'),x(r.defaultUnit),st(r.active),
+      action('Edit','kcmEdit(\''+x(r.recordId)+'\')','small')];
     if(vm.tab==='EMPLOYEE')return ['<b class="kcm-primary">'+x(r.employeeId)+'</b>',x(r.name),x(r.role),
       x(r.department||'—'),x(r.mobile||'—'),st(r.active),action('Edit','kcmEdit(\''+x(r.employeeId)+'\')','small')];
     if(vm.tab==='EQUIPMENT'){
@@ -58,8 +61,8 @@
         x(r.group),x(r.makeModel||'—'),x(r.ownership||'—'),st(r.active),
         action(wrong?'Correct Type':'Edit','kcmEdit(\''+x(r.machineId)+'\')','small')];
     }
-    if(vm.tab==='LOCATIONS')return ['<b class="kcm-primary">'+x(r.name)+'</b>',
-      (r.usedIn||[]).map(v=>'<span class="kcm-tag">'+x(v)+'</span>').join(' ')||'Existing',st(r.active)];
+    if(vm.tab==='LOCATIONS')return ['<b class="kcm-primary">'+x(r.name)+'</b>',x(r.code),
+      (r.usedIn||[]).map(v=>'<span class="kcm-tag">'+x(v)+'</span>').join(' ')||'Not assigned',st(r.active)];
     return ['<span class="kcm-primary">'+x(r.batchId)+'</span>',x(r.masterType),x(r.totalRows),
       x(r.errorRows),'<span class="kcm-tag">'+x(r.status)+'</span>',x(r.uploadedBy)];
   }
@@ -82,26 +85,24 @@
   function searchBar(){return '<input class="kcm-search" type="search" id="kcmSearchBox" placeholder="Search '+x(title()).toLowerCase()+
     '..." value="'+x(vm.search)+'" oninput="kcmSearch(this.value)">'}
   function toolbar(){
-    const route=vm.tab==='COAL'||vm.tab==='OB';
-    const regular=vm.tab==='EMPLOYEE'||vm.tab==='EQUIPMENT';
+    const interactive=vm.tab!=='HISTORY';
     const materials=vm.tab==='MATERIALS';
-    const interactive=route||regular||materials;
-    const importAction=interactive?action('Import Excel','kcmToggleImport()',vm.importOpen?'':'primary'):'';
-    const addAction=regular?action('+ Add / edit','kcmToggleForm()',''):'';
-    const hint=vm.tab==='LOCATIONS'?'<span class="kcm-muted">Automatically combined from Coal and OB routes</span>':'';
+    const importAction=interactive?action('Import Excel','kcmToggleImport()',''):'';
+    const addAction=interactive?action('+ Add Single Entry','kcmToggleForm()',vm.formOpen?'':'primary'):'';
+    const hint=vm.tab==='LOCATIONS'?'<span class="kcm-muted">Shared physical locations for Coal and OB routes</span>':'';
     const subTab=materials?'<div class="kcm-subtabs">'+
       ['COAL','OB'].map(k=>'<button type="button" class="'+(vm.materialKind===k?'active':'')+
-      '" onclick="kcmKind(\''+k+'\')">'+k+' · '+(vm.materials[k]||[]).length+' types</button>').join('')+
+      '" onclick="kcmKind(\''+k+'\')">'+k+' · '+vm.existingMaterials.filter(r=>
+        k==='OB'?['CUM','M3','M³'].includes(String(r.defaultUnit||'').toUpperCase()):
+        String(r.defaultUnit||'').toUpperCase()==='MT').length+' records</button>').join('')+
       '</div>':'';
     return subTab+'<div class="kcm-toolbar"><h2>'+x(title())+'</h2>'+hint+
-      '<span class="kcm-spacer"></span>'+searchBar()+
-      addAction+importAction+'</div>';
+      '<span class="kcm-spacer"></span>'+searchBar()+addAction+importAction+'</div>';
   }
   function sourceNote(){
-    if(vm.tab==='MATERIALS')
-      return '<div class="kcm-note"><b>Material types are separate from routes.</b> The original Coal file has 21 distance variations but only 2 types; OB has 11 variations but 3 types. Existing saved materials are not overwritten.</div>';
-    if(vm.tab==='COAL'||vm.tab==='OB')
-      return '<div class="kcm-note">Distances, sources and movement categories stay separate for Coal and OB. Shared physical locations are generated automatically.</div>';
+    if(vm.tab==='MATERIALS')return '<div class="kcm-note">Saved Material Masters are shown below. Add one material or import Excel; existing codes cannot be overwritten through Add Single Entry.</div>';
+    if(vm.tab==='COAL'||vm.tab==='OB')return '<div class="kcm-note">Add one route with its movement group, unloading point and distance. Existing physical locations are reused; Excel import is optional.</div>';
+    if(vm.tab==='LOCATIONS')return '<div class="kcm-note">Add physical locations only once. Coal and OB movement routes share these locations.</div>';
     return '';
   }
   function importSection(){
