@@ -5,6 +5,7 @@ writes to the existing SiteTrip and SiteAssetMeter engines exactly once.
 """
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
@@ -115,15 +116,15 @@ def validate_register_lines(kind, lines):
             point = _source_code(raw.get("pointCode"))
             source_id = _txt(raw.get("sourceLocationId"), 80)
             destination_id = _txt(raw.get("destinationLocationId"), 80)
-            count = raw.get("tripCount", 1)
-            if count not in (1, "1", None, ""):
-                raise HTTPException(422, "Every OB source row must represent exactly one trip.")
+            count = str(raw.get("tripCount", 1)).lstrip("0")
+            if not (1 <= len(count) <= 3 and count.isascii() and count.isdecimal() and int(count) <= 200):
+                raise HTTPException(422, f"OB line {number}: enter a whole trip count from 1 to 200.")
             if not (excavator and (patch or source_id) and (point or destination_id)):
                 raise HTTPException(422, f"OB line {number}: excavator, patch and unloading point are required.")
             normalized.append({"lineNo": number, "excavatorId": excavator,
                                "patchCode": patch, "pointCode": point,
                                "sourceLocationId": source_id, "destinationLocationId": destination_id,
-                               "tripCount": 1,
+                               "tripCount": int(count),
                                "routeId": _txt(raw.get("routeId"), 80)})
     return normalized
 
@@ -489,9 +490,12 @@ def _source_signature(card, lines):
         entries = [(l.vehicle_id,l.driver_id,l.trip_count,l.route_id or card.route_id)
                    for l in lines]
     else:
-        entries = [(l.excavator_id,l.patch_source or l.source_location_id,
-                    l.unload_source or l.destination_location_id,l.route_id or card.route_id)
-                   for l in lines]
+        counts = Counter()
+        for line in lines:
+            group = (line.excavator_id, line.source_location_id or line.patch_source,
+                     line.destination_location_id or line.unload_source, line.route_id or card.route_id)
+            counts[group] += line.trip_count
+        entries = [(*group, count) for group, count in counts.items()]
     return (
         card.kind, card.operating_date, card.shift,
         card.vehicle_id if card.kind == "OB" else card.relay_source,

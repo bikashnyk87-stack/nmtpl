@@ -313,7 +313,7 @@ class SiteShiftTripCard(Base):
 
 
 class SiteShiftTripCardLine(Base):
-    """One vehicle/count on Coal sheets; exactly one trip on OB cards."""
+    """One vehicle/count on Coal sheets; one excavator and route count on OB cards."""
 
     __tablename__ = "site_shift_trip_card_line"
     line_id: Mapped[str] = mapped_column(String(70), primary_key=True)
