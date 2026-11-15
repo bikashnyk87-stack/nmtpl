@@ -58,7 +58,7 @@ def month_end_factor_reconciliation(db: Session, *, site_id: str, material_id: s
         trip_digest.update((
             f"{trip.trip_id}|{trip.version}|{trip.operating_date}|"
             f"{trip.vehicle_id}|{trip.destination_location_id}|"
-            f"{trip.route_id}|{trip.material_id}|{trip.shift}\n"
+            f"{trip.route_id}|{trip.material_id}|{trip.shift}|{trip.trip_count}\n"
         ).encode("utf-8"))
         machine = vehicles.get(trip.vehicle_id)
         try:
@@ -76,7 +76,7 @@ def month_end_factor_reconciliation(db: Session, *, site_id: str, material_id: s
                 409, f"Final MCL monthly rate is missing or conflicted for "
                      f"trip {trip.trip_id} ({trip.operating_date}): {ex.detail}"
             ) from ex
-        total += Decimal(str(rate.factor_value))
+        total += Decimal(str(rate.factor_value)) * trip.trip_count
         key = rate.factor_id
         if key not in details:
             details[key] = {
@@ -86,11 +86,11 @@ def month_end_factor_reconciliation(db: Session, *, site_id: str, material_id: s
                 "rate": str(rate.factor_value), "reference": rate.reference_no,
                 "trips": 0,
             }
-        details[key]["trips"] += 1
+        details[key]["trips"] += trip.trip_count
     return {
         "basis": "MCL_MONTHLY_AVERAGE",
         "total": str(total.quantize(QTY, rounding=ROUND_HALF_UP)),
-        "trips": len(trips),
+        "trips": sum(trip.trip_count for trip in trips),
         "tripChecksum": trip_digest.hexdigest(),
         "unit": "CuM" if is_ob else "MT",
         "rules": list(details.values()),
