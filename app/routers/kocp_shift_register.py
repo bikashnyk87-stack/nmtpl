@@ -55,7 +55,10 @@ def _auth(db, request, module="TRIP", action="VIEW", mutate=False):
         csrf(request)
     user = get_user(db, request)
     require_site(db, user, "KOCP")
-    if not user.admin and not has_permission(db, user, "KOCP", module, action):
+    allowed = user.admin or has_permission(db, user, "KOCP", module, action)
+    if module == "TRIP" and action == "VIEW" and not allowed:
+        allowed = any(has_permission(db,user,"KOCP","TRIP",verb) for verb in ("CREATE","EDIT","APPROVE"))
+    if not allowed:
         raise HTTPException(403, f"{module} {action} permission required.")
     return user
 
@@ -346,11 +349,13 @@ def create_card(payload:dict,request:Request,db:Session=Depends(get_db)):
 
 @router.put("/cards/{card_id}")
 def edit_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_db)):
-    user=_auth(db,request,"TRIP","EDIT",True)
+    user=_auth(db,request,"TRIP","CREATE",True)
     row=db.scalar(select(SiteShiftTripCard).where(
         SiteShiftTripCard.card_id==card_id,SiteShiftTripCard.site_id=="KOCP"
     ).with_for_update())
     if not row:raise HTTPException(404,"Shift register not found.")
+    if not user.admin and row.entered_by!=user.login_id and not has_permission(db,user,"KOCP","TRIP","EDIT"):
+        raise HTTPException(403,"Only the creator or authorized editor can change this register.")
     if row.status not in {"DRAFT","REJECTED"}:
         raise HTTPException(409,"Only draft/rejected registers can be edited.")
     if payload.get("expectedVersion")!=row.version:
