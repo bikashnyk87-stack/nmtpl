@@ -120,6 +120,8 @@ function screen(){
  '<button class="sr-small" type="button" onclick="KOCPSR.reject()">Return for Correction</button>':'')+
  '</div><p class="sr-muted">Pending MCL factors do not prevent saving the source. Only verified cards become operational trips.</p>'+
  '<div id="srNotice" aria-live="polite"></div></div>'+
+ '<div class="sr-card"><div class="sr-toolbar"><h2>Shift MIS Summary</h2></div>'+
+ '<div id="srSummary" class="sr-muted">Loading verified totals...</div></div>'+
  '<div class="sr-card"><div class="sr-toolbar"><h2>Recent Shift Registers</h2>'+
  '<button class="sr-small" type="button" onclick="KOCPSR.history()">Refresh list</button></div>'+
  '<div id="srHistory" class="sr-muted">Loading saved records...</div></div>'+
@@ -156,7 +158,7 @@ function values(){
 }
 function notice(message,error=false){const n=h("srNotice");if(n){n.textContent=message;n.className=error?"sr-error":"sr-success"}else if(window.toast)toast(message,error?"bad":"good")}
 function sync(){const inputs=values();model.lines=readRows(true);model.pendingHeader=inputs}
-async function renderSelf(){await fetchMasters();const w=h("workspace");if(w){w.innerHTML=screen();await history()}}
+async function renderSelf(){await fetchMasters();const w=h("workspace");if(w){w.innerHTML=screen();await Promise.all([history(),loadSummary()])}}
 async function save(silent=false){
  try{
   const payload=values();payload.clientKey=model.clientKey||(model.clientKey=newKey());
@@ -206,6 +208,20 @@ async function reject(){
    body:JSON.stringify({action:"REJECT",reason,expectedVersion:model.card.version})});
   model.card=r;model.lines=r.lines;await renderSelf();notice("Returned for correction.");
  }catch(e){notice(e.message,true)}
+}
+async function loadSummary(){
+ const day=val("srDate")||state.ctx?.operatingDate;
+ try{
+  const result=await api(PREFIX+"/summary?operating_date="+enc(day));
+  const out=h("srSummary");if(!out)return;
+  out.innerHTML='<div class="sr-summary">'+["COAL","OB"].map(kind=>{
+   const v=result.kinds[kind]||{};
+   return '<div class="sr-summary-item"><b>'+esc(kind)+'</b>'+
+    '<strong>'+Number(v.trips||0)+' verified trips</strong>'+
+    '<small>'+Number(v.verified||0)+'/'+Number(v.cards||0)+' registers verified · '+
+    Number(v.pendingFactorTrips||0)+' trips pending MCL quantity</small></div>';
+  }).join("")+'</div>';
+ }catch(e){const out=h("srSummary");if(out)out.textContent=e.message}
 }
 async function history(){
  const day=val("srDate")||state.ctx?.operatingDate;
@@ -272,5 +288,5 @@ async function renderKocpShiftRegister(){
 }
 window.renderKocpShiftRegister=renderKocpShiftRegister;
 window.KOCPSR={save:()=>save().catch(()=>{}),submit,verify,reject,history,open,updateTotal,addRow,removeRow,
- copyDown,switchKind,newCard,addMaster,personSearch,personPick,afterRender:history};
+ copyDown,switchKind,newCard,addMaster,personSearch,personPick,afterRender:async()=>{await Promise.all([history(),loadSummary()])}};
 })();
