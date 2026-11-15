@@ -260,9 +260,14 @@
     const tabbar='<div class="kcm-tabs" role="tablist">'+tabs.map(t=>
       '<button type="button" class="kcm-tab" role="tab" aria-selected="'+(vm.tab===t[0])+
       '" onclick="kcmGo(\''+t[0]+'\')">'+x(t[1])+'<em>'+x(count(t[0]))+'</em></button>').join('')+'</div>';
+    let codeMasters="";
+    if(vm.tab==="LOCATIONS"){
+      try{codeMasters=await window.KOCPSR.renderCodeMasters(vm.locations)}
+      catch(e){codeMasters='<p class="kcm-note">Unable to load location codes: '+x(e.message)+'</p>'}
+    }
     $('workspace').innerHTML='<div class="kcm">'+head+m+tabbar+
       '<div class="kcm-card">'+toolbar()+sourceNote()+form()+importSection()+
-      '<div id="kcmGrid"></div>'+materialExisting()+'</div></div>';
+      '<div id="kcmGrid"></div>'+materialExisting()+'</div>'+codeMasters+'</div>';
     updateGrid();
   }
   function kcmGo(tab){vm.tab=tab;vm.search='';vm.page=1;vm.importOpen=false;vm.formOpen=false;vm.edit=null;vm.preview=null;render()}

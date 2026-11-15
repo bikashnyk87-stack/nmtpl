@@ -10,22 +10,24 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.auth import csrf, get_user
 from app.db import get_db
-from app.models import Equipment
+from app.models import Equipment, Person
 from app.site_auth import has_permission, require_site
 from app.site_models import (
     SiteShift, SiteLocation, SiteMaterial, SiteMovementRoute, SiteAssetMeter,
     SiteTrip, SiteWeightFactor, SiteBillingReconciliation, SiteOperationalCode,
-    SiteShiftTripCard, SiteShiftTripCardLine,
+    SiteShiftTripCard, SiteShiftTripCardLine, PersonSiteAssignment,
 )
 from app.routers.site_ops import (
-    _audit, _site_person_or_422, _site_equipment_or_422, _site_shift_or_422
+    _audit, _site_person_or_422, _site_equipment_or_422, _site_shift_or_422,
+    _site_location_or_422
 )
 from app.services.kocp_factor_rules import resolve_kocp_point_factor
+from app.services.kocp_equipment import kocp_asset_allowed, kocp_equipment_category, kocp_role_allowed
 
 router = APIRouter(prefix="/api/KOCP/shift-register", tags=["KOCP shift production register"])
 KINDS = {"COAL", "OB"}
@@ -111,13 +113,16 @@ def validate_register_lines(kind, lines):
             excavator = _txt(raw.get("excavatorId"), 50)
             patch = _source_code(raw.get("patchCode"))
             point = _source_code(raw.get("pointCode"))
+            source_id = _txt(raw.get("sourceLocationId"), 80)
+            destination_id = _txt(raw.get("destinationLocationId"), 80)
             count = raw.get("tripCount", 1)
             if count not in (1, "1", None, ""):
                 raise HTTPException(422, "Every OB source row must represent exactly one trip.")
-            if not (excavator and patch and point):
+            if not (excavator and (patch or source_id) and (point or destination_id)):
                 raise HTTPException(422, f"OB line {number}: excavator, patch and unloading point are required.")
             normalized.append({"lineNo": number, "excavatorId": excavator,
                                "patchCode": patch, "pointCode": point,
+                               "sourceLocationId": source_id, "destinationLocationId": destination_id,
                                "tripCount": 1,
                                "routeId": _txt(raw.get("routeId"), 80)})
     return normalized
@@ -155,7 +160,70 @@ def _route(db, route_id, kind, *, required=True):
         if not required and not route_id:
             return None
         raise HTTPException(422, f"Choose an active {kind} Route from Masters.")
+    _site_location_or_422(db, "KOCP", row.destination_location_id)
+    if row.source_location_id:
+        _site_location_or_422(db, "KOCP", row.source_location_id)
     return row
+
+
+def _ob_locations(db, route, line_no, patch_value, unload_value, source_id=None, destination_id=None):
+    patch = _code(db, "PATCH", patch_value) if patch_value else None
+    unload = _code(db, "UNLOAD_POINT", unload_value) if unload_value else None
+    resolved = []
+    for label, code, location_id, expected in (
+        ("Loading patch", patch, source_id, route.source_location_id if route else None),
+        ("Unloading point", unload, destination_id, route.destination_location_id if route else None),
+    ):
+        if code:
+            if not code.parent_location_id or (location_id and code.parent_location_id != location_id):
+                raise HTTPException(422, f"OB line {line_no}: {label} code mapping changed or is missing.")
+            location_id = code.parent_location_id
+        if not location_id or (route and location_id != expected):
+            raise HTTPException(422, f"OB line {line_no}: {label} does not match the selected route.")
+        _site_location_or_422(db, "KOCP", location_id)
+        resolved.append(location_id)
+    return patch, unload, *resolved
+
+
+def _driver_role(role):
+    value = str(role or "").strip().upper()
+    if "HELPER" in value.split():
+        return False
+    return "DRIVER" in value.split() or any(
+        label in value for label in ("TIPPER OPERATOR", "DUMPER OPERATOR", "TRUCK OPERATOR")
+    )
+
+
+def _driver(db, employee_id, operating_day):
+    person = _site_person_or_422(db, "KOCP", employee_id, operating_day)
+    if not _driver_role(person.role):
+        raise HTTPException(422, "Select an eligible driver from KOCP Employee Master.")
+    return person
+
+
+def _asset(db, machine_id, operating_day, activity, role):
+    equipment = _site_equipment_or_422(db, "KOCP", machine_id, operating_day, role.lower() + " equipment")
+    if not (kocp_asset_allowed(equipment.group, activity)
+            and kocp_role_allowed(equipment.type, role, equipment.make_model)):
+        raise HTTPException(422, f"Equipment is not assigned to {activity} {role.lower()} in KOCP Masters.")
+    if role == "LOADING" and kocp_equipment_category(equipment.type, equipment.make_model) != "EXCAVATOR":
+        raise HTTPException(422, "Select an excavator from KOCP Equipment Master.")
+    return equipment
+
+
+@router.get("/drivers")
+def list_drivers(request: Request, operating_date: date, db: Session = Depends(get_db)):
+    _auth(db, request, "TRIP", "VIEW")
+    people = db.scalars(
+        select(Person).join(PersonSiteAssignment).where(
+            Person.active.is_(True),
+            PersonSiteAssignment.site_id == "KOCP",
+            PersonSiteAssignment.active.is_(True),
+            PersonSiteAssignment.effective_from <= operating_date,
+            or_(PersonSiteAssignment.effective_to.is_(None), PersonSiteAssignment.effective_to >= operating_date),
+        ).distinct().order_by(Person.name, Person.employee_id)
+    ).all()
+    return [{"id": p.employee_id, "label": f"{p.name} — {p.employee_id}"} for p in people if _driver_role(p.role)]
 
 
 def _card_lines(db, card_id):
@@ -186,6 +254,8 @@ def _detail(db, card):
             {"lineNo": line.line_no, "vehicleId": line.vehicle_id or "",
              "driverId": line.driver_id or "", "excavatorId": line.excavator_id or "",
              "patchCode": line.patch_source or "", "pointCode": line.unload_source or "",
+              "sourceLocationId": line.source_location_id or "",
+              "destinationLocationId": line.destination_location_id or "",
              "tripCount": line.trip_count, "routeId": line.route_id or "",
              "tripId": line.trip_id}
             for line in lines
@@ -201,24 +271,31 @@ def _write_fields(db, card, payload, *, initial=False):
     shift = _source_code(payload.get("shift"))
     _site_shift_or_422(db, "KOCP", shift)
     lines = validate_register_lines(kind, payload.get("lines"))
-    # Validate every supplied FK against the date-effective KOCP Masters at
-    # input time. Raw paper patch/point codes remain drafts until mapped.
+    # Validate supplied selections before leaving a draft.
     material_id = _txt(payload.get("materialId"), 80)
     if material_id: _material(db, material_id, kind)
     default_route = _txt(payload.get("routeId"), 80)
-    if default_route: _route(db, default_route, kind)
+    header_route = _route(db, default_route, kind, required=False)
+    relay = _code(db, "RELAY", payload.get("relayCode"), required=False) if kind == "COAL" else None
     for line in lines:
-        if line.get("routeId"): _route(db, line["routeId"], kind)
+        route = _route(db, line["routeId"], kind) if line.get("routeId") else header_route
         if kind == "COAL":
-            _site_equipment_or_422(db, "KOCP", line["vehicleId"], operating_day, "Coal tipper")
-            _site_person_or_422(db, "KOCP", line["driverId"], operating_day)
+            _asset(db, line["vehicleId"], operating_day, "COAL", "TRANSPORT")
+            _driver(db, line["driverId"], operating_day)
         else:
-            _site_equipment_or_422(db, "KOCP", line["excavatorId"], operating_day, "OB excavator")
+            _asset(db, line["excavatorId"], operating_day, "OB", "LOADING")
+            patch, unload, source, destination = _ob_locations(
+                db, route, line["lineNo"], line["patchCode"], line["pointCode"],
+                line["sourceLocationId"], line["destinationLocationId"],
+            )
+            line.update(patchCodeId=patch.code_id if patch else None,
+                        unloadCodeId=unload.code_id if unload else None,
+                        sourceLocationId=source, destinationLocationId=destination)
     if kind == "OB":
         if payload.get("vehicleId"):
-            _site_equipment_or_422(db, "KOCP", _txt(payload.get("vehicleId"),50), operating_day, "OB tipper")
+            _asset(db, _txt(payload.get("vehicleId"),50), operating_day, "OB", "TRANSPORT")
         if payload.get("driverId"):
-            _site_person_or_422(db, "KOCP", _txt(payload.get("driverId"),50), operating_day)
+            _driver(db, _txt(payload.get("driverId"),50), operating_day)
     declared = payload.get("declaredTotal")
     if declared not in (None, ""):
         try:
@@ -233,7 +310,8 @@ def _write_fields(db, card, payload, *, initial=False):
     kmropen, kmrclose = validate_meter_pair(payload.get("openingKmr"), payload.get("closingKmr"))
     card.kind, card.operating_date, card.shift = kind, operating_day, shift
     card.source_ref = _txt(payload.get("sourceRef"), 100) or None
-    card.relay_source = _source_code(payload.get("relayCode")) or None if kind == "COAL" else None
+    card.relay_source = relay.code if relay else None
+    card.relay_code_id = relay.code_id if relay else None
     card.route_id = _txt(payload.get("routeId"), 80) or None
     card.material_id = _txt(payload.get("materialId"), 80) or None
     card.vehicle_id = _txt(payload.get("vehicleId"), 50) or None if kind == "OB" else None
@@ -254,6 +332,8 @@ def _write_fields(db, card, payload, *, initial=False):
             excavator_id=line.get("excavatorId") or None,
             patch_source=line.get("patchCode") or None,
             unload_source=line.get("pointCode") or None,
+            patch_code_id=line.get("patchCodeId"), unload_code_id=line.get("unloadCodeId"),
+            source_location_id=line.get("sourceLocationId"), destination_location_id=line.get("destinationLocationId"),
             route_id=line.get("routeId") or None, trip_count=line["tripCount"],
         ))
     db.flush()
@@ -262,18 +342,32 @@ def _write_fields(db, card, payload, *, initial=False):
 
 @router.get("/codes")
 def list_operational_codes(request: Request, kind: str = "", db: Session = Depends(get_db)):
-    _auth(db, request, "TRIP", "VIEW")
+    user = get_user(db, request)
+    require_site(db, user, "KOCP")
+    if not user.admin and not any(has_permission(db, user, "KOCP", module, action)
+            for module in ("TRIP", "MASTERS") for action in ("VIEW", "CREATE", "EDIT", "APPROVE")):
+        raise HTTPException(403, "KOCP register or Masters permission required.")
     selected = _source_code(kind)
     if selected and selected not in CODE_KINDS:
         raise HTTPException(422, "Unknown master type.")
-    stmt = select(SiteOperationalCode).where(SiteOperationalCode.site_id == "KOCP")
+    stmt = select(SiteOperationalCode, SiteLocation).outerjoin(
+        SiteLocation, SiteLocation.site_location_id == SiteOperationalCode.parent_location_id
+    ).where(SiteOperationalCode.site_id == "KOCP")
     if selected:
         stmt = stmt.where(SiteOperationalCode.code_kind == selected)
-    rows = db.scalars(stmt.order_by(
-        SiteOperationalCode.code_kind, SiteOperationalCode.code
-    )).all()
-    return [{"kind":r.code_kind,"code":r.code,"name":r.name,
-             "locationId":r.parent_location_id or "","active":r.active} for r in rows]
+    rows = db.execute(stmt.order_by(SiteOperationalCode.code_kind, SiteOperationalCode.code)).all()
+    return [{
+        "kind": code.code_kind, "code": code.code, "name": code.name, "active": code.active,
+        "locationId": loc.site_location_id if loc and loc.active and loc.site_id == "KOCP" else "",
+        "locationName": loc.name if loc and loc.active and loc.site_id == "KOCP" else "",
+    } for code, loc in rows]
+
+
+def _validate_code_location(db, kind, location_id):
+    if kind in {"PATCH", "UNLOAD_POINT"} and not location_id:
+        raise HTTPException(422, "Link the code to a KOCP physical location.")
+    if location_id:
+        _site_location_or_422(db, "KOCP", location_id)
 
 
 @router.post("/codes")
@@ -285,10 +379,7 @@ def add_operational_code(payload: dict, request: Request, db: Session = Depends(
     location_id = _txt(payload.get("locationId"), 80) or None
     if kind not in CODE_KINDS or not code or not name:
         raise HTTPException(422, "Choose a master type, code and name.")
-    if location_id:
-        loc = db.get(SiteLocation, location_id)
-        if not loc or loc.site_id != "KOCP" or not loc.active:
-            raise HTTPException(422, "Choose an active physical location from KOCP Masters.")
+    _validate_code_location(db, kind, location_id)
     ident = f"KOCP:{kind}:{code}"
     if db.get(SiteOperationalCode, ident):
         raise HTTPException(409, "Master code already exists; edit/deactivate the existing master.")
@@ -299,6 +390,28 @@ def add_operational_code(payload: dict, request: Request, db: Session = Depends(
            after={"kind":kind,"code":code,"name":name,"locationId":location_id})
     db.commit()
     return {"ok":True,"code":code,"kind":kind}
+
+
+@router.put("/codes")
+def edit_operational_code(payload: dict, request: Request, db: Session = Depends(get_db)):
+    user = _auth(db, request, "MASTERS", "EDIT", True)
+    kind, code = _source_code(payload.get("kind")), _source_code(payload.get("code"))
+    row = db.get(SiteOperationalCode, f"KOCP:{kind}:{code}")
+    if not row:
+        raise HTTPException(404, "KOCP Master code not found.")
+    name = _txt(payload.get("name"), 160)
+    location_id = _txt(payload.get("locationId"), 80) or None
+    active = payload.get("active")
+    if not name or not isinstance(active, bool):
+        raise HTTPException(422, "Enter a name and valid status.")
+    if active or location_id:
+        _validate_code_location(db, row.code_kind, location_id)
+    before = {"name": row.name, "locationId": row.parent_location_id, "active": row.active}
+    row.name, row.parent_location_id, row.active = name, location_id, active
+    _audit(db, user, "KOCP", "EDIT_OPERATIONAL_CODE", "site_operational_code", row.code_id,
+           before=before, after={"name": name, "locationId": location_id, "active": active})
+    db.commit()
+    return {"ok": True}
 
 
 @router.get("/cards")
@@ -376,7 +489,8 @@ def _source_signature(card, lines):
         entries = [(l.vehicle_id,l.driver_id,l.trip_count,l.route_id or card.route_id)
                    for l in lines]
     else:
-        entries = [(l.excavator_id,l.patch_source,l.unload_source,l.route_id or card.route_id)
+        entries = [(l.excavator_id,l.patch_source or l.source_location_id,
+                    l.unload_source or l.destination_location_id,l.route_id or card.route_id)
                    for l in lines]
     return (
         card.kind, card.operating_date, card.shift,
@@ -402,6 +516,21 @@ def submit_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
     total=sum(x.trip_count for x in lines)
     if not total or (row.declared_total is not None and row.declared_total!=total):
         raise HTTPException(422,"Reported paper total does not match entered trip counts.")
+    _material(db, row.material_id, row.kind)
+    if row.kind == "OB":
+        _asset(db, row.vehicle_id, row.operating_date, "OB", "TRANSPORT")
+        _driver(db, row.driver_id, row.operating_date)
+    if row.relay_source:
+        _code(db, "RELAY", row.relay_source)
+    for line in lines:
+        route = _route(db, line.route_id or row.route_id, row.kind)
+        if row.kind == "OB":
+            _ob_locations(db, route, line.line_no, line.patch_source, line.unload_source,
+                          line.source_location_id, line.destination_location_id)
+            _asset(db, line.excavator_id, row.operating_date, "OB", "LOADING")
+        else:
+            _driver(db, line.driver_id, row.operating_date)
+            _asset(db, line.vehicle_id, row.operating_date, "COAL", "TRANSPORT")
     # On repeat submissions from a different browser, detect the same source
     # reference or identical paper content before allowing MIS review.
     others=db.scalars(select(SiteShiftTripCard).where(
@@ -481,8 +610,8 @@ def decide_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
         relay=_code(db,"RELAY",row.relay_source)
         row.relay_code_id=relay.code_id
     if row.kind=="OB":
-        vehicle=_site_equipment_or_422(db,"KOCP",row.vehicle_id,row.operating_date,"OB tipper")
-        _site_person_or_422(db,"KOCP",row.driver_id,row.operating_date)
+        vehicle=_asset(db, row.vehicle_id, row.operating_date, "OB", "TRANSPORT")
+        _driver(db, row.driver_id, row.operating_date)
         if row.opening_hmr is not None and row.closing_hmr is not None:
             _save_meter(db,user,row,"HMR",row.opening_hmr,row.closing_hmr)
         if row.opening_kmr is not None and row.closing_kmr is not None:
@@ -516,22 +645,22 @@ def decide_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
         count=line.trip_count
         vehicle_id=line.vehicle_id if row.kind=="COAL" else row.vehicle_id
         driver_id=line.driver_id if row.kind=="COAL" else row.driver_id
-        eq=_site_equipment_or_422(db,"KOCP",vehicle_id,row.operating_date,"transport vehicle")
-        _site_person_or_422(db,"KOCP",driver_id,row.operating_date)
+        eq=_asset(db, vehicle_id, row.operating_date, row.kind, "TRANSPORT")
+        _driver(db, driver_id, row.operating_date)
         excavator_id=line.excavator_id if row.kind=="OB" else None
         if excavator_id:
-            _site_equipment_or_422(db,"KOCP",excavator_id,row.operating_date,"excavator")
+            _asset(db, excavator_id, row.operating_date, "OB", "LOADING")
         route=_route(db,line.route_id or row.route_id,row.kind)
         dest_id=route.destination_location_id
         if row.kind=="OB":
-            patch=_code(db,"PATCH",line.patch_source)
-            unload=_code(db,"UNLOAD_POINT",line.unload_source)
-            if not unload.parent_location_id:
-                raise HTTPException(422,f"Unloading point {unload.code} has no physical location assigned in Masters.")
-            if unload.parent_location_id!=dest_id:
-                raise HTTPException(422,f"OB line {line.line_no}: unloading point does not belong to selected route destination.")
-            line.patch_code_id=patch.code_id
-            line.unload_code_id=unload.code_id
+            patch, unload, source, destination = _ob_locations(
+                db, route, line.line_no, line.patch_source, line.unload_source,
+                line.source_location_id, line.destination_location_id,
+            )
+            line.patch_code_id = patch.code_id if patch else None
+            line.unload_code_id = unload.code_id if unload else None
+            line.source_location_id = source
+            line.destination_location_id = destination
         factor=None
         try:
             factor=resolve_kocp_point_factor(

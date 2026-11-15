@@ -4,7 +4,7 @@
 (function(){
 "use strict";
 const PREFIX="/api/KOCP/shift-register";
-const model={kind:"COAL",card:null,clientKey:null,lines:[],masters:{COAL:[],OB:[],codes:[],vehicles:[],excavators:[],materials:[],locations:[]},people:{}};
+const model={kind:"COAL",card:null,clientKey:null,lines:[],masters:{COAL:[],OB:[],codes:[],vehicles:[],excavators:[],materials:[],locations:[]},drivers:[],driverError:""};
 function enc(v){return encodeURIComponent(String(v||""))}
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function newKey(){return (window.crypto?.randomUUID?.()||String(Date.now())+"-"+Math.random()).slice(0,120)}
@@ -12,77 +12,178 @@ function opts(items,value,placeholder="Choose from Masters"){
  return '<option value="">'+esc(placeholder)+'</option>'+items.map(x=>
  '<option value="'+esc(x.id||x.routeId||x.code)+'" '+((x.id||x.routeId||x.code)===value?'selected':'')+'>'+esc(x.label||x.name||x.title||x.code)+'</option>').join('');
 }
-function codeOptions(kind,value){return opts(model.masters.codes.filter(x=>x.kind===kind&&x.active).map(x=>({id:x.code,label:x.code+" — "+x.name})),value,"Select "+kind+" master")}
-function vehicleOptions(activity,value){return opts(activity==="COAL"?model.masters.vehicles:model.masters.vehiclesOb,value,"Select tipper / door number")}
-function routeOptions(kind,value){return opts(model.masters[kind].filter(x=>x.active).map(r=>({
-id:r.routeId,label:r.group+" → "+r.destination+" | "+r.category+" | "+r.distanceRange
-})),value,"Select approved route / lead")}
-function materialOptions(kind,value){return opts(model.masters.materials.filter(x=>
+function retainedOptions(items,value,placeholder){
+ const available=value&&!items.some(x=>x.id===value)
+  ? [...items,{id:value,label:value+" — previously saved; check Masters"}] : items;
+ return opts(available,value,placeholder);
+}
+function codeOptions(kind,value){
+ const items=model.masters.codes.filter(x=>x.kind===kind&&x.active&&(kind==="RELAY"||x.locationId))
+  .map(x=>({id:x.code,label:x.code+" — "+x.name+(x.locationName?" · "+x.locationName:"")}));
+ return retainedOptions(items,value,items.length?"Select from Masters":"No mapped options in KOCP Masters");
+}
+function vehicleOptions(activity,value){
+ return retainedOptions(activity==="COAL"?model.masters.vehicles:model.masters.vehiclesOb,value,"Select tipper / door number");
+}
+const locationPrefix="location:";
+function pointValue(line,codeKey,locationKey){
+ return line[codeKey]||(line[locationKey]?locationPrefix+line[locationKey]:"");
+}
+function locationIdFor(kind,value){
+ if(value.startsWith(locationPrefix))return value.slice(locationPrefix.length);
+ return model.masters.codes.find(x=>x.kind===kind&&x.code===value&&x.active)?.locationId;
+}
+function locationOptions(kind,value){
+ const endpoint=kind==="PATCH"?"sourceLocationId":"destinationLocationId";
+ const routePoints=new Set(model.masters.OB.filter(r=>r.active).map(r=>r[endpoint]));
+ const locations=model.masters.locations.filter(x=>routePoints.has(x.id))
+  .map(x=>({id:locationPrefix+x.id,label:x.label}));
+ const codes=model.masters.codes.filter(x=>x.kind===kind&&x.active&&routePoints.has(x.locationId))
+  .map(x=>({id:x.code,label:x.code+" — "+x.name+" · "+x.locationName}));
+ return retainedOptions([...locations,...codes],value,
+  locations.length||codes.length?"Select from Location Master":"No active locations for this field");
+}
+function matchingRoutes(kind,patch="",point=""){
+ const source=locationIdFor("PATCH",patch),destination=locationIdFor("UNLOAD_POINT",point);
+ if((patch&&!source)||(point&&!destination))return [];
+ return model.masters[kind].filter(x=>x.active&&
+  (!source||x.sourceLocationId===source)&&(!destination||x.destinationLocationId===destination));
+}
+function routeOptions(kind,value,patch="",point="",retain=true){
+ const items=matchingRoutes(kind,patch,point).map(r=>({
+  id:r.routeId,label:r.group+" → "+r.destination+" | "+r.category+" | "+r.distanceRange
+ }));
+ const placeholder=items.length?"Select approved route / lead":"No matching route in KOCP Masters";
+ return retain?retainedOptions(items,value,placeholder):opts(items,value,placeholder);
+}
+function materialOptions(kind,value){return retainedOptions(model.masters.materials.filter(x=>
  kind==="OB"?["CUM","M3","M³"].includes(String(x.unit||"").toUpperCase()):
  String(x.unit||"").toUpperCase()==="MT"),value,"Select "+kind+" material")}
 function paperInput(id,value,label,type="text",attrs=""){return '<label class="sr-field"><span>'+esc(label)+'</span><input id="'+id+'" type="'+type+'" value="'+esc(value||"")+'" '+attrs+'></label>'}
 function selectBox(id,label,html){return '<label class="sr-field"><span>'+esc(label)+'</span><select id="'+id+'">'+html+'</select></label>'}
-function personInput(id,value){return '<input id="'+id+'" data-employee-id="'+esc(value||"")+'" value="'+esc(value||"")+
- '" list="'+id+'-list" autocomplete="off" placeholder="Search driver name / code" '+
- 'oninput="KOCPSR.personSearch(this)" onchange="KOCPSR.personPick(this)"><datalist id="'+id+'-list"></datalist>'}
+function driverOptions(value){
+ return retainedOptions(model.drivers,value,model.driverError||(
+  model.drivers.length?"Select driver / employee code":"No eligible KOCP drivers for this date"));
+}
+function driverSelect(id,value){
+ return '<div class="sr-driver-picker"><input type="search" aria-label="Search drivers by name or code" '+
+  'placeholder="Find driver / code" oninput="KOCPSR.filterDrivers(this)">'+
+  '<select id="'+id+'" data-sr-driver aria-label="Driver">'+driverOptions(value)+'</select></div>';
+}
+function filterDrivers(search){
+ const select=search.nextElementSibling, current=select.value, query=search.value.trim().toLowerCase();
+ const matches=model.drivers.filter(x=>x.id===current||x.label.toLowerCase().includes(query));
+ select.innerHTML=retainedOptions(matches,current,model.driverError||
+  (matches.length?"Select matching driver":"No matching driver"));
+}
+function cardDate(){
+ return model.card?.operatingDate||state.ctx?.operatingDate||new Date().toISOString().slice(0,10);
+}
+async function fetchDrivers(day){
+ try{
+  return {rows:await api(PREFIX+"/drivers?operating_date="+enc(day)),error:""};
+ }catch(e){
+  return {rows:[],error:"Employee Master could not be loaded"};
+ }
+}
+function fetchAssets(day){
+ const path="/api/site-ops/KOCP/lookups?kind=ASSET&limit=250&operating_date="+enc(day);
+ return Promise.all([
+  api(path+"&activity=COAL&role=TRANSPORT"),
+  api(path+"&activity=OB&role=TRANSPORT"),
+  api(path+"&activity=OB&role=LOADING").then(rows=>rows.filter(x=>x.category==="EXCAVATOR"))
+ ]);
+}
+async function changeDate(){
+ const dateField=h("srDate"), day=dateField.value;
+ const [result,assets]=day?await Promise.all([
+  fetchDrivers(day),fetchAssets(day).catch(()=>null)
+ ]):[{rows:[],error:"Select an operating date"},[[],[],[]]];
+ if(h("srDate")!==dateField||dateField.value!==day)return;
+ model.drivers=result.rows;
+ model.driverError=result.error;
+ for(const select of document.querySelectorAll("[data-sr-driver]")){
+  const current=select.value;
+  select.previousElementSibling.value="";
+  select.innerHTML=driverOptions(result.error||model.drivers.some(x=>x.id===current)?current:"");
+ }
+ if(assets){
+  [model.masters.vehicles,model.masters.vehiclesOb,model.masters.excavators]=assets;
+ }
+ for(const select of document.querySelectorAll("[data-sr-asset]")){
+  const items=assets?model.masters[select.dataset.srAsset]:[];
+  const current=select.value;
+  select.innerHTML=retainedOptions(items,!assets||items.some(x=>x.id===current)?current:"",
+   assets?"Select from Masters":"Equipment Master could not be loaded");
+ }
+ await Promise.all([history(),loadSummary()]);
+}
 function existing(line,key){return String(line?.[key]??"")}
 function blank(){return model.kind==="COAL"?{vehicleId:"",driverId:"",tripCount:"",routeId:""}:
  {excavatorId:"",patchCode:"",pointCode:"",routeId:"",tripCount:1}}
-function fresh(count){model.lines=Array.from({length:count},()=>blank());model.card=null;model.clientKey=newKey();model.people={}}
+function fresh(count){model.lines=Array.from({length:count},()=>blank());model.card=null;model.clientKey=newKey()}
 async function fetchMasters(){
  const a=await Promise.all([
   api("/api/sites/KOCP/routes?kind=COAL"),
   api("/api/sites/KOCP/routes?kind=OB"),
-  api("/api/site-ops/KOCP/lookups?kind=ASSET&activity=COAL&role=TRANSPORT&limit=250"),
-  api("/api/site-ops/KOCP/lookups?kind=ASSET&activity=OB&role=TRANSPORT&limit=250"),
-  api("/api/site-ops/KOCP/lookups?kind=ASSET&activity=OB&role=LOADING&limit=250"),
+  fetchAssets(cardDate()),
   api("/api/site-ops/KOCP/lookups?kind=MATERIAL&limit=100"),
-  api("/api/site-ops/KOCP/lookups?kind=LOCATION&limit=100"),
-  api(PREFIX+"/codes")
+  api(PREFIX+"/codes"),
+  fetchDrivers(cardDate()),
+  api("/api/site-ops/KOCP/lookups?kind=LOCATION&limit=100")
  ]);
- // A physical tipper can appear on Coal or OB paper even when its current
- // equipment operating group has not yet been corrected in Masters.
- // Offer the union of both *master-approved transport* lookup results.
- const transport=[...a[2],...a[3]].filter((row,i,items)=>
-   items.findIndex(other=>other.id===row.id)===i);
- model.masters={COAL:a[0],OB:a[1],vehicles:transport,vehiclesOb:transport,excavators:a[4],
-               materials:a[5],locations:a[6],codes:a[7]};
+ model.masters={COAL:a[0],OB:a[1],vehicles:a[2][0],vehiclesOb:a[2][1],excavators:a[2][2],
+               materials:a[3],codes:a[4],locations:a[6]};
+ model.drivers=a[5].rows;
+ model.driverError=a[5].error;
 }
 function h(id){return document.getElementById(id)}
 function val(id){return h(id)?.value||""}
 function availableShifts(){return (state.ctx?.shifts||[]).filter(x=>x.active!==false).map(x=>({id:x.shift,label:x.shift+" | "+(x.start||"")+"–"+(x.end||"")}))}
 function lineHtml(line,i){
  if(model.kind==="COAL")return '<tr class="sr-row" data-no="'+i+'"><td>'+(i+1)+'</td>'+
- '<td><select id="srVehicle'+i+'">'+vehicleOptions("COAL",existing(line,"vehicleId"))+'</select></td>'+
- '<td>'+personInput("srDriver"+i,existing(line,"driverId"))+'</td>'+
+ '<td><select data-sr-asset="vehicles" id="srVehicle'+i+'">'+vehicleOptions("COAL",existing(line,"vehicleId"))+'</select></td>'+
+ '<td>'+driverSelect("srDriver"+i,existing(line,"driverId"))+'</td>'+
  '<td><input class="sr-numeric" id="srCount'+i+'" type="number" min="1" max="200" step="1" value="'+esc(existing(line,"tripCount"))+'" oninput="KOCPSR.updateTotal()"></td>'+
  '<td><select id="srLineRoute'+i+'">'+routeOptions("COAL",existing(line,"routeId"))+'</select></td>'+
  '<td><button class="sr-small" type="button" onclick="KOCPSR.removeRow('+i+')">Remove</button></td></tr>';
+ const patch=pointValue(line,"patchCode","sourceLocationId");
+ const point=pointValue(line,"pointCode","destinationLocationId");
  return '<tr class="sr-row" data-no="'+i+'"><td>'+(i+1)+'</td>'+
- '<td><select id="srExcavator'+i+'" onchange="KOCPSR.updateTotal()">'+opts(model.masters.excavators,existing(line,"excavatorId"),"Select excavator")+'</select></td>'+
- '<td><input list="srPatchList" id="srPatch'+i+'" value="'+esc(existing(line,"patchCode"))+'" oninput="KOCPSR.updateTotal()" placeholder="Patch master"></td>'+
- '<td><input list="srPointList" id="srPoint'+i+'" value="'+esc(existing(line,"pointCode"))+'" oninput="KOCPSR.updateTotal()" placeholder="Point master"></td>'+
- '<td><select id="srLineRoute'+i+'">'+routeOptions("OB",existing(line,"routeId"))+'</select></td>'+
+ '<td><select data-sr-asset="excavators" id="srExcavator'+i+'" onchange="KOCPSR.updateTotal()">'+retainedOptions(model.masters.excavators,existing(line,"excavatorId"),"Select excavator")+'</select></td>'+
+ '<td><select id="srPatch'+i+'" aria-label="Loading patch" onchange="KOCPSR.changePoints('+i+')">'+
+ locationOptions("PATCH",patch)+'</select></td>'+
+ '<td><select id="srPoint'+i+'" aria-label="Unloading point" onchange="KOCPSR.changePoints('+i+')">'+
+ locationOptions("UNLOAD_POINT",point)+'</select></td>'+
+ '<td><select id="srLineRoute'+i+'" aria-label="Route / Lead">'+
+ routeOptions("OB",existing(line,"routeId"),patch,point)+'</select></td>'+
  '<td><button class="sr-small" type="button" onclick="KOCPSR.removeRow('+i+')">Remove</button></td></tr>';
 }
-function groupOptionList(kind,id){return '<datalist id="'+id+'">'+model.masters.codes.filter(x=>x.kind===kind&&x.active).map(x=>
- '<option value="'+esc(x.code)+'" label="'+esc(x.name)+'"></option>').join('')+'</datalist>'}
+function changePoints(i){
+ const select=h("srLineRoute"+i),patch=val("srPatch"+i),point=val("srPoint"+i);
+ const matches=matchingRoutes("OB",patch,point);
+ const previous=select.value, defaultRoute=val("srRoute");
+ const selected=matches.some(x=>x.routeId===previous)?previous:
+  patch&&point&&matches.length===1&&matches[0].routeId!==defaultRoute?matches[0].routeId:"";
+ select.innerHTML=routeOptions("OB",selected,patch,point,false);
+ updateTotal();
+}
 function headerHtml(){
  const c=model.card||{},ob=model.kind==="OB";
- const d=c.operatingDate||state.ctx?.operatingDate||new Date().toISOString().slice(0,10);
+ const d=cardDate();
  const shift=c.shift||state.ctx?.shift||"A";
- return '<div class="sr-head">'+paperInput("srDate",d,"Operating date","date")+
+ return '<div class="sr-head">'+paperInput("srDate",d,"Operating date","date",'onchange="KOCPSR.changeDate()"')+
  selectBox("srShift","Shift",opts(availableShifts(),shift,"Choose shift"))+
  paperInput("srRef",c.sourceRef,"Paper reference (if provided)")+
  selectBox("srMaterial","Material",materialOptions(model.kind,c.materialId||""))+
  selectBox("srRoute","Default route / lead",routeOptions(model.kind,c.routeId||""))+
- (ob?selectBox("srHeaderVehicle","Tipper",vehicleOptions("OB",c.vehicleId||""))+
- '<label class="sr-field"><span>Driver</span>'+personInput("srHeaderDriver",c.driverId||"")+'</label>'+
+ (ob?'<label class="sr-field"><span>Tipper</span><select id="srHeaderVehicle" data-sr-asset="vehiclesOb">'+vehicleOptions("OB",c.vehicleId||"")+'</select></label>'+
+ '<label class="sr-field"><span>Driver</span>'+driverSelect("srHeaderDriver",c.driverId||"")+'</label>'+
  paperInput("srHmrOpen",c.openingHmr,"Opening HMR","number",'min="0" step="0.01"')+
  paperInput("srHmrClose",c.closingHmr,"Closing HMR","number",'min="0" step="0.01"')+
  paperInput("srKmrOpen",c.openingKmr,"Opening KMR","number",'min="0" step="0.1"')+
  paperInput("srKmrClose",c.closingKmr,"Closing KMR","number",'min="0" step="0.1"'):
- paperInput("srRelay",c.relayCode,"Relay code (from Masters)","text",'list="srRelayList"'))+
+ selectBox("srRelay","Relay",codeOptions("RELAY",c.relayCode||"")))+
  paperInput("srDeclared",c.declaredTotal??"","Paper total trips (optional)","number",'min="0" step="1"')+
  '</div>';
 }
@@ -90,9 +191,7 @@ function screen(){
  const ob=model.kind==="OB",card=model.card,status=card?.status||"NEW";
  const lines=card?.lines?.length?card.lines:model.lines;
  const total=lines.reduce((sum,x)=>sum+(model.kind==="COAL"?Number(x.tripCount||0):(
-   x.excavatorId&&x.patchCode&&x.pointCode?1:0)),0);
- const extra=(ob?groupOptionList("PATCH","srPatchList")+groupOptionList("UNLOAD_POINT","srPointList"):
- groupOptionList("RELAY","srRelayList"));
+   x.excavatorId&&(x.patchCode||x.sourceLocationId)&&(x.pointCode||x.destinationLocationId)?1:0)),0);
  return '<section class="sr-workbench"><div class="sr-heading"><div><h1>Shift Production Register</h1>'+
  '<p>One source paper → verified MIS trips. No image upload or individual loading time.</p></div>'+
  '<div class="sr-badge">Status: '+esc(status)+'</div></div>'+
@@ -102,7 +201,7 @@ function screen(){
  '<b>OB:</b> One card per tipper and shift. Each detail row is one actual trip. Select excavator, patch and unloading point from Masters.':
  '<b>Coal:</b> One sheet covers many drivers and vehicles. Enter the number of trips per vehicle row; do not enter 112 fictitious individual trip times.')+
  '</div><div class="sr-card"><h2>'+(ob?'OB Tipper Card Header':'Coal Shift Tripman Header')+'</h2>'+
- headerHtml()+extra+'</div>'+
+ headerHtml()+'</div>'+
  '<div class="sr-card"><div class="sr-toolbar"><h2>'+(ob?'Individual OB Trips':'Coal Vehicle/Driver Rows')+'</h2>'+
  '<strong>Total trips: <span id="srTotal">'+total+'</span></strong></div>'+
  '<div class="sr-scroll"><table class="sr-grid"><thead><tr>'+(ob?
@@ -125,23 +224,24 @@ function screen(){
  '<div class="sr-card"><div class="sr-toolbar"><h2>Recent Shift Registers</h2>'+
  '<button class="sr-small" type="button" onclick="KOCPSR.history()">Refresh list</button></div>'+
  '<div id="srHistory" class="sr-muted">Loading saved records...</div></div>'+
- '<div class="sr-card"><div class="sr-toolbar"><h2>Relay / Patch / Unloading Point Masters</h2>'+
- '<span>Admin-controlled; code values are never hardcoded.</span></div><div class="sr-master">'+
- selectBox("srCodeKind","Master type",opts([{id:"RELAY",label:"Relay"},{id:"PATCH",label:"Patch"},{id:"UNLOAD_POINT",label:"Unloading Point"}],"","Choose master type"))+
- paperInput("srCode","Code") + paperInput("srCodeName","Description / Name") +
- selectBox("srCodeLocation","Linked physical location",opts(model.masters.locations,"","Unassigned (permitted for Relay/Patch)"))+
- '<button class="sr-small" type="button" onclick="KOCPSR.addMaster()">Add Single Master Entry</button></div>'+
- '<p class="sr-muted">Unloading points must be linked to their parent KOCP physical location before MIS verification.</p></div>'+
  '</section>';
 }
 function readRows(includeBlank=false){
  const result=[];
  for(const tr of document.querySelectorAll("#srRows .sr-row")){
   const i=Number(tr.dataset.no),r={lineNo:i+1,routeId:val("srLineRoute"+i)};
-  if(model.kind==="COAL"){r.vehicleId=val("srVehicle"+i);r.driverId=h("srDriver"+i)?.dataset.employeeId||"";r.tripCount=val("srCount"+i)}
-  else{r.excavatorId=val("srExcavator"+i);r.patchCode=val("srPatch"+i).trim();r.pointCode=val("srPoint"+i).trim();r.tripCount=1}
+  if(model.kind==="COAL"){r.vehicleId=val("srVehicle"+i);r.driverId=val("srDriver"+i);r.tripCount=val("srCount"+i)}
+  else{
+   r.excavatorId=val("srExcavator"+i);
+   const patch=val("srPatch"+i),point=val("srPoint"+i);
+   r.patchCode=patch.startsWith(locationPrefix)?"":patch;
+   r.pointCode=point.startsWith(locationPrefix)?"":point;
+   r.sourceLocationId=locationIdFor("PATCH",patch)||"";
+   r.destinationLocationId=locationIdFor("UNLOAD_POINT",point)||"";
+   r.tripCount=1;
+  }
   const has=model.kind==="COAL"?(Boolean(r.vehicleId||r.driverId||r.tripCount||r.routeId)):
-   Boolean(r.excavatorId||r.patchCode||r.pointCode||r.routeId);
+   Boolean(r.excavatorId||r.patchCode||r.pointCode||r.sourceLocationId||r.destinationLocationId||r.routeId);
   if(includeBlank||has)result.push(r);
  }
  return result;
@@ -150,7 +250,7 @@ function values(){
  return {kind:model.kind,operatingDate:val("srDate"),shift:val("srShift"),sourceRef:val("srRef"),
  relayCode:model.kind==="COAL"?val("srRelay"):"",materialId:val("srMaterial"),
  routeId:val("srRoute"),vehicleId:model.kind==="OB"?val("srHeaderVehicle"):"",
- driverId:model.kind==="OB"?(h("srHeaderDriver")?.dataset.employeeId||""):"",
+ driverId:model.kind==="OB"?val("srHeaderDriver"):"",
  openingHmr:model.kind==="OB"?val("srHmrOpen"):"",closingHmr:model.kind==="OB"?val("srHmrClose"):"",
  openingKmr:model.kind==="OB"?val("srKmrOpen"):"",closingKmr:model.kind==="OB"?val("srKmrClose"):"",
  declaredTotal:val("srDeclared")||null,
@@ -246,40 +346,54 @@ function updateTotal(){const el=h("srTotal");if(!el)return;
 function addRow(n){sync();for(let i=0;i<n;i++)model.lines.push(blank());h("srRows").innerHTML=model.lines.map(lineHtml).join("");updateTotal()}
 function removeRow(i){sync();model.lines.splice(i,1);if(!model.lines.length)model.lines=[blank()];h("srRows").innerHTML=model.lines.map(lineHtml).join("");updateTotal()}
 function copyDown(){sync();const a=[...model.lines].reverse().find(x=>model.kind==="COAL"?
- x.vehicleId||x.driverId||x.tripCount:x.excavatorId||x.patchCode||x.pointCode);
+ x.vehicleId||x.driverId||x.tripCount:x.excavatorId||x.patchCode||x.pointCode||x.sourceLocationId||x.destinationLocationId);
  if(!a)return notice("Complete one source row before using Copy Down.",true);
  const next={...a};
  if(model.kind==="COAL"){next.tripCount="";next.driverId="";next.vehicleId=""}
  model.lines.push(next);h("srRows").innerHTML=model.lines.map(lineHtml).join("");updateTotal()}
 function switchKind(kind){if(model.kind===kind)return;if(!window.confirm("Switching registers will clear unsaved screen changes. Continue?"))return;model.kind=kind;fresh(kind==="COAL"?24:10);renderSelf()}
 function newCard(){if(!window.confirm("Start a fresh source register? Save current work first."))return;fresh(model.kind==="COAL"?24:10);renderSelf()}
-async function addMaster(){
- const kind=val("srCodeKind"),code=val("srCode").trim(),name=val("srCodeName").trim(),locationId=val("srCodeLocation");
- if(!kind||!code||!name)return notice("Enter master type, code and name.",true);
- try{
- await api(PREFIX+"/codes",{method:"POST",headers:{"Content-Type":"application/json"},
- body:JSON.stringify({kind,code,name,locationId})});
- sync();await renderSelf();notice(kind+" "+code+" added to Masters.");
- }catch(e){notice(e.message,true)}
+const masterKinds=[{id:"RELAY",label:"Coal relay"},{id:"PATCH",label:"OB loading patch"},
+ {id:"UNLOAD_POINT",label:"OB unloading point"}];
+let codeRows=[];
+async function renderCodeMasters(locations){
+ codeRows=await api(PREFIX+"/codes");
+ const locationOptions=locations.filter(l=>l.active).map(l=>({id:l.locationId,label:l.code+" — "+l.name}));
+ const rows=codeRows.map((r,i)=>'<tr><td>'+esc(masterKinds.find(x=>x.id===r.kind)?.label||r.kind)+'</td><td>'+
+  esc(r.code)+'</td><td>'+esc(r.name)+'</td><td>'+esc(r.locationName||
+  (r.kind==="RELAY"?"—":"Mapping required"))+'</td><td>'+(r.active?"Active":"Inactive")+
+  '</td><td><button type="button" class="sr-small" onclick="KOCPSR.editCode('+i+')">Edit</button></td></tr>').join("");
+ return '<section class="sr-card"><h2>Coal Relay and OB Location Codes</h2>'+
+  '<div class="sr-master">'+selectBox("srCodeKind","Master type",opts(masterKinds,"","Choose master type"))+
+  paperInput("srCode","","Code")+paperInput("srCodeName","","Name")+
+  selectBox("srCodeLocation","ERP location",opts(locationOptions,"","Choose a location"))+
+  '<label><input id="srCodeActive" type="checkbox" checked> Active</label>'+
+  '<button type="button" class="sr-small" onclick="KOCPSR.saveCode()">Save</button>'+
+  '<button type="button" class="sr-small" onclick="KOCPSR.editCode(-1)">New</button></div>'+
+  '<div class="sr-scroll"><table class="sr-grid"><thead><tr><th>Type</th><th>Code</th><th>Name</th>'+
+  '<th>ERP location</th><th>Status</th><th></th></tr></thead><tbody>'+rows+'</tbody></table></div></section>';
 }
-let personTimers={};
-function personSearch(el){
- el.dataset.employeeId="";
- clearTimeout(personTimers[el.id]);
- const q=el.value.trim();if(q.length<2)return;
- personTimers[el.id]=setTimeout(async()=>{
- try{
- const rows=await api("/api/site-ops/KOCP/lookups?kind=EMPLOYEE&q="+enc(q)+"&limit=60");
- model.people[el.id]=rows;
- const list=h(el.id+"-list");
- if(list)list.innerHTML=rows.map(x=>'<option value="'+esc(x.label+" — "+x.id)+'"></option>').join("");
- }catch(e){console.warn("Employee lookup unavailable",e)}
- },220);
+function editCode(i){
+ const row=codeRows[i];
+ h("srCodeKind").value=row?.kind||"";
+ h("srCode").value=row?.code||"";
+ h("srCodeName").value=row?.name||"";
+ h("srCodeLocation").value=row?.locationId||"";
+ h("srCodeActive").checked=row?.active??true;
+ h("srCodeKind").disabled=h("srCode").disabled=Boolean(row);
+ h("srCodeActive").disabled=!row;
 }
-function personPick(el){
- const name=el.value.trim(),list=model.people[el.id]||[];
- const found=list.find(x=>(x.label+" — "+x.id)===name||x.id===name);
- if(found){el.dataset.employeeId=found.id;el.value=found.label+" — "+found.id}
+async function saveCode(){
+ const kind=val("srCodeKind"),code=val("srCode").trim(),name=val("srCodeName").trim();
+ const editing=h("srCode").disabled;
+ try{
+  await api(PREFIX+"/codes",{
+   method:editing?"PUT":"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({kind,code,name,locationId:val("srCodeLocation"),active:h("srCodeActive").checked})
+  });
+  await window.render();
+  toast("KOCP Master code saved");
+ }catch(e){toast(e.message,"bad")}
 }
 async function renderKocpShiftRegister(){
  if(!model.lines.length){fresh(24)}
@@ -288,5 +402,5 @@ async function renderKocpShiftRegister(){
 }
 window.renderKocpShiftRegister=renderKocpShiftRegister;
 window.KOCPSR={save:()=>save().catch(()=>{}),submit,verify,reject,history,open,updateTotal,addRow,removeRow,
- copyDown,switchKind,newCard,addMaster,personSearch,personPick,afterRender:async()=>{await Promise.all([history(),loadSummary()])}};
+ copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,filterDrivers,afterRender:async()=>{await Promise.all([history(),loadSummary()])}};
 })();
