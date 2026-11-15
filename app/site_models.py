@@ -326,6 +326,8 @@ class SiteShiftTripCardLine(Base):
     unload_source: Mapped[str | None] = mapped_column(String(45))
     patch_code_id: Mapped[str | None] = mapped_column(ForeignKey("site_operational_code.code_id"))
     unload_code_id: Mapped[str | None] = mapped_column(ForeignKey("site_operational_code.code_id"))
+    source_location_id: Mapped[str | None] = mapped_column(ForeignKey("site_location.site_location_id"))
+    destination_location_id: Mapped[str | None] = mapped_column(ForeignKey("site_location.site_location_id"))
     route_id: Mapped[str | None] = mapped_column(ForeignKey("site_movement_route.route_id"))
     trip_count: Mapped[int] = mapped_column(Integer, default=1)
     trip_id: Mapped[str | None] = mapped_column(ForeignKey("site_trip.trip_id"))
@@ -1148,6 +1150,10 @@ def ensure_tiom_entry_columns(engine) -> None:
         'site_trip': {
             'route_id': 'VARCHAR(80)',
             'trip_count': 'INTEGER NOT NULL DEFAULT 1',
+        },
+        'site_shift_trip_card_line': {
+            'source_location_id': 'VARCHAR(80) REFERENCES site_location(site_location_id)',
+            'destination_location_id': 'VARCHAR(80) REFERENCES site_location(site_location_id)',
         },
         'site_hsd_transaction': {
             'version': 'INTEGER NOT NULL DEFAULT 1',

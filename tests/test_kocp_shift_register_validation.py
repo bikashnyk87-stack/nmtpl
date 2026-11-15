@@ -103,7 +103,8 @@ def test_ob_master_locations_must_match_both_route_endpoints(monkeypatch):
         locations[kind] = original
 
 
-def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch):
+@pytest.mark.parametrize("paper_codes", [True, False])
+def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, paper_codes):
     from datetime import date, time
     from types import SimpleNamespace
 
@@ -150,6 +151,10 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch):
                                      route_group=kind, category=kind, destination_label="Test Dump",
                                      source_location_id="KOCP:FACE", destination_location_id="KOCP:DUMP",
                                      distance_range="1-2"))
+        db.flush()
+        if not paper_codes:
+            for code in db.scalars(select(SiteOperationalCode)).all():
+                db.delete(code)
         db.commit()
         assert [row["id"] for row in registers.list_drivers(None, day, db)] == ["D1"]
 
@@ -158,8 +163,9 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch):
             payload = {"clientKey": f"master-test-{kind}", "kind": kind, "operatingDate": day.isoformat(),
                        "shift": "A", "materialId": kind, "routeId": kind, "declaredTotal": count}
             if kind == "OB":
-                payload.update(vehicleId="T1", driverId="D1",
-                               lines=[{"excavatorId": "E1", "patchCode": "P", "pointCode": "U"}])
+                point_fields = ({"patchCode": "P", "pointCode": "U"} if paper_codes else
+                                {"sourceLocationId": "KOCP:FACE", "destinationLocationId": "KOCP:DUMP"})
+                payload.update(vehicleId="T1", driverId="D1", lines=[{"excavatorId": "E1", **point_fields}])
             else:
                 payload["lines"] = [{"vehicleId": "T1", "driverId": "D1", "tripCount": count}]
             draft = registers.create_card(payload, None, db)
@@ -169,8 +175,10 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch):
             if kind == "OB":
                 draft_line = db.scalar(select(SiteShiftTripCardLine).where(
                     SiteShiftTripCardLine.card_id == card_id))
-                assert draft_line.patch_code_id == "KOCP:PATCH:P"
-                assert draft_line.unload_code_id == "KOCP:UNLOAD_POINT:U"
+                assert draft_line.source_location_id == "KOCP:FACE"
+                assert draft_line.destination_location_id == "KOCP:DUMP"
+                assert draft_line.patch_code_id == ("KOCP:PATCH:P" if paper_codes else None)
+                assert draft_line.unload_code_id == ("KOCP:UNLOAD_POINT:U" if paper_codes else None)
             submitted = registers.submit_card(card_id, {"expectedVersion": draft["version"]}, None, db)
             user.login_id = "CHECKER"
             decision = {"action": "VERIFY", "expectedVersion": submitted["version"]}

@@ -113,13 +113,16 @@ def validate_register_lines(kind, lines):
             excavator = _txt(raw.get("excavatorId"), 50)
             patch = _source_code(raw.get("patchCode"))
             point = _source_code(raw.get("pointCode"))
+            source_id = _txt(raw.get("sourceLocationId"), 80)
+            destination_id = _txt(raw.get("destinationLocationId"), 80)
             count = raw.get("tripCount", 1)
             if count not in (1, "1", None, ""):
                 raise HTTPException(422, "Every OB source row must represent exactly one trip.")
-            if not (excavator and patch and point):
+            if not (excavator and (patch or source_id) and (point or destination_id)):
                 raise HTTPException(422, f"OB line {number}: excavator, patch and unloading point are required.")
             normalized.append({"lineNo": number, "excavatorId": excavator,
                                "patchCode": patch, "pointCode": point,
+                               "sourceLocationId": source_id, "destinationLocationId": destination_id,
                                "tripCount": 1,
                                "routeId": _txt(raw.get("routeId"), 80)})
     return normalized
@@ -163,19 +166,23 @@ def _route(db, route_id, kind, *, required=True):
     return row
 
 
-def _ob_locations(db, route, line_no, patch_value, unload_value):
-    patch = _code(db, "PATCH", patch_value)
-    unload = _code(db, "UNLOAD_POINT", unload_value)
-    for label, code, expected in (
-        ("Loading patch", patch, route.source_location_id if route else None),
-        ("Unloading point", unload, route.destination_location_id if route else None),
+def _ob_locations(db, route, line_no, patch_value, unload_value, source_id=None, destination_id=None):
+    patch = _code(db, "PATCH", patch_value) if patch_value else None
+    unload = _code(db, "UNLOAD_POINT", unload_value) if unload_value else None
+    resolved = []
+    for label, code, location_id, expected in (
+        ("Loading patch", patch, source_id, route.source_location_id if route else None),
+        ("Unloading point", unload, destination_id, route.destination_location_id if route else None),
     ):
-        if not code.parent_location_id:
-            raise HTTPException(422, f"OB line {line_no}: {label} {code.code} is not linked in KOCP Masters.")
-        _site_location_or_422(db, "KOCP", code.parent_location_id)
-        if route and code.parent_location_id != expected:
+        if code:
+            if not code.parent_location_id or (location_id and code.parent_location_id != location_id):
+                raise HTTPException(422, f"OB line {line_no}: {label} code mapping changed or is missing.")
+            location_id = code.parent_location_id
+        if not location_id or (route and location_id != expected):
             raise HTTPException(422, f"OB line {line_no}: {label} does not match the selected route.")
-    return patch, unload
+        _site_location_or_422(db, "KOCP", location_id)
+        resolved.append(location_id)
+    return patch, unload, *resolved
 
 
 def _driver_role(role):
@@ -247,6 +254,8 @@ def _detail(db, card):
             {"lineNo": line.line_no, "vehicleId": line.vehicle_id or "",
              "driverId": line.driver_id or "", "excavatorId": line.excavator_id or "",
              "patchCode": line.patch_source or "", "pointCode": line.unload_source or "",
+              "sourceLocationId": line.source_location_id or "",
+              "destinationLocationId": line.destination_location_id or "",
              "tripCount": line.trip_count, "routeId": line.route_id or "",
              "tripId": line.trip_id}
             for line in lines
@@ -275,8 +284,13 @@ def _write_fields(db, card, payload, *, initial=False):
             _driver(db, line["driverId"], operating_day)
         else:
             _asset(db, line["excavatorId"], operating_day, "OB", "LOADING")
-            patch, unload = _ob_locations(db, route, line["lineNo"], line["patchCode"], line["pointCode"])
-            line.update(patchCodeId=patch.code_id, unloadCodeId=unload.code_id)
+            patch, unload, source, destination = _ob_locations(
+                db, route, line["lineNo"], line["patchCode"], line["pointCode"],
+                line["sourceLocationId"], line["destinationLocationId"],
+            )
+            line.update(patchCodeId=patch.code_id if patch else None,
+                        unloadCodeId=unload.code_id if unload else None,
+                        sourceLocationId=source, destinationLocationId=destination)
     if kind == "OB":
         if payload.get("vehicleId"):
             _asset(db, _txt(payload.get("vehicleId"),50), operating_day, "OB", "TRANSPORT")
@@ -319,6 +333,7 @@ def _write_fields(db, card, payload, *, initial=False):
             patch_source=line.get("patchCode") or None,
             unload_source=line.get("pointCode") or None,
             patch_code_id=line.get("patchCodeId"), unload_code_id=line.get("unloadCodeId"),
+            source_location_id=line.get("sourceLocationId"), destination_location_id=line.get("destinationLocationId"),
             route_id=line.get("routeId") or None, trip_count=line["tripCount"],
         ))
     db.flush()
@@ -474,7 +489,8 @@ def _source_signature(card, lines):
         entries = [(l.vehicle_id,l.driver_id,l.trip_count,l.route_id or card.route_id)
                    for l in lines]
     else:
-        entries = [(l.excavator_id,l.patch_source,l.unload_source,l.route_id or card.route_id)
+        entries = [(l.excavator_id,l.patch_source or l.source_location_id,
+                    l.unload_source or l.destination_location_id,l.route_id or card.route_id)
                    for l in lines]
     return (
         card.kind, card.operating_date, card.shift,
@@ -509,7 +525,8 @@ def submit_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
     for line in lines:
         route = _route(db, line.route_id or row.route_id, row.kind)
         if row.kind == "OB":
-            _ob_locations(db, route, line.line_no, line.patch_source, line.unload_source)
+            _ob_locations(db, route, line.line_no, line.patch_source, line.unload_source,
+                          line.source_location_id, line.destination_location_id)
             _asset(db, line.excavator_id, row.operating_date, "OB", "LOADING")
         else:
             _driver(db, line.driver_id, row.operating_date)
@@ -636,9 +653,14 @@ def decide_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
         route=_route(db,line.route_id or row.route_id,row.kind)
         dest_id=route.destination_location_id
         if row.kind=="OB":
-            patch, unload = _ob_locations(db, route, line.line_no, line.patch_source, line.unload_source)
-            line.patch_code_id=patch.code_id
-            line.unload_code_id=unload.code_id
+            patch, unload, source, destination = _ob_locations(
+                db, route, line.line_no, line.patch_source, line.unload_source,
+                line.source_location_id, line.destination_location_id,
+            )
+            line.patch_code_id = patch.code_id if patch else None
+            line.unload_code_id = unload.code_id if unload else None
+            line.source_location_id = source
+            line.destination_location_id = destination
         factor=None
         try:
             factor=resolve_kocp_point_factor(
