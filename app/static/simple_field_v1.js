@@ -901,6 +901,7 @@ async function saveSimpleTrips(kind){
   let used=0,done=0;btn.disabled=true;
   try{
     for(const row of rows){
+      if(row.dataset.saved==='1')continue; // Already posted in this sheet; never send again.
       const i=row.dataset.i,vehicle=$(`stVehicle${i}`).value,loader=$(`stLoader${i}`).value,gp=$(`stGp${i}`).value.trim();
       const destination=$(`stDest${i}`).value;
       const source=siteId==='KOCP'?$(`stSource${i}`).value:null;
@@ -929,10 +930,12 @@ async function saveSimpleTrips(kind){
         else{body.sourceLocationId=source;body.materialId=material;body.routeId=routeId}
         body.requestId=getReq(siteId==='KOCP'?state.module:kind,body,i);
         const r=await api(`/api/site-ops/${siteId}/trips/simple`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
-        st.textContent=r.idempotent?'Already saved':'Saved ✓';st.className='simple-status good';clearReq(siteId==='KOCP'?state.module:kind,i);done++;
+        st.textContent=r.idempotent?'Already saved':'Saved ✓';st.className='simple-status good';
+        row.dataset.saved='1'; // Retain stable requestId until the entire sheet completes.
+        done++;
       }catch(e){st.textContent=e.message;st.className='simple-status bad'}
     }
-    if(!used)throw new Error('Enter at least one row');
+    if(!used&&!rows.some(r=>r.dataset.saved==='1'))throw new Error('Enter at least one row');
     const meters=siteId==='KOCP'?await saveKocpHmrRows():{used:0,done:0};
     if(done===used&&meters.done===meters.used){
       clearDraft('simpleTripForm',draftKey(state.module));clearReq(siteId==='KOCP'?state.module:kind);
