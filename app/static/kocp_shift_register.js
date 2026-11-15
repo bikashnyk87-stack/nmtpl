@@ -40,7 +40,12 @@ async function fetchMasters(){
   api("/api/site-ops/KOCP/lookups?kind=LOCATION&limit=100"),
   api(PREFIX+"/codes")
  ]);
- model.masters={COAL:a[0],OB:a[1],vehicles:a[2],vehiclesOb:a[3],excavators:a[4],
+ // A physical tipper can appear on Coal or OB paper even when its current
+ // equipment operating group has not yet been corrected in Masters.
+ // Offer the union of both *master-approved transport* lookup results.
+ const transport=[...a[2],...a[3]].filter((row,i,items)=>
+   items.findIndex(other=>other.id===row.id)===i);
+ model.masters={COAL:a[0],OB:a[1],vehicles:transport,vehiclesOb:transport,excavators:a[4],
                materials:a[5],locations:a[6],codes:a[7]};
 }
 function h(id){return document.getElementById(id)}
