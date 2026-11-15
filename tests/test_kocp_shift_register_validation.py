@@ -32,12 +32,22 @@ def test_ob_card_keeps_individual_excavator_and_point():
     assert {x["tripCount"] for x in lines}=={1}
 
 
-def test_ob_cannot_use_coal_aggregate_count():
-    with pytest.raises(HTTPException) as e:
-        validate_register_lines("OB",[
-            {"excavatorId":"EX-1","patchCode":"K","pointCode":"1","tripCount":10}
+def test_ob_rows_sum_trip_counts_by_excavator_and_points():
+    rows = validate_register_lines("OB", [
+        {"excavatorId": "EX-1", "patchCode": "K", "pointCode": "1", "tripCount": 10},
+        {"excavatorId": "EX-2", "patchCode": "K", "pointCode": "1", "tripCount": 4},
+    ])
+    assert [row["tripCount"] for row in rows] == [10, 4]
+    assert source_trip_total(rows) == 14
+
+
+@pytest.mark.parametrize("count", [0, -1, 1.5, True, 201, "²", "9" * 200])
+def test_ob_rejects_invalid_trip_counts(count):
+    with pytest.raises(HTTPException) as error:
+        validate_register_lines("OB", [
+            {"excavatorId": "EX-1", "patchCode": "K", "pointCode": "1", "tripCount": count},
         ])
-    assert e.value.status_code==422
+    assert error.value.status_code == 422
 
 
 def test_coal_count_requires_positive_integer():
@@ -158,14 +168,14 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, pape
         db.commit()
         assert [row["id"] for row in registers.list_drivers(None, day, db)] == ["D1"]
 
-        for kind, count in [("OB", 1), ("COAL", 5)]:
+        for kind, count in [("OB", 8), ("COAL", 5)]:
             user.login_id = "ENTRY"
             payload = {"clientKey": f"master-test-{kind}", "kind": kind, "operatingDate": day.isoformat(),
                        "shift": "A", "materialId": kind, "routeId": kind, "declaredTotal": count}
             if kind == "OB":
                 point_fields = ({"patchCode": "P", "pointCode": "U"} if paper_codes else
                                 {"sourceLocationId": "KOCP:FACE", "destinationLocationId": "KOCP:DUMP"})
-                payload.update(vehicleId="T1", driverId="D1", lines=[{"excavatorId": "E1", **point_fields}])
+                payload.update(vehicleId="T1", driverId="D1", lines=[{"excavatorId": "E1", "tripCount": count, **point_fields}])
             else:
                 payload["lines"] = [{"vehicleId": "T1", "driverId": "D1", "tripCount": count}]
             draft = registers.create_card(payload, None, db)
@@ -186,7 +196,20 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, pape
             assert registers.decide_card(card_id, decision, None, db)["idempotent"]
 
         trips = db.scalars(select(SiteTrip)).all()
-        assert sorted(row.trip_count for row in trips) == [1, 5]
+        assert sorted(row.trip_count for row in trips) == [5, 8]
         assert {row.driver_id for row in trips} == {"D1"}
         assert {row.source_location_id for row in trips} == {"KOCP:FACE"}
         assert {row.destination_location_id for row in trips} == {"KOCP:DUMP"}
+
+
+def test_grouped_ob_and_individual_ob_have_same_duplicate_signature():
+    from types import SimpleNamespace
+    from app.routers.kocp_shift_register import _source_signature
+
+    card = SimpleNamespace(kind="OB", operating_date="2026-11-15", shift="A",
+                           vehicle_id="T1", route_id="R1", material_id="M1")
+    line = dict(excavator_id="E1", source_location_id="S", destination_location_id="D",
+                patch_source=None, unload_source=None, route_id=None)
+    assert _source_signature(card, [SimpleNamespace(**line, trip_count=8)]) == _source_signature(
+        card, [SimpleNamespace(**line, trip_count=1)] * 8,
+    )

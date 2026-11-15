@@ -66,15 +66,7 @@ function driverOptions(value){
   model.drivers.length?"Select driver / employee code":"No eligible KOCP drivers for this date"));
 }
 function driverSelect(id,value){
- return '<div class="sr-driver-picker"><input type="search" aria-label="Search drivers by name or code" '+
-  'placeholder="Find driver / code" oninput="KOCPSR.filterDrivers(this)">'+
-  '<select id="'+id+'" data-sr-driver aria-label="Driver">'+driverOptions(value)+'</select></div>';
-}
-function filterDrivers(search){
- const select=search.nextElementSibling, current=select.value, query=search.value.trim().toLowerCase();
- const matches=model.drivers.filter(x=>x.id===current||x.label.toLowerCase().includes(query));
- select.innerHTML=retainedOptions(matches,current,model.driverError||
-  (matches.length?"Select matching driver":"No matching driver"));
+ return '<select id="'+id+'" data-sr-driver aria-label="Driver">'+driverOptions(value)+'</select>';
 }
 function cardDate(){
  return model.card?.operatingDate||state.ctx?.operatingDate||new Date().toISOString().slice(0,10);
@@ -104,7 +96,6 @@ async function changeDate(){
  model.driverError=result.error;
  for(const select of document.querySelectorAll("[data-sr-driver]")){
   const current=select.value;
-  select.previousElementSibling.value="";
   select.innerHTML=driverOptions(result.error||model.drivers.some(x=>x.id===current)?current:"");
  }
  if(assets){
@@ -120,7 +111,7 @@ async function changeDate(){
 }
 function existing(line,key){return String(line?.[key]??"")}
 function blank(){return model.kind==="COAL"?{vehicleId:"",driverId:"",tripCount:"",routeId:""}:
- {excavatorId:"",patchCode:"",pointCode:"",routeId:"",tripCount:1}}
+ {excavatorId:"",patchCode:"",pointCode:"",routeId:"",tripCount:""}}
 function fresh(count){model.lines=Array.from({length:count},()=>blank());model.card=null;model.clientKey=newKey()}
 async function fetchMasters(){
  const a=await Promise.all([
@@ -157,6 +148,7 @@ function lineHtml(line,i){
  locationOptions("UNLOAD_POINT",point)+'</select></td>'+
  '<td><select id="srLineRoute'+i+'" aria-label="Route / Lead">'+
  routeOptions("OB",existing(line,"routeId"),patch,point)+'</select></td>'+
+ '<td><input class="sr-numeric" aria-label="Trips" id="srCount'+i+'" type="number" min="1" max="200" step="1" value="'+esc(existing(line,"tripCount"))+'" oninput="KOCPSR.updateTotal()"></td>'+
  '<td><button class="sr-small" type="button" onclick="KOCPSR.removeRow('+i+')">Remove</button></td></tr>';
 }
 function changePoints(i){
@@ -174,56 +166,53 @@ function headerHtml(){
  const shift=c.shift||state.ctx?.shift||"A";
  return '<div class="sr-head">'+paperInput("srDate",d,"Operating date","date",'onchange="KOCPSR.changeDate()"')+
  selectBox("srShift","Shift",opts(availableShifts(),shift,"Choose shift"))+
- paperInput("srRef",c.sourceRef,"Paper reference (if provided)")+
  selectBox("srMaterial","Material",materialOptions(model.kind,c.materialId||""))+
- selectBox("srRoute","Default route / lead",routeOptions(model.kind,c.routeId||""))+
  (ob?'<label class="sr-field"><span>Tipper</span><select id="srHeaderVehicle" data-sr-asset="vehiclesOb">'+vehicleOptions("OB",c.vehicleId||"")+'</select></label>'+
- '<label class="sr-field"><span>Driver</span>'+driverSelect("srHeaderDriver",c.driverId||"")+'</label>'+
- paperInput("srHmrOpen",c.openingHmr,"Opening HMR","number",'min="0" step="0.01"')+
+ '<label class="sr-field"><span>Driver</span>'+driverSelect("srHeaderDriver",c.driverId||"")+'</label>':
+ selectBox("srRelay","Relay",codeOptions("RELAY",c.relayCode||"")))+
+ paperInput("srDeclared",c.declaredTotal??"","Paper trip total","number",'min="0" step="1"')+
+ '</div><details class="sr-card-details"><summary>Paper reference'+(ob?' and meters':' and route')+'</summary><div class="sr-head">'+
+ paperInput("srRef",c.sourceRef,"Paper reference")+
+ selectBox("srRoute","Default route / lead",routeOptions(model.kind,c.routeId||""))+
+ (ob?paperInput("srHmrOpen",c.openingHmr,"Opening HMR","number",'min="0" step="0.01"')+
  paperInput("srHmrClose",c.closingHmr,"Closing HMR","number",'min="0" step="0.01"')+
  paperInput("srKmrOpen",c.openingKmr,"Opening KMR","number",'min="0" step="0.1"')+
- paperInput("srKmrClose",c.closingKmr,"Closing KMR","number",'min="0" step="0.1"'):
- selectBox("srRelay","Relay",codeOptions("RELAY",c.relayCode||"")))+
- paperInput("srDeclared",c.declaredTotal??"","Paper total trips (optional)","number",'min="0" step="1"')+
- '</div>';
+ paperInput("srKmrClose",c.closingKmr,"Closing KMR","number",'min="0" step="0.1"'):"")+
+ '</div></details>';
 }
 function screen(){
  const ob=model.kind==="OB",card=model.card,status=card?.status||"NEW";
  const lines=card?.lines?.length?card.lines:model.lines;
- const total=lines.reduce((sum,x)=>sum+(model.kind==="COAL"?Number(x.tripCount||0):(
-   x.excavatorId&&(x.patchCode||x.sourceLocationId)&&(x.pointCode||x.destinationLocationId)?1:0)),0);
+ const total=lines.reduce((sum,line)=>sum+Number(line.tripCount||0),0);
  return '<section class="sr-workbench"><div class="sr-heading"><div><h1>Shift Production Register</h1>'+
- '<p>One source paper → verified MIS trips. No image upload or individual loading time.</p></div>'+
+ '</div>'+
  '<div class="sr-badge">Status: '+esc(status)+'</div></div>'+
  '<div class="sr-tabs"><button type="button" class="'+(ob?'':'active')+'" onclick="KOCPSR.switchKind(\'COAL\')">Coal Register</button>'+
  '<button type="button" class="'+(ob?'active':'')+'" onclick="KOCPSR.switchKind(\'OB\')">OB Trip Cards</button></div>'+
- '<div class="sr-note">'+(ob?
- '<b>OB:</b> One card per tipper and shift. Each detail row is one actual trip. Select excavator, patch and unloading point from Masters.':
- '<b>Coal:</b> One sheet covers many drivers and vehicles. Enter the number of trips per vehicle row; do not enter 112 fictitious individual trip times.')+
- '</div><div class="sr-card"><h2>'+(ob?'OB Tipper Card Header':'Coal Shift Tripman Header')+'</h2>'+
+ '<div class="sr-card"><h2>'+(ob?'Tipper Card':'Coal Shift Sheet')+'</h2>'+
  headerHtml()+'</div>'+
- '<div class="sr-card"><div class="sr-toolbar"><h2>'+(ob?'Individual OB Trips':'Coal Vehicle/Driver Rows')+'</h2>'+
- '<strong>Total trips: <span id="srTotal">'+total+'</span></strong></div>'+
- '<div class="sr-scroll"><table class="sr-grid"><thead><tr>'+(ob?
- '<th>#</th><th>Excavator</th><th>Patch</th><th>Unloading Point</th><th>Route / Lead (override)</th><th></th>':
+ '<div class="sr-card"><div class="sr-toolbar"><h2>'+(ob?'OB Trip Counts':'Coal Vehicle/Driver Rows')+'</h2>'+
+ '<div class="sr-entry-actions"><strong>Trips: <span id="srTotal">'+total+'</span></strong>'+
+ '<button class="sr-small" type="button" onclick="KOCPSR.addRow()">Add row</button>'+
+ '<button class="sr-small" type="button" onclick="KOCPSR.copyDown()">Copy down</button></div></div>'+
+ '<div class="sr-scroll sr-entry-scroll" tabindex="0" aria-label="Trip entry rows"><table class="sr-grid"><thead><tr>'+(ob?
+ '<th>#</th><th>Excavator</th><th>Patch</th><th>Unloading Point</th><th>Route / Lead</th><th>Trips</th><th></th>':
  '<th>#</th><th>Vehicle</th><th>Driver</th><th>Trip count</th><th>Route / Lead (override)</th><th></th>')+
  '</tr></thead><tbody id="srRows">'+lines.map((x,i)=>lineHtml(x,i)).join("")+'</tbody></table></div>'+
- '<div class="sr-actions"><button class="sr-small" type="button" onclick="KOCPSR.addRow(1)">+1 Row</button>'+
- '<button class="sr-small" type="button" onclick="KOCPSR.addRow(10)">+10 Rows</button>'+
- '<button class="sr-small" type="button" onclick="KOCPSR.copyDown()">Copy Down ↓</button></div></div>'+
- '<div class="sr-card"><div class="sr-toolbar"><h2>MIS Controls</h2><span>Save draft first; only the checker posts verified trips.</span></div>'+
+ '</div>'+
+ '<div class="sr-card">'+
  '<div class="sr-actions"><button class="sr-btn" type="button" onclick="KOCPSR.save()">Save Draft</button>'+
  '<button class="sr-btn" type="button" onclick="KOCPSR.submit()">Submit for Check</button>'+
  '<button class="sr-small" type="button" onclick="KOCPSR.newCard()">New '+model.kind+' Sheet</button>'+
  ((status==="SUBMITTED")?'<button class="sr-btn" type="button" onclick="KOCPSR.verify()">MIS Verify & Post</button>'+
  '<button class="sr-small" type="button" onclick="KOCPSR.reject()">Return for Correction</button>':'')+
- '</div><p class="sr-muted">Pending MCL factors do not prevent saving the source. Only verified cards become operational trips.</p>'+
+ '</div>'+
  '<div id="srNotice" aria-live="polite"></div></div>'+
- '<div class="sr-card"><div class="sr-toolbar"><h2>Shift MIS Summary</h2></div>'+
- '<div id="srSummary" class="sr-muted">Loading verified totals...</div></div>'+
- '<div class="sr-card"><div class="sr-toolbar"><h2>Recent Shift Registers</h2>'+
+ '<details class="sr-card"><summary>Shift MIS Summary</summary>'+
+ '<div id="srSummary" class="sr-muted">Loading verified totals...</div></details>'+
+ '<details class="sr-card"><summary>Recent Shift Registers</summary><div class="sr-toolbar">'+
  '<button class="sr-small" type="button" onclick="KOCPSR.history()">Refresh list</button></div>'+
- '<div id="srHistory" class="sr-muted">Loading saved records...</div></div>'+
+ '<div id="srHistory" class="sr-muted">Loading saved records...</div></details>'+
  '</section>';
 }
 function readRows(includeBlank=false){
@@ -238,10 +227,10 @@ function readRows(includeBlank=false){
    r.pointCode=point.startsWith(locationPrefix)?"":point;
    r.sourceLocationId=locationIdFor("PATCH",patch)||"";
    r.destinationLocationId=locationIdFor("UNLOAD_POINT",point)||"";
-   r.tripCount=1;
+   r.tripCount=val("srCount"+i);
   }
   const has=model.kind==="COAL"?(Boolean(r.vehicleId||r.driverId||r.tripCount||r.routeId)):
-   Boolean(r.excavatorId||r.patchCode||r.pointCode||r.sourceLocationId||r.destinationLocationId||r.routeId);
+   Boolean(r.excavatorId||r.patchCode||r.pointCode||r.sourceLocationId||r.destinationLocationId||r.routeId||r.tripCount);
   if(includeBlank||has)result.push(r);
  }
  return result;
@@ -337,22 +326,44 @@ async function history(){
  }catch(e){const out=h("srHistory");if(out)out.textContent=e.message}
 }
 async function open(id){try{const r=await api(PREFIX+"/cards/"+enc(id));model.kind=r.kind;model.card=r;model.lines=r.lines;model.clientKey=r.cardId;await renderSelf()}catch(e){notice(e.message,true)}}
-function updateTotal(){const el=h("srTotal");if(!el)return;
- if(model.kind==="COAL"){el.textContent=[...document.querySelectorAll("#srRows .sr-numeric")].reduce((s,x)=>s+(Number(x.value)||0),0);return}
- el.textContent=[...document.querySelectorAll("#srRows .sr-row")].filter(x=>{
-   const i=x.dataset.no;return val("srExcavator"+i)&&val("srPatch"+i)&&val("srPoint"+i)
- }).length;
+function updateTotal(){
+ const el=h("srTotal");if(!el)return;
+ el.textContent=[...document.querySelectorAll("#srRows .sr-numeric")]
+  .reduce((sum,input)=>sum+(Number(input.value)||0),0);
 }
-function addRow(n){sync();for(let i=0;i<n;i++)model.lines.push(blank());h("srRows").innerHTML=model.lines.map(lineHtml).join("");updateTotal()}
-function removeRow(i){sync();model.lines.splice(i,1);if(!model.lines.length)model.lines=[blank()];h("srRows").innerHTML=model.lines.map(lineHtml).join("");updateTotal()}
-function copyDown(){sync();const a=[...model.lines].reverse().find(x=>model.kind==="COAL"?
- x.vehicleId||x.driverId||x.tripCount:x.excavatorId||x.patchCode||x.pointCode||x.sourceLocationId||x.destinationLocationId);
- if(!a)return notice("Complete one source row before using Copy Down.",true);
- const next={...a};
- if(model.kind==="COAL"){next.tripCount="";next.driverId="";next.vehicleId=""}
- model.lines.push(next);h("srRows").innerHTML=model.lines.map(lineHtml).join("");updateTotal()}
-function switchKind(kind){if(model.kind===kind)return;if(!window.confirm("Switching registers will clear unsaved screen changes. Continue?"))return;model.kind=kind;fresh(kind==="COAL"?24:10);renderSelf()}
-function newCard(){if(!window.confirm("Start a fresh source register? Save current work first."))return;fresh(model.kind==="COAL"?24:10);renderSelf()}
+function redrawRows(focusIndex){
+ h("srRows").innerHTML=model.lines.map(lineHtml).join("");
+ updateTotal();
+ if(focusIndex!==undefined){
+  h((model.kind==="OB"?"srExcavator":"srVehicle")+focusIndex)?.focus();
+ }
+}
+function addRow(){
+ sync();
+ const empty=model.lines.findIndex(row=>!Object.entries(row).some(([key,value])=>key!=="lineNo"&&value));
+ if(empty>=0)return redrawRows(empty);
+ if(model.lines.length>=200)return notice("Maximum 200 rows per sheet.",true);
+ model.lines.push(blank());
+ redrawRows(model.lines.length-1);
+}
+function removeRow(i){
+ sync();model.lines.splice(i,1);if(!model.lines.length)model.lines=[blank()];
+ redrawRows();
+}
+function copyDown(){
+ sync();
+ const index=model.lines.findLastIndex(row=>model.kind==="COAL"?row.vehicleId:row.excavatorId);
+ if(index<0)return notice("Select equipment before copying a row.",true);
+ const next={...model.lines[index],tripCount:""};
+ if(model.kind==="COAL"){next.driverId="";next.vehicleId=""}
+ const empty=model.lines.findIndex((row,i)=>i>index&&
+  !Object.entries(row).some(([key,value])=>key!=="lineNo"&&value));
+ if(empty>=0){model.lines[empty]=next;return redrawRows(empty)}
+ if(model.lines.length>=200)return notice("Maximum 200 rows per sheet.",true);
+ model.lines.push(next);redrawRows(model.lines.length-1);
+}
+function switchKind(kind){if(model.kind===kind)return;if(!window.confirm("Switching registers will clear unsaved screen changes. Continue?"))return;model.kind=kind;fresh(kind==="COAL"?4:2);renderSelf()}
+function newCard(){if(!window.confirm("Start a fresh source register? Save current work first."))return;fresh(model.kind==="COAL"?4:2);renderSelf()}
 const masterKinds=[{id:"RELAY",label:"Coal relay"},{id:"PATCH",label:"OB loading patch"},
  {id:"UNLOAD_POINT",label:"OB unloading point"}];
 let codeRows=[];
@@ -396,11 +407,11 @@ async function saveCode(){
  }catch(e){toast(e.message,"bad")}
 }
 async function renderKocpShiftRegister(){
- if(!model.lines.length){fresh(24)}
+ if(!model.lines.length){fresh(4)}
  await fetchMasters();
  return screen();
 }
 window.renderKocpShiftRegister=renderKocpShiftRegister;
 window.KOCPSR={save:()=>save().catch(()=>{}),submit,verify,reject,history,open,updateTotal,addRow,removeRow,
- copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,filterDrivers,afterRender:async()=>{await Promise.all([history(),loadSummary()])}};
+ copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,afterRender:async()=>{await Promise.all([history(),loadSummary()])}};
 })();

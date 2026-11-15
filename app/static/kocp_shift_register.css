@@ -38,4 +38,11 @@
 .sr-summary-item strong{font-size:18px;color:#146c64}
 .sr-summary-item small{color:#687b84;font-size:12px}
 
-.sr-driver-picker{display:grid;gap:4px;min-width:0}
+.sr-entry-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px}
+.sr-entry-scroll{max-height:clamp(160px,36vh,340px);overflow:auto;scroll-padding-top:44px}
+.sr-entry-scroll th{position:sticky;top:0;z-index:1}
+.sr-workbench{gap:8px}
+.sr-workbench .sr-card{padding:10px}
+.sr-workbench .sr-head{gap:7px}
+.sr-card-details{margin-top:8px;font-size:12px}
+.sr-card-details[open] .sr-head{margin-top:8px}
