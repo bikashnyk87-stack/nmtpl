@@ -198,6 +198,24 @@ def _write_fields(db, card, payload, *, initial=False):
     shift = _source_code(payload.get("shift"))
     _site_shift_or_422(db, "KOCP", shift)
     lines = validate_register_lines(kind, payload.get("lines"))
+    # Validate every supplied FK against the date-effective KOCP Masters at
+    # input time. Raw paper patch/point codes remain drafts until mapped.
+    material_id = _txt(payload.get("materialId"), 80)
+    if material_id: _material(db, material_id, kind)
+    default_route = _txt(payload.get("routeId"), 80)
+    if default_route: _route(db, default_route, kind)
+    for line in lines:
+        if line.get("routeId"): _route(db, line["routeId"], kind)
+        if kind == "COAL":
+            _site_equipment_or_422(db, "KOCP", line["vehicleId"], operating_day, "Coal tipper")
+            _site_person_or_422(db, "KOCP", line["driverId"], operating_day)
+        else:
+            _site_equipment_or_422(db, "KOCP", line["excavatorId"], operating_day, "OB excavator")
+    if kind == "OB":
+        if payload.get("vehicleId"):
+            _site_equipment_or_422(db, "KOCP", _txt(payload.get("vehicleId"),50), operating_day, "OB tipper")
+        if payload.get("driverId"):
+            _site_person_or_422(db, "KOCP", _txt(payload.get("driverId"),50), operating_day)
     declared = payload.get("declaredTotal")
     if declared not in (None, ""):
         try:
@@ -347,6 +365,22 @@ def edit_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_db
     return {"ok":True,**_detail(db,row)}
 
 
+def _source_signature(card, lines):
+    """A second browser/PC cannot repost the identical paper under a new key."""
+    if card.kind == "COAL":
+        entries = [(l.vehicle_id,l.driver_id,l.trip_count,l.route_id or card.route_id)
+                   for l in lines]
+    else:
+        entries = [(l.excavator_id,l.patch_source,l.unload_source,l.route_id or card.route_id)
+                   for l in lines]
+    return (
+        card.kind, card.operating_date, card.shift,
+        card.vehicle_id if card.kind == "OB" else card.relay_source,
+        card.route_id, card.material_id,
+        tuple(sorted(entries, key=lambda x: str(x))),
+    )
+
+
 @router.post("/cards/{card_id}/submit")
 def submit_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_db)):
     user=_auth(db,request,"TRIP","CREATE",True)
@@ -359,9 +393,26 @@ def submit_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
         raise HTTPException(409,"This register is already verified or cannot be submitted.")
     if payload.get("expectedVersion")!=row.version:
         raise HTTPException(409,"Register changed. Reload before submitting.")
-    total=sum(x.trip_count for x in _card_lines(db,card_id))
+    lines=_card_lines(db,card_id)
+    total=sum(x.trip_count for x in lines)
     if not total or (row.declared_total is not None and row.declared_total!=total):
         raise HTTPException(422,"Reported paper total does not match entered trip counts.")
+    # On repeat submissions from a different browser, detect the same source
+    # reference or identical paper content before allowing MIS review.
+    others=db.scalars(select(SiteShiftTripCard).where(
+        SiteShiftTripCard.site_id=="KOCP",SiteShiftTripCard.kind==row.kind,
+        SiteShiftTripCard.operating_date==row.operating_date,
+        SiteShiftTripCard.shift==row.shift,
+        SiteShiftTripCard.card_id!=row.card_id,
+        SiteShiftTripCard.status.in_(["SUBMITTED","VERIFIED"]),
+    )).all()
+    signature=_source_signature(row,lines)
+    for other in others:
+        if (row.source_ref and other.source_ref and
+                row.source_ref.casefold()==other.source_ref.casefold()):
+            raise HTTPException(409,"A register with this paper reference is already submitted.")
+        if _source_signature(other,_card_lines(db,other.card_id))==signature:
+            raise HTTPException(409,"This same Coal/OB paper content has already been submitted.")
     row.status="SUBMITTED";row.submitted_by=user.login_id
     row.submitted_at=datetime.now(timezone.utc);row.version+=1
     _audit(db,user,"KOCP","SUBMIT_SHIFT_REGISTER","site_shift_trip_card",card_id,
