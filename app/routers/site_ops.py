@@ -182,7 +182,8 @@ def _contains_text(*values, q: str) -> bool:
 
 @router.get("/{site_id}/lookups")
 def operational_lookup(site_id: str, request: Request, kind: str, q: str = "", limit: int = 30,
-                       activity: str = "", role: str = "", db: Session = Depends(get_db)):
+                       activity: str = "", role: str = "", db: Session = Depends(get_db),
+                       operating_date: date | None = None):
     user = get_user(db, request)
     site_id = require_site(db, user, site_id)
     kind = str(kind or '').strip().upper()
@@ -218,11 +219,16 @@ def operational_lookup(site_id: str, request: Request, kind: str, q: str = "", l
             rows = list(db.scalars(select(Equipment).where(Equipment.active.is_(True)).order_by(Equipment.machine_id).limit(2000)))
             pairs = [(x, None) for x in rows]
         else:
-            pairs = db.execute(select(Equipment, EquipmentSiteAssignment).join(
+            stmt = select(Equipment, EquipmentSiteAssignment).join(
                 EquipmentSiteAssignment, EquipmentSiteAssignment.machine_id == Equipment.machine_id
             ).where(EquipmentSiteAssignment.site_id == site_id,
                     Equipment.active.is_(True), EquipmentSiteAssignment.active.is_(True))
-                .order_by(Equipment.machine_id).limit(2000)).all()
+            if operating_date is not None:
+                stmt = stmt.where(EquipmentSiteAssignment.effective_from <= operating_date,
+                    or_(EquipmentSiteAssignment.effective_to.is_(None),
+                        EquipmentSiteAssignment.effective_to >= operating_date))
+            pairs = db.execute(stmt.order_by(Equipment.machine_id,
+                EquipmentSiteAssignment.effective_from.desc(), EquipmentSiteAssignment.id.desc()).limit(2000)).all()
         seen = set()
         for x, a in pairs:
             if x.machine_id in seen:
@@ -243,6 +249,7 @@ def operational_lookup(site_id: str, request: Request, kind: str, q: str = "", l
                     continue
                 out.append({"id": x.machine_id, "label": label, "sub": sub,
                             "type": x.type, "group": x.group,
+                            "category": kocp_equipment_category(x.type, x.make_model),
                             "vehicleNo": x.vehicle_no, "doorNo": x.door_no,
                             "rentalRef": rental, "ownership": x.ownership})
             else:
