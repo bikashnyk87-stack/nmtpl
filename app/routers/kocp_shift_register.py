@@ -566,6 +566,75 @@ def decide_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
     return {"ok":True,**result,**_detail(db,row)}
 
 
+def refresh_verified_pending_factors(db: Session, user, factor: SiteWeightFactor):
+    """Recompute quantity when a dated *daily* factor is approved.
+
+    Only source-derived quantities are updated. Never mutate paper rows or
+    certified monthly billing, and never rewrite an approved billing period.
+    """
+    if (factor.site_id != "KOCP" or factor.status != "APPROVED" or
+            (factor.source_org or "").upper() not in {"DAILY_REPORT","MCL"}):
+        return 0
+    stmt=select(SiteTrip).where(
+        SiteTrip.site_id=="KOCP",
+        SiteTrip.source_type.in_(["SHIFT_COAL_REGISTER","SHIFT_OB_CARD"]),
+        SiteTrip.status=="POSTED",SiteTrip.factor_id.is_(None),
+        SiteTrip.operating_date>=factor.effective_from,
+        SiteTrip.destination_location_id==factor.destination_location_id,
+    )
+    if factor.effective_to:
+        stmt=stmt.where(SiteTrip.operating_date<=factor.effective_to)
+    if factor.operating_date:
+        stmt=stmt.where(SiteTrip.operating_date==factor.operating_date)
+    if factor.material_id:
+        stmt=stmt.where(SiteTrip.material_id==factor.material_id)
+    if factor.route_id:
+        stmt=stmt.where(SiteTrip.route_id==factor.route_id)
+    if factor.shift:
+        stmt=stmt.where(SiteTrip.shift==factor.shift)
+    updated=0
+    for trip in db.scalars(stmt).all():
+        billed=db.scalar(select(SiteBillingReconciliation.billing_id).where(
+            SiteBillingReconciliation.site_id=="KOCP",
+            SiteBillingReconciliation.status=="APPROVED",
+            SiteBillingReconciliation.period_start<=trip.operating_date,
+            SiteBillingReconciliation.period_end>=trip.operating_date,
+            SiteBillingReconciliation.material_id==trip.material_id,
+        ).limit(1))
+        if billed:
+            continue
+        machine=db.get(Equipment,trip.vehicle_id)
+        if not machine:
+            continue
+        kind="OB" if trip.source_type=="SHIFT_OB_CARD" else "COAL"
+        try:
+            selected=resolve_kocp_point_factor(
+                db,factor_type="OB_CUM_PER_TRIP" if kind=="OB" else "COAL_AVG_MT_PER_TRIP",
+                operating_day=trip.operating_date,shift=trip.shift,
+                destination_id=trip.destination_location_id,
+                route_id=trip.route_id,material_id=trip.material_id,
+                vehicle_type=machine.type,vehicle_group=machine.group,vehicle_model=machine.make_model,
+            )
+        except HTTPException as error:
+            if error.status_code==409:
+                continue
+            raise
+        qty=Decimal(str(selected.factor_value))*trip.trip_count
+        if kind=="OB":
+            trip.quantity_cum=qty
+            trip.weight_basis="MCL_DUMPER_FACTOR"
+        else:
+            trip.quantity_mt=qty
+            trip.weight_basis="MCL_SHIFT_AVERAGE"
+        trip.factor_id=selected.factor_id
+        trip.version=(trip.version or 1)+1
+        trip.updated_at=datetime.now(timezone.utc)
+        _audit(db,user,"KOCP","APPLY_APPROVED_DAILY_FACTOR","site_trip",trip.trip_id,
+               after={"factorId":selected.factor_id,"tripCount":trip.trip_count,"quantity":str(qty),"kind":kind})
+        updated+=1
+    return updated
+
+
 @router.get("/summary")
 def shift_register_summary(request:Request,operating_date:date,db:Session=Depends(get_db)):
     _auth(db,request)
