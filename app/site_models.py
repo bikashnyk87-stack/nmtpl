@@ -285,6 +285,8 @@ class SiteShiftTripCard(Base):
     operating_date: Mapped[date] = mapped_column(Date, index=True)
     shift: Mapped[str] = mapped_column(String(20), index=True)
     source_ref: Mapped[str | None] = mapped_column(String(100))
+    client_key: Mapped[str] = mapped_column(String(120), index=True)
+    relay_source: Mapped[str | None] = mapped_column(String(45))
     relay_code_id: Mapped[str | None] = mapped_column(ForeignKey("site_operational_code.code_id"))
     route_id: Mapped[str | None] = mapped_column(ForeignKey("site_movement_route.route_id"))
     material_id: Mapped[str | None] = mapped_column(ForeignKey("site_material.site_material_id"))
@@ -306,6 +308,7 @@ class SiteShiftTripCard(Base):
     version: Mapped[int] = mapped_column(Integer, default=1)
     __table_args__ = (
         Index("ix_site_shift_trip_card_find","site_id","operating_date","shift","kind","status"),
+        UniqueConstraint("site_id","client_key",name="uq_site_shift_card_client_key"),
     )
 
 
@@ -319,6 +322,8 @@ class SiteShiftTripCardLine(Base):
     vehicle_id: Mapped[str | None] = mapped_column(ForeignKey("equipment.machine_id"))
     driver_id: Mapped[str | None] = mapped_column(ForeignKey("persons.employee_id"))
     excavator_id: Mapped[str | None] = mapped_column(ForeignKey("equipment.machine_id"))
+    patch_source: Mapped[str | None] = mapped_column(String(45))
+    unload_source: Mapped[str | None] = mapped_column(String(45))
     patch_code_id: Mapped[str | None] = mapped_column(ForeignKey("site_operational_code.code_id"))
     unload_code_id: Mapped[str | None] = mapped_column(ForeignKey("site_operational_code.code_id"))
     route_id: Mapped[str | None] = mapped_column(ForeignKey("site_movement_route.route_id"))
