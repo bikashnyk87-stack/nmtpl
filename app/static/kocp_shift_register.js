@@ -54,9 +54,9 @@ function lineHtml(line,i){
  '<td><select id="srLineRoute'+i+'">'+routeOptions("COAL",existing(line,"routeId"))+'</select></td>'+
  '<td><button class="sr-small" type="button" onclick="KOCPSR.removeRow('+i+')">Remove</button></td></tr>';
  return '<tr class="sr-row" data-no="'+i+'"><td>'+(i+1)+'</td>'+
- '<td><select id="srExcavator'+i+'">'+opts(model.masters.excavators,existing(line,"excavatorId"),"Select excavator")+'</select></td>'+
- '<td><input list="srPatchList" id="srPatch'+i+'" value="'+esc(existing(line,"patchCode"))+'" placeholder="Patch master"></td>'+
- '<td><input list="srPointList" id="srPoint'+i+'" value="'+esc(existing(line,"pointCode"))+'" placeholder="Point master"></td>'+
+ '<td><select id="srExcavator'+i+'" onchange="KOCPSR.updateTotal()">'+opts(model.masters.excavators,existing(line,"excavatorId"),"Select excavator")+'</select></td>'+
+ '<td><input list="srPatchList" id="srPatch'+i+'" value="'+esc(existing(line,"patchCode"))+'" oninput="KOCPSR.updateTotal()" placeholder="Patch master"></td>'+
+ '<td><input list="srPointList" id="srPoint'+i+'" value="'+esc(existing(line,"pointCode"))+'" oninput="KOCPSR.updateTotal()" placeholder="Point master"></td>'+
  '<td><select id="srLineRoute'+i+'">'+routeOptions("OB",existing(line,"routeId"))+'</select></td>'+
  '<td><button class="sr-small" type="button" onclick="KOCPSR.removeRow('+i+')">Remove</button></td></tr>';
 }
@@ -84,7 +84,8 @@ function headerHtml(){
 function screen(){
  const ob=model.kind==="OB",card=model.card,status=card?.status||"NEW";
  const lines=card?.lines?.length?card.lines:model.lines;
- const total=lines.reduce((sum,x)=>sum+Number(x.tripCount||0),0);
+ const total=lines.reduce((sum,x)=>sum+(model.kind==="COAL"?Number(x.tripCount||0):(
+   x.excavatorId&&x.patchCode&&x.pointCode?1:0)),0);
  const extra=(ob?groupOptionList("PATCH","srPatchList")+groupOptionList("UNLOAD_POINT","srPointList"):
  groupOptionList("RELAY","srRelayList"));
  return '<section class="sr-workbench"><div class="sr-heading"><div><h1>Shift Production Register</h1>'+
@@ -132,7 +133,8 @@ function readRows(){
   const i=Number(tr.dataset.no),r={lineNo:i+1,routeId:val("srLineRoute"+i)};
   if(model.kind==="COAL"){r.vehicleId=val("srVehicle"+i);r.driverId=h("srDriver"+i)?.dataset.employeeId||"";r.tripCount=val("srCount"+i)}
   else{r.excavatorId=val("srExcavator"+i);r.patchCode=val("srPatch"+i).trim();r.pointCode=val("srPoint"+i).trim();r.tripCount=1}
-  const has=Object.values(r).some(Boolean);
+  const has=model.kind==="COAL"?(Boolean(r.vehicleId||r.driverId||r.tripCount||r.routeId)):
+   Boolean(r.excavatorId||r.patchCode||r.pointCode||r.routeId);
   if(has)result.push(r);
  }
  return result;
@@ -214,7 +216,12 @@ async function history(){
  }catch(e){const out=h("srHistory");if(out)out.textContent=e.message}
 }
 async function open(id){try{const r=await api(PREFIX+"/cards/"+enc(id));model.kind=r.kind;model.card=r;model.lines=r.lines;model.clientKey=r.cardId;await renderSelf()}catch(e){notice(e.message,true)}}
-function updateTotal(){const el=h("srTotal");if(el){const n=[...document.querySelectorAll("#srRows .sr-numeric")].reduce((s,x)=>s+(Number(x.value)||0),0);el.textContent=model.kind==="OB"?document.querySelectorAll("#srRows .sr-row").length:n}}
+function updateTotal(){const el=h("srTotal");if(!el)return;
+ if(model.kind==="COAL"){el.textContent=[...document.querySelectorAll("#srRows .sr-numeric")].reduce((s,x)=>s+(Number(x.value)||0),0);return}
+ el.textContent=[...document.querySelectorAll("#srRows .sr-row")].filter(x=>{
+   const i=x.dataset.no;return val("srExcavator"+i)&&val("srPatch"+i)&&val("srPoint"+i)
+ }).length;
+}
 function addRow(n){sync();for(let i=0;i<n;i++)model.lines.push(blank());h("srRows").innerHTML=model.lines.map(lineHtml).join("");updateTotal()}
 function removeRow(i){sync();model.lines.splice(i,1);if(!model.lines.length)model.lines=[blank()];h("srRows").innerHTML=model.lines.map(lineHtml).join("");updateTotal()}
 function copyDown(){sync();const a=model.lines.at(-1);if(!a)return;const next={...a};
