@@ -239,6 +239,8 @@ class SiteTrip(Base):
     loading_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     unloading_start_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     unloading_end_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # One legacy/OB row is one trip; Coal Tripman source rows can aggregate N trips.
+    trip_count: Mapped[int] = mapped_column(Integer, default=1, server_default="1", nullable=False)
     quantity_mt: Mapped[Decimal | None] = mapped_column(Numeric(14, 3))
     quantity_cum: Mapped[Decimal | None] = mapped_column(Numeric(14, 3))
     weight_basis: Mapped[str | None] = mapped_column(String(40), index=True)
@@ -257,6 +259,77 @@ class SiteTrip(Base):
         UniqueConstraint("site_id", "source_type", "source_record_uid", name="uq_site_trip_source_uid"),
     )
 
+
+
+class SiteOperationalCode(Base):
+    """Site-controlled source-document codes, not application hardcoded lists."""
+
+    __tablename__ = "site_operational_code"
+    code_id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("site.site_id"), index=True)
+    code_kind: Mapped[str] = mapped_column(String(30), index=True)  # PATCH / UNLOAD_POINT / RELAY
+    code: Mapped[str] = mapped_column(String(45))
+    name: Mapped[str] = mapped_column(String(160))
+    parent_location_id: Mapped[str | None] = mapped_column(ForeignKey("site_location.site_location_id"))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    __table_args__ = (UniqueConstraint("site_id","code_kind","code",name="uq_site_operational_code"),)
+
+
+class SiteShiftTripCard(Base):
+    """Physical source grain: Coal shift register OR one OB vehicle card."""
+
+    __tablename__ = "site_shift_trip_card"
+    card_id: Mapped[str] = mapped_column(String(60), primary_key=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("site.site_id"), index=True)
+    kind: Mapped[str] = mapped_column(String(10), index=True)
+    operating_date: Mapped[date] = mapped_column(Date, index=True)
+    shift: Mapped[str] = mapped_column(String(20), index=True)
+    source_ref: Mapped[str | None] = mapped_column(String(100))
+    client_key: Mapped[str] = mapped_column(String(120), index=True)
+    relay_source: Mapped[str | None] = mapped_column(String(45))
+    relay_code_id: Mapped[str | None] = mapped_column(ForeignKey("site_operational_code.code_id"))
+    route_id: Mapped[str | None] = mapped_column(ForeignKey("site_movement_route.route_id"))
+    material_id: Mapped[str | None] = mapped_column(ForeignKey("site_material.site_material_id"))
+    vehicle_id: Mapped[str | None] = mapped_column(ForeignKey("equipment.machine_id"))
+    driver_id: Mapped[str | None] = mapped_column(ForeignKey("persons.employee_id"))
+    opening_hmr: Mapped[Decimal | None] = mapped_column(Numeric(16,3))
+    closing_hmr: Mapped[Decimal | None] = mapped_column(Numeric(16,3))
+    opening_kmr: Mapped[Decimal | None] = mapped_column(Numeric(16,3))
+    closing_kmr: Mapped[Decimal | None] = mapped_column(Numeric(16,3))
+    declared_total: Mapped[int | None] = mapped_column(Integer)
+    status: Mapped[str] = mapped_column(String(30), default="DRAFT", index=True)
+    entered_by: Mapped[str] = mapped_column(String(60))
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    submitted_by: Mapped[str | None] = mapped_column(String(60))
+    submitted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verified_by: Mapped[str | None] = mapped_column(String(60))
+    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    review_note: Mapped[str | None] = mapped_column(String(500))
+    version: Mapped[int] = mapped_column(Integer, default=1)
+    __table_args__ = (
+        Index("ix_site_shift_trip_card_find","site_id","operating_date","shift","kind","status"),
+        UniqueConstraint("site_id","client_key",name="uq_site_shift_card_client_key"),
+    )
+
+
+class SiteShiftTripCardLine(Base):
+    """One vehicle/count on Coal sheets; exactly one trip on OB cards."""
+
+    __tablename__ = "site_shift_trip_card_line"
+    line_id: Mapped[str] = mapped_column(String(70), primary_key=True)
+    card_id: Mapped[str] = mapped_column(ForeignKey("site_shift_trip_card.card_id"), index=True)
+    line_no: Mapped[int] = mapped_column(Integer)
+    vehicle_id: Mapped[str | None] = mapped_column(ForeignKey("equipment.machine_id"))
+    driver_id: Mapped[str | None] = mapped_column(ForeignKey("persons.employee_id"))
+    excavator_id: Mapped[str | None] = mapped_column(ForeignKey("equipment.machine_id"))
+    patch_source: Mapped[str | None] = mapped_column(String(45))
+    unload_source: Mapped[str | None] = mapped_column(String(45))
+    patch_code_id: Mapped[str | None] = mapped_column(ForeignKey("site_operational_code.code_id"))
+    unload_code_id: Mapped[str | None] = mapped_column(ForeignKey("site_operational_code.code_id"))
+    route_id: Mapped[str | None] = mapped_column(ForeignKey("site_movement_route.route_id"))
+    trip_count: Mapped[int] = mapped_column(Integer, default=1)
+    trip_id: Mapped[str | None] = mapped_column(ForeignKey("site_trip.trip_id"))
+    __table_args__ = (UniqueConstraint("card_id","line_no",name="uq_shift_card_source_line"),)
 
 
 class SiteOperationalImportBatch(Base):
@@ -1019,6 +1092,9 @@ MULTISITE_TABLES = [
     MasterImportBatch,
     MasterImportRow,
     SiteTrip,
+    SiteOperationalCode,
+    SiteShiftTripCard,
+    SiteShiftTripCardLine,
     SiteOperationalImportBatch,
     SiteOperationalImportRow,
     SiteWbImportBatch,
@@ -1069,7 +1145,10 @@ def ensure_tiom_entry_columns(engine) -> None:
     from sqlalchemy import inspect, text
     targets = {
         'tiom_source_deployment': {'operator_id': 'VARCHAR(60)'},
-        'site_trip': {'route_id': 'VARCHAR(80)'},
+        'site_trip': {
+            'route_id': 'VARCHAR(80)',
+            'trip_count': 'INTEGER NOT NULL DEFAULT 1',
+        },
         'site_hsd_transaction': {
             'version': 'INTEGER NOT NULL DEFAULT 1',
             'updated_at': 'TIMESTAMP WITH TIME ZONE',

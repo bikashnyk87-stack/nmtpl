@@ -501,7 +501,7 @@ def save_simple_site_trip(site_id: str, payload: dict, request: Request, db: Ses
 
     if site_id == "SOCP" and mt is None:
         raise HTTPException(422, "Quantity MT is required")
-    event_at = datetime.combine(operating_day, shift_row.start_time)
+    event_at = None if site_id=='KOCP' else datetime.combine(operating_day, shift_row.start_time)
     trip_id = f"TRIP-{site_id}-{uuid4().hex[:14].upper()}"
     row = SiteTrip(
         trip_id=trip_id, route_id=route_id, site_id=site_id, operating_date=operating_day, shift=shift, event_at=event_at,
@@ -626,10 +626,10 @@ def kocp_point_wise_report(
     groups = db.execute(select(
         SiteTrip.operating_date, SiteTrip.shift,
         SiteTrip.material_id, SiteTrip.destination_location_id, SiteTrip.route_id,
-        func.count(SiteTrip.trip_id),
+        func.coalesce(func.sum(SiteTrip.trip_count),0),
         func.coalesce(func.sum(SiteTrip.quantity_mt), 0),
         func.coalesce(func.sum(SiteTrip.quantity_cum), 0),
-        func.sum(case((SiteTrip.factor_id.is_(None), 1), else_=0)),
+        func.sum(case((SiteTrip.factor_id.is_(None), SiteTrip.trip_count), else_=0)),
         func.count(func.distinct(SiteTrip.factor_id)),
     ).where(
         SiteTrip.site_id == "KOCP", SiteTrip.status == "POSTED",
@@ -698,7 +698,7 @@ def kocp_point_wise_report(
     # make/vehicle class and unloading point. This does not change saved trips.
     vehicle_groups = db.execute(select(
         SiteTrip.vehicle_id, SiteTrip.material_id, SiteTrip.destination_location_id,
-        SiteTrip.route_id, func.count(SiteTrip.trip_id),
+        SiteTrip.route_id, func.coalesce(func.sum(SiteTrip.trip_count),0),
         func.coalesce(func.sum(SiteTrip.quantity_mt), 0),
         func.coalesce(func.sum(SiteTrip.quantity_cum), 0),
     ).where(
@@ -874,7 +874,7 @@ def central_overview(request: Request, operating_date: date | None = None, db: S
             present = db.scalar(select(func.count()).select_from(PersonAttendance).where(PersonAttendance.operating_date == day, PersonAttendance.status == "PRESENT")) or 0
             item = {"siteId": site_id, "trips": trips, "quantityMt": float(_decimal(net_kg) / Decimal("1000")), "quantityCum": 0.0, "hsdIssuedL": 0.0, "wbRows": wb_rows, "present": present, "openIssues": 0}
         else:
-            trips = db.scalar(select(func.count()).select_from(SiteTrip).where(SiteTrip.site_id == site_id, SiteTrip.operating_date == day, SiteTrip.status != "VOID")) or 0
+            trips = db.scalar(select(func.coalesce(func.sum(SiteTrip.trip_count),0)).where(SiteTrip.site_id == site_id, SiteTrip.operating_date == day, SiteTrip.status != "VOID")) or 0
             qty_mt = db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_mt), 0)).where(SiteTrip.site_id == site_id, SiteTrip.operating_date == day, SiteTrip.status != "VOID")) or 0
             qty_cum = db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_cum), 0)).where(SiteTrip.site_id == site_id, SiteTrip.operating_date == day, SiteTrip.status != "VOID")) or 0
             hsd = db.scalar(select(func.coalesce(func.sum(SiteHsdTransaction.litres), 0)).where(SiteHsdTransaction.site_id == site_id, SiteHsdTransaction.operating_date == day, SiteHsdTransaction.transaction_type == "ISSUE", SiteHsdTransaction.status == "POSTED")) or 0
@@ -1026,6 +1026,7 @@ def run_reconciliation(site_id:str,request:Request,operating_date:date,shift:str
         tv=_norm_vehicle(t.vehicle_raw or (db.get(Equipment,t.vehicle_id).vehicle_no if t.vehicle_id and db.get(Equipment,t.vehicle_id) else None))
         candidates=[]
         for w in wbs:
+            if t.event_at is None: continue  # no genuine timestamp; never match by invented shift-start time
             if w.movement_key in used_wb: continue
             if tv and _norm_vehicle(w.vehicle_raw)!=tv: continue
             if t.event_at and w.weigh_at:
@@ -1067,7 +1068,7 @@ def performance(site_id:str,request:Request,dimension:str="vehicle",from_date:da
     if site_id=="TIOM": return {"siteId":site_id,"dimension":dimension,"fromDate":start,"toDate":end,"source":"LEGACY_TIOM","rows":[]}
     field={"vehicle":func.coalesce(SiteTrip.vehicle_id,SiteTrip.vehicle_raw),"loader":SiteTrip.loading_equipment_id,"excavator":SiteTrip.loading_equipment_id,"driver":SiteTrip.driver_id,"destination":SiteTrip.destination_location_id}.get(dimension)
     if field is None: raise HTTPException(422,"Unsupported dimension")
-    stmt=select(field.label("key"),func.count().label("trips"),func.coalesce(func.sum(SiteTrip.quantity_mt),0).label("mt"),func.coalesce(func.sum(SiteTrip.quantity_cum),0).label("cum")).where(SiteTrip.site_id==site_id,SiteTrip.operating_date>=start,SiteTrip.operating_date<=end,SiteTrip.status!="VOID").group_by(field).order_by(func.count().desc())
+    stmt=select(field.label("key"),func.coalesce(func.sum(SiteTrip.trip_count),0).label("trips"),func.coalesce(func.sum(SiteTrip.quantity_mt),0).label("mt"),func.coalesce(func.sum(SiteTrip.quantity_cum),0).label("cum")).where(SiteTrip.site_id==site_id,SiteTrip.operating_date>=start,SiteTrip.operating_date<=end,SiteTrip.status!="VOID").group_by(field).order_by(func.sum(SiteTrip.trip_count).desc())
     rows=[]
     for key,trips,mt,cum in db.execute(stmt):
         if key is None: continue
@@ -1573,9 +1574,9 @@ def report_summary(site_id:str,request:Request,from_date:date|None=None,to_date:
     if site_id=="TIOM":
         trips=db.scalar(select(func.count()).select_from(LoadTrip).where(LoadTrip.operating_date>=start,LoadTrip.operating_date<=end)) or 0; net=db.scalar(select(func.coalesce(func.sum(WbMovement.net_kg),0)).where(WbMovement.operating_date>=start,WbMovement.operating_date<=end)) or 0; return {"siteId":site_id,"fromDate":start,"toDate":end,"trips":trips,"quantityMt":float(_decimal(net)/1000),"quantityCum":0,"hsdIssuedL":0,"wbRows":db.scalar(select(func.count()).select_from(WbMovement).where(WbMovement.operating_date>=start,WbMovement.operating_date<=end)) or 0,"source":"LEGACY_TIOM"}
     filters=[SiteTrip.site_id==site_id,SiteTrip.operating_date>=start,SiteTrip.operating_date<=end,SiteTrip.status!="VOID"]
-    trips=db.scalar(select(func.count()).select_from(SiteTrip).where(*filters)) or 0; mt=db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_mt),0)).where(*filters)) or 0; cum=db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_cum),0)).where(*filters)) or 0; hsd=db.scalar(select(func.coalesce(func.sum(SiteHsdTransaction.litres),0)).where(SiteHsdTransaction.site_id==site_id,SiteHsdTransaction.operating_date>=start,SiteHsdTransaction.operating_date<=end,SiteHsdTransaction.transaction_type=="ISSUE",SiteHsdTransaction.status=="POSTED")) or 0; wb=db.scalar(select(func.count()).select_from(SiteWbMovement).where(SiteWbMovement.site_id==site_id,SiteWbMovement.operating_date>=start,SiteWbMovement.operating_date<=end,SiteWbMovement.row_status=="VALID")) or 0
+    trips=db.scalar(select(func.coalesce(func.sum(SiteTrip.trip_count),0)).where(*filters)) or 0; mt=db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_mt),0)).where(*filters)) or 0; cum=db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_cum),0)).where(*filters)) or 0; hsd=db.scalar(select(func.coalesce(func.sum(SiteHsdTransaction.litres),0)).where(SiteHsdTransaction.site_id==site_id,SiteHsdTransaction.operating_date>=start,SiteHsdTransaction.operating_date<=end,SiteHsdTransaction.transaction_type=="ISSUE",SiteHsdTransaction.status=="POSTED")) or 0; wb=db.scalar(select(func.count()).select_from(SiteWbMovement).where(SiteWbMovement.site_id==site_id,SiteWbMovement.operating_date>=start,SiteWbMovement.operating_date<=end,SiteWbMovement.row_status=="VALID")) or 0
     shifts=[]
-    for sh,tr,sm,sc in db.execute(select(SiteTrip.shift,func.count(),func.coalesce(func.sum(SiteTrip.quantity_mt),0),func.coalesce(func.sum(SiteTrip.quantity_cum),0)).where(*filters).group_by(SiteTrip.shift).order_by(SiteTrip.shift)): shifts.append({"shift":sh,"trips":tr,"quantityMt":_fmt_decimal(sm),"quantityCum":_fmt_decimal(sc)})
+    for sh,tr,sm,sc in db.execute(select(SiteTrip.shift,func.coalesce(func.sum(SiteTrip.trip_count),0),func.coalesce(func.sum(SiteTrip.quantity_mt),0),func.coalesce(func.sum(SiteTrip.quantity_cum),0)).where(*filters).group_by(SiteTrip.shift).order_by(SiteTrip.shift)): shifts.append({"shift":sh,"trips":tr,"quantityMt":_fmt_decimal(sm),"quantityCum":_fmt_decimal(sc)})
     return {"siteId":site_id,"fromDate":start,"toDate":end,"trips":trips,"quantityMt":_fmt_decimal(mt),"quantityCum":_fmt_decimal(cum),"hsdIssuedL":_fmt_decimal(hsd),"wbRows":wb,"shifts":shifts,"lPerMt":(_fmt_decimal(hsd)/_fmt_decimal(mt) if _fmt_decimal(mt)>0 else None)}
 
 
@@ -1964,7 +1965,7 @@ def operations_dashboard(
 
     def trip_totals(filters):
         row=db.execute(select(
-            func.count(),
+            func.coalesce(func.sum(SiteTrip.trip_count),0),
             func.coalesce(func.sum(SiteTrip.quantity_mt),0),
             func.coalesce(func.sum(SiteTrip.quantity_cum),0),
             func.count(func.distinct(SiteTrip.vehicle_id)),
@@ -2024,7 +2025,7 @@ def operations_dashboard(
 
     shift_map={}
     for sh,tr,mt,cum in db.execute(select(
-        SiteTrip.shift,func.count(),func.coalesce(func.sum(SiteTrip.quantity_mt),0),func.coalesce(func.sum(SiteTrip.quantity_cum),0)
+        SiteTrip.shift,func.coalesce(func.sum(SiteTrip.trip_count),0),func.coalesce(func.sum(SiteTrip.quantity_mt),0),func.coalesce(func.sum(SiteTrip.quantity_cum),0)
     ).where(*trip_filters).group_by(SiteTrip.shift)):
         shift_map[str(sh)]={"shift":str(sh),"trips":int(tr or 0),"quantityMt":_fmt_decimal(mt),"quantityCum":_fmt_decimal(cum),"hsdL":0.0}
     for sh,litres in db.execute(select(
@@ -2044,7 +2045,7 @@ def operations_dashboard(
     def grouped_rows(column, label_map, limit=10):
         rows=db.execute(select(
             column,
-            func.count(),
+            func.coalesce(func.sum(SiteTrip.trip_count),0),
             func.coalesce(func.sum(SiteTrip.quantity_mt),0),
             func.coalesce(func.sum(SiteTrip.quantity_cum),0),
         ).where(*trip_filters).group_by(column)).all()
@@ -2069,7 +2070,7 @@ def operations_dashboard(
 
     trend_trip={}
     for day,tr,mt,cum in db.execute(select(
-        SiteTrip.operating_date,func.count(),func.coalesce(func.sum(SiteTrip.quantity_mt),0),func.coalesce(func.sum(SiteTrip.quantity_cum),0)
+        SiteTrip.operating_date,func.coalesce(func.sum(SiteTrip.trip_count),0),func.coalesce(func.sum(SiteTrip.quantity_mt),0),func.coalesce(func.sum(SiteTrip.quantity_cum),0)
     ).where(*trip_filters).group_by(SiteTrip.operating_date).order_by(SiteTrip.operating_date)):
         trend_trip[day]={"trips":int(tr or 0),"quantityMt":_fmt_decimal(mt),"quantityCum":_fmt_decimal(cum)}
     trend_hsd={day:_fmt_decimal(litres) for day,litres in db.execute(select(
@@ -2158,7 +2159,7 @@ def operations_dashboard(
         *today_filters,
         or_(
             SiteTrip.vehicle_id.is_(None),
-            SiteTrip.loading_equipment_id.is_(None),
+            and_(SiteTrip.source_type!='SHIFT_COAL_REGISTER', SiteTrip.loading_equipment_id.is_(None)),
             SiteTrip.destination_location_id.is_(None),
             SiteTrip.material_id.is_(None),
         )

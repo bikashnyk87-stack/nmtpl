@@ -480,7 +480,7 @@ def dashboard(site_id: str, request: Request, operating_date: date | None = None
         net_kg = db.scalar(select(func.coalesce(func.sum(WbMovement.net_kg), 0)).where(WbMovement.operating_date == day)) or 0
         return {"siteId": site_id, "date": day, "source": "LEGACY_TIOM", "trips": trips, "wbRows": wb_rows, "quantityMt": float(Decimal(net_kg) / Decimal(1000))}
 
-    trips = db.scalar(select(func.count()).select_from(SiteTrip).where(SiteTrip.site_id == site_id, SiteTrip.operating_date == day, SiteTrip.status != "VOID")) or 0
+    trips = db.scalar(select(func.coalesce(func.sum(SiteTrip.trip_count),0)).where(SiteTrip.site_id == site_id, SiteTrip.operating_date == day, SiteTrip.status != "VOID")) or 0
     qty_mt = db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_mt), 0)).where(SiteTrip.site_id == site_id, SiteTrip.operating_date == day, SiteTrip.status != "VOID")) or 0
     qty_cum = db.scalar(select(func.coalesce(func.sum(SiteTrip.quantity_cum), 0)).where(SiteTrip.site_id == site_id, SiteTrip.operating_date == day, SiteTrip.status != "VOID")) or 0
     wb_rows = db.scalar(select(func.count()).select_from(SiteWbMovement).where(SiteWbMovement.site_id == site_id, SiteWbMovement.operating_date == day, SiteWbMovement.row_status == "VALID")) or 0
@@ -1268,8 +1268,12 @@ def decide_weight_factor(site_id: str, factor_id: str, p: WeightFactorDecisionIn
     row.approved_by = user.login_id if p.action == "APPROVE" else None
     row.approved_at = datetime.now(timezone.utc) if p.action == "APPROVE" else None
     _audit(db, user, site_id, p.action + "_FACTOR", "site_weight_factor", factor_id, before=before, after={"status": row.status}, reason=p.reason)
+    refreshed = 0
+    if site_id == "KOCP" and p.action == "APPROVE":
+        from app.routers.kocp_shift_register import refresh_verified_pending_factors
+        refreshed = refresh_verified_pending_factors(db, user, row)
     db.commit()
-    return {"ok": True, "factorId": factor_id, "status": row.status}
+    return {"ok": True, "factorId": factor_id, "status": row.status, "recalculatedTrips": refreshed}
 
 
 @router.post("/{site_id}/wb/manual")
@@ -1429,7 +1433,7 @@ def list_site_trips(site_id: str, request: Request, operating_date: date | None 
         stmt = stmt.where(SiteTrip.operating_date == operating_date)
     rows = db.scalars(stmt.order_by(SiteTrip.entered_at.desc()).limit(limit)).all()
     return [{
-        "tripId": r.trip_id, "operatingDate": r.operating_date, "shift": r.shift,
+        "tripId": r.trip_id, "operatingDate": r.operating_date, "shift": r.shift, "tripCount": r.trip_count,
         "eventAt": r.event_at, "vehicleId": r.vehicle_id, "vehicleRaw": r.vehicle_raw,
         "driverId": r.driver_id, "loadingEquipmentId": r.loading_equipment_id,
         "routeId": r.route_id, "sourceLocationId": r.source_location_id, "destinationLocationId": r.destination_location_id,
