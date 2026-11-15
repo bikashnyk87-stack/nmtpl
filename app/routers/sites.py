@@ -1268,8 +1268,12 @@ def decide_weight_factor(site_id: str, factor_id: str, p: WeightFactorDecisionIn
     row.approved_by = user.login_id if p.action == "APPROVE" else None
     row.approved_at = datetime.now(timezone.utc) if p.action == "APPROVE" else None
     _audit(db, user, site_id, p.action + "_FACTOR", "site_weight_factor", factor_id, before=before, after={"status": row.status}, reason=p.reason)
+    refreshed = 0
+    if site_id == "KOCP" and p.action == "APPROVE":
+        from app.routers.kocp_shift_register import refresh_verified_pending_factors
+        refreshed = refresh_verified_pending_factors(db, user, row)
     db.commit()
-    return {"ok": True, "factorId": factor_id, "status": row.status}
+    return {"ok": True, "factorId": factor_id, "status": row.status, "recalculatedTrips": refreshed}
 
 
 @router.post("/{site_id}/wb/manual")
