@@ -45,6 +45,38 @@ async def lifespan(app):
     ensure_tiom_route_master_schema(engine)
     create_multisite_tables(engine)
     ensure_tiom_entry_columns(engine)
+    # Read-only in-process probe against this *exact* service DATABASE_URL.
+    # Previous tests connected directly to Neon, but this Render service may
+    # instead use the separate Postgres bridge. Never infer database parity.
+    from sqlalchemy import inspect as sa_inspect
+    inspected = sa_inspect(engine)
+    kocp_requirements = {
+        "site_shift_trip_card", "site_shift_trip_card_line", "site_operational_code"
+    }
+    present = {name for name in kocp_requirements if inspected.has_table(name)}
+    trip_columns = {
+        col["name"] for col in inspected.get_columns("site_trip")
+    } if inspected.has_table("site_trip") else set()
+    if present != kocp_requirements or "trip_count" not in trip_columns:
+        raise RuntimeError(
+            "KOCP_SHIFT_REGISTER_SCHEMA_NOT_READY missing_tables="
+            + str(sorted(kocp_requirements - present))
+            + " missing_trip_count=" + str("trip_count" not in trip_columns)
+        )
+    with engine.connect() as dbconn:
+        current_card_count = dbconn.exec_driver_sql(
+            "SELECT COUNT(*) FROM site_shift_trip_card"
+        ).scalar_one()
+        current_trip_count = dbconn.exec_driver_sql(
+            "SELECT COUNT(*) FROM site_trip WHERE site_id = 'KOCP'"
+        ).scalar_one()
+    print(
+        "KOCP_SHIFT_REGISTER_SCHEMA_OK backend=" + str(engine.url.get_backend_name())
+        + " db_name=" + str(engine.url.database)
+        + " card_rows=" + str(current_card_count)
+        + " kocp_trip_rows=" + str(current_trip_count),
+        flush=True,
+    )
     create_maintenance_tables(engine)
     init_sync_source(engine)
     # Pilot migration safety: if an older build left exactly one active account
