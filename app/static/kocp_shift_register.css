@@ -32,3 +32,8 @@
 .sr-success{margin-top:10px;padding:10px;background:#e8f7f2;color:#0f6556;border-radius:7px;font-weight:600;font-size:12px}
 .sr-workbench .sr-master .sr-small{min-height:35px}
 @media(max-width:650px){.sr-card{padding:10px}.sr-head,.sr-master{grid-template-columns:1fr 1fr}.sr-heading h1{font-size:19px}}
+
+.sr-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:12px}
+.sr-summary-item{border:1px solid #dbe7e8;border-radius:9px;padding:12px;display:grid;gap:5px}
+.sr-summary-item strong{font-size:18px;color:#146c64}
+.sr-summary-item small{color:#687b84;font-size:12px}
