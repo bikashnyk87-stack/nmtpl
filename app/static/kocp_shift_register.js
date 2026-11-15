@@ -132,7 +132,7 @@ function screen(){
  '<p class="sr-muted">Unloading points must be linked to their parent KOCP physical location before MIS verification.</p></div>'+
  '</section>';
 }
-function readRows(){
+function readRows(includeBlank=false){
  const result=[];
  for(const tr of document.querySelectorAll("#srRows .sr-row")){
   const i=Number(tr.dataset.no),r={lineNo:i+1,routeId:val("srLineRoute"+i)};
@@ -140,7 +140,7 @@ function readRows(){
   else{r.excavatorId=val("srExcavator"+i);r.patchCode=val("srPatch"+i).trim();r.pointCode=val("srPoint"+i).trim();r.tripCount=1}
   const has=model.kind==="COAL"?(Boolean(r.vehicleId||r.driverId||r.tripCount||r.routeId)):
    Boolean(r.excavatorId||r.patchCode||r.pointCode||r.routeId);
-  if(has)result.push(r);
+  if(includeBlank||has)result.push(r);
  }
  return result;
 }
@@ -155,7 +155,7 @@ function values(){
  lines:readRows()};
 }
 function notice(message,error=false){const n=h("srNotice");if(n){n.textContent=message;n.className=error?"sr-error":"sr-success"}else if(window.toast)toast(message,error?"bad":"good")}
-function sync(){const inputs=values();model.lines=inputs.lines;model.pendingHeader=inputs}
+function sync(){const inputs=values();model.lines=readRows(true);model.pendingHeader=inputs}
 async function renderSelf(){await fetchMasters();const w=h("workspace");if(w){w.innerHTML=screen();await history()}}
 async function save(silent=false){
  try{
@@ -229,7 +229,10 @@ function updateTotal(){const el=h("srTotal");if(!el)return;
 }
 function addRow(n){sync();for(let i=0;i<n;i++)model.lines.push(blank());h("srRows").innerHTML=model.lines.map(lineHtml).join("");updateTotal()}
 function removeRow(i){sync();model.lines.splice(i,1);if(!model.lines.length)model.lines=[blank()];h("srRows").innerHTML=model.lines.map(lineHtml).join("");updateTotal()}
-function copyDown(){sync();const a=model.lines.at(-1);if(!a)return;const next={...a};
+function copyDown(){sync();const a=[...model.lines].reverse().find(x=>model.kind==="COAL"?
+ x.vehicleId||x.driverId||x.tripCount:x.excavatorId||x.patchCode||x.pointCode);
+ if(!a)return notice("Complete one source row before using Copy Down.",true);
+ const next={...a};
  if(model.kind==="COAL"){next.tripCount="";next.driverId="";next.vehicleId=""}
  model.lines.push(next);h("srRows").innerHTML=model.lines.map(lineHtml).join("");updateTotal()}
 function switchKind(kind){if(model.kind===kind)return;if(!window.confirm("Switching registers will clear unsaved screen changes. Continue?"))return;model.kind=kind;fresh(kind==="COAL"?24:10);renderSelf()}
