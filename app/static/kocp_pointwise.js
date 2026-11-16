@@ -201,8 +201,23 @@ async function renderKocpPointReport(from,to){
   const form=`<div class="toolbar"><label>From <input id="koReportFrom" type="date" value="${esc(from)}"></label>
     <label>To <input id="koReportTo" type="date" value="${esc(to)}"></label>
     <button class="btn primary" onclick="koPointReloadReport()">Show Report</button>
-    <button class="btn outline" onclick="koPointDownloadCategoryCsv()">Download Category CSV</button></div>`;
-  return pageHead('KOCP Point-wise Production Report','Calculated from posted Coal and OB trips. MT and CuM remain separate.')+
+    <label>Report <select id="koExportKind">
+  <option value="ALL">Complete MIS — all records and sheets</option>
+  <option value="TRIPS">All posted trips</option>
+  <option value="SHIFT">Daily and shift</option>
+  <option value="COAL">Coal daily vehicle</option>
+  <option value="OB_TIPPER">OB tipper performance</option>
+  <option value="EXCAVATOR">Excavator performance</option>
+  <option value="LOADER">Loader performance</option>
+  <option value="METERS">HMR / KMR register</option>
+  <option value="HSD">Fuel transaction ledger</option>
+  <option value="SOURCE">Paper source cards and rows</option>
+  <option value="MCL">MCL quantity factors</option>
+  </select></label><button class="btn primary" type="button" onclick="koDownloadFullReport()">Download Excel</button>
+  <button class="btn outline" onclick="koPointDownloadCategoryCsv()">Category CSV</button></div>
+  <p class="simple-note">Full Excel downloads include every matching source row for the selected dates.
+  The screen preview is limited for speed; downloaded Excel is not.</p>`;
+  return pageHead('KOCP MIS Reports & Excel','Complete source records plus Coal, OB, equipment, HMR/KMR and fuel performance. MT and CuM remain separate.')+
     context()+panel('Reporting period',form)+summary('COAL')+summary('OB')+
     panel('Date & shift details',details+grid(data.dailyShift.slice(0,1000)),data.dailyShift.length+' groups')+
     panel('Category-wise Coal and OB summary',
@@ -226,3 +241,11 @@ window.renderKocpPointFactors=renderKocpPointFactors;
 window.koPointSourceChanged=koPointSourceChanged;
 
 window.koPointDownloadCategoryCsv=koPointDownloadCategoryCsv;
+
+function koDownloadFullReport(){
+  const from=$('koReportFrom')?.value,to=$('koReportTo')?.value,kind=$('koExportKind')?.value||'ALL';
+  if(!from||!to||to<from){toast('Choose a valid From and To date.','bad');return;}
+  const query=new URLSearchParams({from_date:from,to_date:to,report_type:kind});
+  window.location.assign('/api/site-ops/KOCP/reports/complete.xlsx?'+query.toString());
+}
+window.koDownloadFullReport=koDownloadFullReport;
