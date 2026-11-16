@@ -54,7 +54,7 @@ def build(db,start:date,end:date,kind="ALL"):
             physical=category(ident)
             if role=="TIPPER" and physical!="TIPPER":continue
             if role=="LOADING" and physical not in ("EXCAVATOR","LOADER"):continue
-            x=production[(t.operating_date,t.shift,ident)]
+            x=production[(t.operating_date,t.shift,ident,movement)]
             x["trips"]+=int(t.trip_count or 0);x["kinds"].add(movement)
             for fld,src in (("mt",t.quantity_mt),("cum",t.quantity_cum)):
                 if src is not None:x[fld]+=numeric(src);x["has_"+fld]=True
@@ -67,6 +67,7 @@ def build(db,start:date,end:date,kind="ALL"):
     wb=Workbook();guide=wb.active;guide.title="README"
     for row in (["NMTPL KOCP — SEPTEMBER REPORT FORMAT"],["Date from",start,"Date to",end,"Layout",kind],
         ["Source","Posted KOCP production + ERP equipment + posted HSD + HMR/KMR"],
+        ["Fuel limitation","Fuel covers the equipment/shift; where a machine handles both Coal and OB the source does not split fuel by material"],
         ["Control","Unverified paper cards excluded; missing quantity or meters remain BLANK"],
         ["Units","Coal MT and OB CuM are not added; efficiency ratios use their respective units"],
         ["Report history","Only selected period is included; previous cumulative not invented"],
@@ -100,10 +101,11 @@ def build(db,start:date,end:date,kind="ALL"):
         count=sum(v["trips"] for v in entries)
         known=any(v["has_"+unit] for v in entries)
         qty=sum((v[unit] for v in entries),Decimal(0)) if known else None
-        fuel_ok=bool(keys) and all(k in hsd for k in keys)
-        fuel_l=sum((hsd[k] for k in keys),Decimal(0)) if fuel_ok else None
-        hours=[readings.get(k,{}).get("HMR") for k in keys]
-        kms=[readings.get(k,{}).get("KMR") for k in keys]
+        base_keys={k[:3] for k in keys}
+        fuel_ok=bool(base_keys) and all(k in hsd for k in base_keys)
+        fuel_l=sum((hsd[k] for k in base_keys),Decimal(0)) if fuel_ok else None
+        hours=[readings.get(k,{}).get("HMR") for k in base_keys]
+        kms=[readings.get(k,{}).get("KMR") for k in base_keys]
         hr=sum(hours,Decimal(0)) if hours and all(x is not None for x in hours) else None
         km=sum(kms,Decimal(0)) if kms and all(x is not None for x in kms) else None
         return [count,value(qty),value(hr),value(km),value(fuel_l),ratio(qty,Decimal(count)),
@@ -111,7 +113,7 @@ def build(db,start:date,end:date,kind="ALL"):
     def grouped(cls,required=None):
         out=defaultdict(list)
         for k,x in production.items():
-            if category(k[2])==cls and (not required or required in x["kinds"]):
+            if category(k[2])==cls and (not required or k[3]==required):
                 out[(k[0],k[2])].append(k)
         return out
     def daily(cls,unit,required):
