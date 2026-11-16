@@ -692,6 +692,9 @@ def decide_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
             source_record_uid=f"{card_id}:{line.line_no}",status="POSTED",
             entered_by=user.login_id,
         ))
+        # Insert the parent trip before assigning its FK to the paper line.
+        # Otherwise SQLAlchemy may UPDATE the child first (PostgreSQL 23503).
+        db.flush()
         line.trip_id=ident
         result["tripCount"]+=count
         if not factor:

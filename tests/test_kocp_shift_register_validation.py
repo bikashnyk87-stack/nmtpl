@@ -118,7 +118,7 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, pape
     from datetime import date, time
     from types import SimpleNamespace
 
-    from sqlalchemy import create_engine, select
+    from sqlalchemy import create_engine, event, select
     from sqlalchemy.orm import Session
 
     from app.db import Base
@@ -130,6 +130,11 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, pape
     )
 
     engine = create_engine("sqlite://")
+
+    @event.listens_for(engine, "connect")
+    def enforce_fk(dbapi_connection, _):
+        dbapi_connection.execute("PRAGMA foreign_keys=ON")
+
     Base.metadata.create_all(engine)
     day = date(2026, 11, 15)
     user = SimpleNamespace(login_id="ENTRY", admin=False)
@@ -197,6 +202,8 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, pape
 
         trips = db.scalars(select(SiteTrip)).all()
         assert sorted(row.trip_count for row in trips) == [5, 8]
+        posted_lines = db.scalars(select(SiteShiftTripCardLine)).all()
+        assert {line.trip_id for line in posted_lines} == {trip.trip_id for trip in trips}
         assert {row.driver_id for row in trips} == {"D1"}
         assert {row.source_location_id for row in trips} == {"KOCP:FACE"}
         assert {row.destination_location_id for row in trips} == {"KOCP:DUMP"}
