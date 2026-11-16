@@ -162,6 +162,7 @@ function validateSearchDropdowns(){
  }
 }
 document.addEventListener("pointerdown",e=>{if(!e.target.closest?.(".sr-combo"))closeSearchDropdowns()});
+document.addEventListener("change",e=>{if(e.target?.id==="srShift")loadMeterRows()});
 document.addEventListener("scroll",e=>{if(!e.target.closest?.(".sr-combo-menu"))closeSearchDropdowns()},true);
 
 function cardDate(){
@@ -205,7 +206,7 @@ async function changeDate(){
    assets?"Select from Masters":"Equipment Master could not be loaded");
   refreshSearchDropdown(select);
  }
- await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.()]);
+ await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows()]);
 }
 function existing(line,key){return String(line?.[key]??"")}
 function blank(){return model.kind==="COAL"?{vehicleId:"",driverId:"",tripCount:"",routeId:""}:
@@ -270,7 +271,7 @@ function headerHtml(){
  '<label class="sr-field"><span>Driver</span>'+driverSelect("srHeaderDriver",c.driverId||"")+'</label>':
  selectBox("srRelay","Relay",codeOptions("RELAY",c.relayCode||"")))+
  paperInput("srDeclared",c.declaredTotal??"","Paper trip total","number",'min="0" step="1"')+
- '</div><details class="sr-card-details"><summary>Paper reference'+(ob?' and meters':' and route')+'</summary><div class="sr-head">'+
+ '</div><details class="sr-card-details" '+(ob?'open':'')+'><summary>'+(ob?'Tipper HMR / KMR & paper reference':'Paper reference & route')+'</summary><div class="sr-head">'+
  paperInput("srRef",c.sourceRef,"Paper reference")+
  selectBox("srRoute","Default route / lead",routeOptions(model.kind,c.routeId||""))+
  (ob?paperInput("srHmrOpen",c.openingHmr,"Opening HMR","number",'min="0" step="0.01"')+
@@ -279,6 +280,69 @@ function headerHtml(){
  paperInput("srKmrClose",c.closingKmr,"Closing KMR","number",'min="0" step="0.1"'):"")+
  '</div></details>';
 }
+
+function meterPanel(){
+ return '<details class="sr-card sr-meter-card" open><summary>Equipment HMR / KMR — Excavator, Loader, Tipper</summary>'+
+ '<p class="sr-muted">Use the date and shift above. Tipper meters already on the OB paper card post on verification: do not enter those twice.</p>'+
+ '<div class="sr-meter-grid"><label class="sr-field"><span>Equipment Master</span>'+
+ '<select id="srMeterAsset"><option value="">Loading assigned equipment…</option></select></label>'+
+ '<label class="sr-field"><span>Meter</span><select id="srMeterType"><option value="HMR">HMR</option><option value="KMR">KMR</option></select></label>'+
+ paperInput("srMeterOpen","","Opening","number",'min="0" step="0.001"')+
+ paperInput("srMeterClose","","Closing","number",'min="0" step="0.001"')+
+ paperInput("srMeterRemarks","","Remarks")+
+ '<button class="sr-btn" type="button" onclick="KOCPSR.saveMeter()">Save meter</button></div>'+
+ '<div id="srMeterMessage" role="status"></div><div id="srMeterRows" class="sr-muted">Loading existing readings…</div></details>';
+}
+async function loadMeterAssets(){
+ const target=h("srMeterAsset"),day=val("srDate")||state.ctx?.operatingDate;if(!target||!day)return;
+ try{
+  const assets=await api("/api/site-ops/KOCP/lookups?kind=ASSET&limit=250&operating_date="+enc(day));
+  if(h("srMeterAsset")!==target)return;
+  target.innerHTML=retainedOptions(assets,assets.some(x=>x.id===target.value)?target.value:"",
+   "Select assigned equipment by door / machine ID");
+  refreshSearchDropdown(target);
+ }catch(e){target.innerHTML='<option value="">Equipment Master not available</option>';refreshSearchDropdown(target)}
+}
+async function loadMeterRows(){
+ const box=h("srMeterRows"),day=val("srDate"),shift=val("srShift");
+ if(!box||!day||!shift)return [];
+ try{
+  const rows=await api("/api/site-ops/KOCP/meters?operating_date="+enc(day)+"&shift="+enc(shift));
+  if(h("srMeterRows")!==box)return [];
+  box.innerHTML=rows.length?
+   '<div class="sr-scroll"><table class="sr-grid"><thead><tr><th>Equipment</th><th>Meter</th><th>Opening</th><th>Closing</th><th>Usage</th></tr></thead><tbody>'+
+   rows.slice(0,20).map(x=>'<tr><td>'+esc(x.assetId)+'</td><td>'+esc(x.meterType)+'</td><td>'+
+    esc(x.opening??"—")+'</td><td>'+esc(x.closing??"—")+'</td><td>'+esc(x.usage??"—")+'</td></tr>').join("")+
+   '</tbody></table></div><small>'+rows.length+' readings found. All can be exported in Reports.</small>':
+   'No readings for this date/shift.';
+  return rows;
+ }catch(e){box.textContent="Cannot load meter readings: "+e.message;return []}
+}
+async function saveMeter(){
+ const out=h("srMeterMessage"),el=h("srMeterAsset");
+ const day=val("srDate"),shift=val("srShift"),assetId=val("srMeterAsset"),kind=val("srMeterType");
+ const opening=val("srMeterOpen"),closing=val("srMeterClose");
+ try{
+  const chosen=el?.selectedOptions?.[0]?.value?el.selectedOptions[0].textContent:"";
+  const search=el?.closest(".sr-combo")?.querySelector(".sr-combo-input")?.value;
+  if(!day||!shift||!assetId||!["HMR","KMR"].includes(kind)||search!==chosen)
+   throw Error("Select a date, shift, equipment from Masters and meter type.");
+  if(opening===""||closing===""||!Number.isFinite(Number(opening))||!Number.isFinite(Number(closing))||
+     Number(opening)<0||Number(closing)<Number(opening))
+   throw Error("Closing reading must not be lower than opening; both are required.");
+  const existing=await api("/api/site-ops/KOCP/meters?operating_date="+enc(day)+"&shift="+enc(shift));
+  if(existing.some(x=>x.assetId===assetId&&x.meterType===kind))
+   throw Error("Reading already exists for this equipment, shift and type. No overwrite made.");
+  await api("/api/site-ops/KOCP/meters",{
+   method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({operatingDate:day,shift,assetId,meterType:kind,openingReading:Number(opening),
+     closingReading:Number(closing),sourceType:"PORTAL",remarks:val("srMeterRemarks")||null})});
+  out.className="sr-success";out.textContent="Saved to Equipment Meter Register. Usage: "+(Number(closing)-Number(opening)).toFixed(3);
+  h("srMeterOpen").value="";h("srMeterClose").value="";h("srMeterRemarks").value="";
+  await loadMeterRows();
+ }catch(e){if(out){out.className="sr-error";out.textContent=e.message}}
+}
+
 function screen(){
  const ob=model.kind==="OB",card=model.card,status=card?.status||"NEW";
  const lines=card?.lines?.length?card.lines:model.lines;
@@ -299,6 +363,7 @@ function screen(){
  '<th>#</th><th>Vehicle</th><th>Driver</th><th class="sr-trip-column">Trips</th><th>Route / Lead (override)</th><th>Action</th>')+
  '</tr></thead><tbody id="srRows">'+lines.map((x,i)=>lineHtml(x,i)).join("")+'</tbody></table></div>'+
  '</div>'+
+ meterPanel()+
  '<div class="sr-card sr-action-card">'+
  '<div class="sr-actions"><button class="sr-btn sr-secondary" type="button" onclick="KOCPSR.save()">Save Draft</button>'+
  '<button class="sr-btn" type="button" onclick="KOCPSR.submit()">Submit for Check</button>'+
@@ -346,7 +411,7 @@ function values(){
 }
 function notice(message,error=false){const n=h("srNotice");if(n){n.textContent=message;n.className=error?"sr-error":"sr-success"}else if(window.toast)toast(message,error?"bad":"good")}
 function sync(){const inputs=values();model.lines=readRows(true);model.pendingHeader=inputs}
-async function renderSelf(){await fetchMasters();const w=h("workspace");if(w){w.innerHTML=screen();enhanceSearchDropdowns(w);await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.()])}}
+async function renderSelf(){await fetchMasters();const w=h("workspace");if(w){w.innerHTML=screen();enhanceSearchDropdowns(w);await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows()])}}
 async function save(silent=false){
  try{
   validateSearchDropdowns();
@@ -514,6 +579,6 @@ async function renderKocpShiftRegister(){
 }
 window.renderKocpShiftRegister=renderKocpShiftRegister;
 window.KOCPSR={save:()=>save().catch(()=>{}),submit,verify,reject,history,open,updateTotal,addRow,removeRow,
- copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,afterRender:async()=>{enhanceSearchDropdowns(h("workspace"));await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.()])}};
+ copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,loadMeterRows,saveMeter,afterRender:async()=>{enhanceSearchDropdowns(h("workspace"));await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows()])}};
 })();
 
