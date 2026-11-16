@@ -2260,6 +2260,293 @@ def operations_dashboard(
     }
 
 
+
+@router.get("/KOCP/reports/complete.xlsx")
+def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
+                              report_type: str = "ALL", db: Session = Depends(get_db)):
+    """Full-row, master-labeled KOCP MIS export. No UI display limit is applied."""
+    user = get_user(db, request)
+    require_site(db, user, "KOCP")
+    _require_any(db, user, "KOCP", "REPORTS")
+    start, end = _period_bounds(from_date, to_date)
+    if (end - start).days > 366:
+        raise HTTPException(422, "Choose a date range of at most 367 days per download.")
+    choices = {"ALL", "TRIPS", "SHIFT", "COAL", "OB_TIPPER", "EXCAVATOR",
+               "LOADER", "METERS", "HSD", "SOURCE", "MCL"}
+    selection = str(report_type or "ALL").upper().strip()
+    if selection not in choices:
+        raise HTTPException(422, "Choose a report from the available KOCP report list.")
+    filters = (SiteTrip.site_id == "KOCP", SiteTrip.operating_date >= start,
+               SiteTrip.operating_date <= end, SiteTrip.status != "VOID")
+    trips = list(db.scalars(select(SiteTrip).where(*filters).order_by(
+        SiteTrip.operating_date, SiteTrip.shift, SiteTrip.trip_id)))
+    hsd = list(db.scalars(select(SiteHsdTransaction).where(
+        SiteHsdTransaction.site_id == "KOCP",
+        SiteHsdTransaction.operating_date >= start,
+        SiteHsdTransaction.operating_date <= end
+    ).order_by(SiteHsdTransaction.operating_date, SiteHsdTransaction.shift,
+               SiteHsdTransaction.transaction_id)))
+    meters = list(db.scalars(select(SiteAssetMeter).where(
+        SiteAssetMeter.site_id == "KOCP", SiteAssetMeter.operating_date >= start,
+        SiteAssetMeter.operating_date <= end
+    ).order_by(SiteAssetMeter.operating_date, SiteAssetMeter.shift, SiteAssetMeter.asset_id)))
+    cards = list(db.scalars(select(SiteShiftTripCard).where(
+        SiteShiftTripCard.site_id == "KOCP", SiteShiftTripCard.operating_date >= start,
+        SiteShiftTripCard.operating_date <= end
+    ).order_by(SiteShiftTripCard.operating_date, SiteShiftTripCard.shift,
+               SiteShiftTripCard.card_id)))
+    card_ids = [x.card_id for x in cards]
+    lines = list(db.scalars(select(SiteShiftTripCardLine).where(
+        SiteShiftTripCardLine.card_id.in_(card_ids)).order_by(
+            SiteShiftTripCardLine.card_id, SiteShiftTripCardLine.line_no))) if card_ids else []
+    factors = list(db.scalars(select(SiteWeightFactor).where(
+        SiteWeightFactor.site_id == "KOCP", SiteWeightFactor.effective_from <= end,
+        or_(SiteWeightFactor.effective_to.is_(None),
+            SiteWeightFactor.effective_to >= start)
+    ).order_by(SiteWeightFactor.factor_type, SiteWeightFactor.effective_from)))
+    # Never truncate; fail explicitly if a worksheet would exceed Excel's limit.
+    for label, size in [("trip", len(trips)), ("fuel", len(hsd)),
+                        ("meter", len(meters)), ("source", len(lines))]:
+        if size > 1048500:
+            raise HTTPException(422, f"{label} records exceed a single Excel worksheet. Use shorter dates.")
+    ids = set()
+    for t in trips:
+        ids.update(v for v in (t.vehicle_id, t.loading_equipment_id) if v)
+    for m in meters:
+        if m.asset_id: ids.add(m.asset_id)
+    for f in hsd:
+        if f.asset_id: ids.add(f.asset_id)
+    for card in cards:
+        if card.vehicle_id: ids.add(card.vehicle_id)
+    for line in lines:
+        ids.update(v for v in (line.vehicle_id, line.excavator_id) if v)
+    equipment = {a.machine_id: a for a in db.scalars(select(Equipment).where(
+        Equipment.machine_id.in_(ids)))} if ids else {}
+    person_ids = {v for t in trips for v in (t.driver_id, t.loading_operator_id) if v}
+    person_ids.update(v for c in cards for v in (c.driver_id,) if v)
+    person_ids.update(v for line in lines for v in (line.driver_id,) if v)
+    persons = {p.employee_id: p.name for p in db.scalars(select(Person).where(
+        Person.employee_id.in_(person_ids)))} if person_ids else {}
+    materials = {a.site_material_id: a for a in db.scalars(select(SiteMaterial).where(
+        SiteMaterial.site_id == "KOCP"))}
+    locations = {a.site_location_id: a for a in db.scalars(select(SiteLocation).where(
+        SiteLocation.site_id == "KOCP"))}
+    routes = {a.route_id: a for a in db.scalars(select(SiteMovementRoute).where(
+        SiteMovementRoute.site_id == "KOCP"))}
+
+    def asset(ident):
+        row = equipment.get(ident)
+        if not row: return ident or ""
+        return " · ".join(str(x) for x in (
+            f"Door {row.door_no}" if row.door_no else None,
+            row.vehicle_no, row.make_model
+        ) if x) or row.machine_id
+
+    def asset_class(ident):
+        row = equipment.get(ident)
+        return kocp_equipment_category(row.type, row.make_model) if row else "UNMAPPED"
+
+    def name(ident): return persons.get(ident, ident or "")
+    def material(ident): return materials[ident].name if ident in materials else ident or ""
+    def point(ident):
+        row = locations.get(ident)
+        return (row.code + " · " + row.name) if row else ident or ""
+    def route_label(ident):
+        row = routes.get(ident)
+        return (row.route_group + " → " + row.destination_label + " / " +
+                row.distance_range) if row else ident or ""
+    def num(value): return float(value) if value is not None else None
+    def safe(value):
+        if isinstance(value, str) and value.startswith(("=", "+", "-", "@")):
+            return "'" + value
+        return value
+    def sheet(name_, headers, records):
+        ws = wb.create_sheet(name_)
+        ws.append([safe(h) for h in headers])
+        for cell in ws[1]:
+            cell.font = Font(bold=True, color="FFFFFF")
+            cell.fill = PatternFill("solid", fgColor="155E75")
+        count = 0
+        for record in records:
+            ws.append([safe(v) for v in record])
+            count += 1
+            if count >= 1048500:
+                raise HTTPException(422, f"{name_} is too large. Narrow the date range.")
+        if not count: ws.append(["No matching records for the selected period"])
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = f"A1:{ws.cell(row=1,column=len(headers)).column_letter}{max(2,ws.max_row)}"
+        for col in ws.columns:
+            letter = col[0].column_letter
+            preview = list(col[:min(len(col), 100)])
+            ws.column_dimensions[letter].width = min(38, max(12, max(
+                len(str(c.value or "")) for c in preview) + 2))
+        return count
+
+    # Aggregate independently by day/shift/equipment: prevent fuel or HMR
+    # duplication from joining one meter/issue row to many trip rows.
+    from collections import defaultdict
+    fuel_by = defaultdict(Decimal)
+    for h in hsd:
+        if h.status == "POSTED" and h.transaction_type == "ISSUE" and h.asset_id:
+            fuel_by[(h.operating_date, h.shift, h.asset_id)] += _decimal(h.litres)
+    meter_by = defaultdict(dict)
+    for m in meters:
+        if m.meter_type in ("HMR", "KMR") and m.usage is not None:
+            meter_by[(m.operating_date, m.shift, m.asset_id)][m.meter_type] = _decimal(m.usage)
+    daily = {}
+    for t in trips:
+        key = (t.operating_date, t.shift, t.vehicle_id)
+        for role, equipment_id in (("TIPPER", t.vehicle_id), ("LOADING", t.loading_equipment_id)):
+            if not equipment_id: continue
+            key = (role, t.operating_date, t.shift, equipment_id)
+            rec = daily.setdefault(key, {
+                "trips": 0, "mt": Decimal("0"), "cum": Decimal("0"),
+                "has_mt": False, "has_cum": False, "pending": 0,
+                "ob": False, "coal": False,
+            })
+            rec["trips"] += int(t.trip_count or 0)
+            if t.quantity_mt is not None:
+                rec["mt"] += _decimal(t.quantity_mt); rec["has_mt"] = True
+            if t.quantity_cum is not None:
+                rec["cum"] += _decimal(t.quantity_cum); rec["has_cum"] = True
+            if t.factor_id is None and t.source_type in ("SHIFT_OB_CARD", "SHIFT_COAL_REGISTER"):
+                rec["pending"] += int(t.trip_count or 0)
+            group = (materials.get(t.material_id).material_group or "").upper() if t.material_id in materials else ""
+            kind = routes.get(t.route_id).movement_kind if t.route_id in routes else ""
+            rec["ob"] |= (t.source_type == "SHIFT_OB_CARD" or kind == "OB" or group == "OB")
+            rec["coal"] |= (t.source_type == "SHIFT_COAL_REGISTER" or kind == "COAL" or group == "COAL")
+    wb = Workbook()
+    summary = wb.active
+    summary.title = "Read Me"
+    summary.append(["NMTPL KOCP — COMPLETE MIS REPORT"])
+    summary.append(["From", start, "To", end, "Type", selection])
+    summary.append(["Data source", "KOCP ERP PostgreSQL; generated from stored source records"])
+    summary.append(["Posted/Non-void trip source rows", len(trips)])
+    summary.append(["Trip count represented", sum(int(t.trip_count or 0) for t in trips)])
+    summary.append(["OB and Coal paper cards (all statuses)", len(cards)])
+    summary.append(["Paper card detail rows", len(lines)])
+    summary.append(["HMR/KMR readings", len(meters)])
+    summary.append(["Fuel ledger transactions (including non-posted)", len(hsd)])
+    summary.append(["MCL factor rules covering range", len(factors)])
+    summary.append(["Quantity rule", "MT and CuM are not added together; missing MCL factor remains blank"])
+    summary.append(["Fuel control", "Fuel totals use posted ISSUE transactions only"])
+    summary.append(["Daily records", "Dates are operating dates; C shift belongs to the start date"])
+    summary.append(["Source status", "DRAFT/SUBMITTED paper cards are NOT treated as posted production"])
+    summary.append(["Completeness", "Every matching source row exported; no first-1000/top-10 display cutoff"])
+    summary.column_dimensions["A"].width = 38
+    summary.column_dimensions["B"].width = 95
+    summary.column_dimensions["C"].width = 18
+    summary.column_dimensions["D"].width = 18
+    summary["A1"].font = Font(size=15, bold=True, color="155E75")
+
+    if selection in ("ALL", "TRIPS"):
+        sheet("All Posted Trips", ["Date","Shift","Trip ID","Source Type","Source UID","Trip Count",
+              "Vehicle ID","Tipper / Vehicle","Vehicle class","Driver ID","Driver",
+              "Loader ID","Loader / Excavator","Loading class","Operator ID","Operator",
+              "Patch","Unloading Point","Material","Route / Lead","MT","CuM",
+              "Approved factor","Weight basis","GP No","Status","Entered by"],
+              ((t.operating_date,t.shift,t.trip_id,t.source_type,t.source_record_uid,t.trip_count,
+                t.vehicle_id,asset(t.vehicle_id),asset_class(t.vehicle_id),t.driver_id,name(t.driver_id),
+                t.loading_equipment_id,asset(t.loading_equipment_id),
+                asset_class(t.loading_equipment_id),t.loading_operator_id,name(t.loading_operator_id),
+                point(t.source_location_id),point(t.destination_location_id),
+                material(t.material_id),route_label(t.route_id),
+                num(t.quantity_mt),num(t.quantity_cum),t.factor_id,t.weight_basis,t.gp_no,
+                t.status,t.entered_by) for t in trips))
+    if selection in ("ALL", "SHIFT", "COAL"):
+        grouped = defaultdict(lambda: {"trips":0,"mt":Decimal(0),"cum":Decimal(0),"mt_known":False,"cum_known":False})
+        for t in trips:
+            k = (t.operating_date, t.shift)
+            v = grouped[k]; v["trips"] += int(t.trip_count or 0)
+            if t.quantity_mt is not None: v["mt"] += _decimal(t.quantity_mt); v["mt_known"] = True
+            if t.quantity_cum is not None: v["cum"] += _decimal(t.quantity_cum); v["cum_known"] = True
+        sheet("Daily Shift", ["Operating Date","Shift","Trips","Coal MT","OB CuM"],
+              ((day,shift,item["trips"],num(item["mt"]) if item["mt_known"] else None,
+                num(item["cum"]) if item["cum_known"] else None)
+               for (day,shift),item in sorted(grouped.items())))
+        if selection in ("ALL", "COAL"):
+            coal = [(key,v) for key,v in daily.items() if key[0]=="TIPPER" and v["coal"]]
+            sheet("Coal Daily Vehicles",["Date","Shift","Vehicle ID","Vehicle / Door","Trips","MT","HSD L","HMR Hours","L per Trip","MT per Hour","Pending Qty Trips"],
+                 ((key[1],key[2],key[3],asset(key[3]),v["trips"],
+                   num(v["mt"]) if v["has_mt"] else None,
+                   num(fuel_by[key[1:]]) if key[1:] in fuel_by else None,
+                   num(meter_by.get(key[1:],{}).get("HMR")),
+                   num(fuel_by[key[1:]]/v["trips"]) if v["trips"] and key[1:] in fuel_by else None,
+                   num(v["mt"]/meter_by[key[1:]]["HMR"]) if v["has_mt"] and meter_by.get(key[1:],{}).get("HMR",0)>0 else None,
+                   v["pending"]) for key,v in sorted(coal)))
+    def equipment_report(title, rows):
+        sheet(title, ["Date","Shift","Equipment ID","Equipment / Door","Equipment Class","Trips",
+                     "Coal MT","OB CuM","HMR Hours","KMR km","HSD L","MT per Hour",
+                     "CuM per Hour","L per Trip","L per Hour","Pending Qty Trips"],
+              ((key[1],key[2],key[3],asset(key[3]),asset_class(key[3]),
+                value["trips"],num(value["mt"]) if value["has_mt"] else None,
+                num(value["cum"]) if value["has_cum"] else None,
+                num(meter_by.get(key[1:],{}).get("HMR")),
+                num(meter_by.get(key[1:],{}).get("KMR")),
+                num(fuel_by[key[1:]]) if key[1:] in fuel_by else None,
+                num(value["mt"]/meter_by[key[1:]]["HMR"]) if value["has_mt"] and meter_by.get(key[1:],{}).get("HMR",0)>0 else None,
+                num(value["cum"]/meter_by[key[1:]]["HMR"]) if value["has_cum"] and meter_by.get(key[1:],{}).get("HMR",0)>0 else None,
+                num(fuel_by[key[1:]]/value["trips"]) if value["trips"] and key[1:] in fuel_by else None,
+                num(fuel_by[key[1:]]/meter_by[key[1:]]["HMR"]) if key[1:] in fuel_by and meter_by.get(key[1:],{}).get("HMR",0)>0 else None,
+                value["pending"]) for key,value in sorted(rows)))
+    if selection in ("ALL", "OB_TIPPER"):
+        equipment_report("Daily OB Tipper",[(key,v) for key,v in daily.items()
+                                                if key[0]=="TIPPER" and v["ob"]])
+    if selection in ("ALL", "EXCAVATOR"):
+        equipment_report("Daily Excavator",[(key,v) for key,v in daily.items()
+                                                 if key[0]=="LOADING" and asset_class(key[3])=="EXCAVATOR"])
+    if selection in ("ALL", "LOADER"):
+        equipment_report("Daily Loader",[(key,v) for key,v in daily.items()
+                                              if key[0]=="LOADING" and asset_class(key[3])=="LOADER"])
+    if selection in ("ALL", "METERS"):
+        sheet("HMR KMR Register", ["Date","Shift","Equipment ID","Equipment / Door",
+                                 "Equipment Class","Meter","Opening","Closing","Usage","Source","Remarks","Entered by"],
+              ((m.operating_date,m.shift,m.asset_id,asset(m.asset_id),asset_class(m.asset_id),
+                m.meter_type,num(m.opening_reading),num(m.closing_reading),num(m.usage),
+                m.source_type,m.remarks,m.entered_by) for m in meters))
+    if selection in ("ALL", "HSD"):
+        sheet("HSD Ledger",["Date","Shift","Transaction ID","Type","Asset ID","Equipment / Door",
+                             "Class","Litres","Supplier","Reference","Meter reading",
+                             "Status","Source Type","Entered by"],
+              ((h.operating_date,h.shift,h.transaction_id,h.transaction_type,h.asset_id,
+                asset(h.asset_id),asset_class(h.asset_id),num(h.litres),h.supplier,
+                h.reference_no,num(h.meter_reading),h.status,h.source_type,h.entered_by) for h in hsd))
+    if selection in ("ALL", "SOURCE"):
+        bycard = {x.card_id:x for x in cards}
+        sheet("Source Cards",["Date","Shift","Kind","Card ID","Paper Ref","Tipper ID","Vehicle",
+                              "Driver","Material","Route","Declared Trips","HMR Open","HMR Close",
+                              "KMR Open","KMR Close","Status","Entered by","Submitted by","Verified by"],
+              ((c.operating_date,c.shift,c.kind,c.card_id,c.source_ref,c.vehicle_id,
+                asset(c.vehicle_id),name(c.driver_id),material(c.material_id),route_label(c.route_id),
+                c.declared_total,num(c.opening_hmr),num(c.closing_hmr),num(c.opening_kmr),
+                num(c.closing_kmr),c.status,c.entered_by,c.submitted_by,c.verified_by) for c in cards))
+        sheet("Source Card Lines",["Date","Shift","Kind","Paper Ref","Card ID","Status",
+                                   "Line #","Line ID","Tipper","Driver","Excavator / Loader",
+                                   "Patch Code","Patch","Unloading Code","Unloading",
+                                   "Route / Lead","Trips","Posted Trip ID"],
+              ((bycard[l.card_id].operating_date,bycard[l.card_id].shift,
+                bycard[l.card_id].kind,bycard[l.card_id].source_ref,l.card_id,
+                bycard[l.card_id].status,l.line_no,l.line_id,asset(l.vehicle_id or bycard[l.card_id].vehicle_id),
+                name(l.driver_id or bycard[l.card_id].driver_id),asset(l.excavator_id),l.patch_source,
+                point(l.source_location_id),l.unload_source,point(l.destination_location_id),
+                route_label(l.route_id or bycard[l.card_id].route_id),l.trip_count,l.trip_id) for l in lines))
+    if selection in ("ALL", "MCL"):
+        sheet("MCL Rules",["Factor ID","Type","Effective From","Effective To","Shift",
+                             "Material","Unloading","Route / Lead","Vehicle Class","Value",
+                             "Unit","Purpose","Reference","Status","Approved by"],
+              ((f.factor_id,f.factor_type,f.effective_from,f.effective_to,f.shift,
+                material(f.material_id),point(f.destination_location_id),route_label(f.route_id),
+                f.vehicle_class,num(f.factor_value),f.factor_unit,f.source_org,f.reference_no,
+                f.status,f.approved_by) for f in factors))
+    data = BytesIO()
+    wb.save(data)
+    data.seek(0)
+    filename = f"KOCP_{selection}_{start}_to_{end}.xlsx"
+    return StreamingResponse(data, media_type=
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition":f'attachment; filename="{filename}"'})
+
+
 @router.get("/{site_id}/reports/export.xlsx")
 def report_export(site_id:str,request:Request,from_date:date|None=None,to_date:date|None=None,db:Session=Depends(get_db)):
     user=get_user(db,request); site_id=require_site(db,user,site_id); _require_any(db,user,site_id,"REPORTS"); start,end=_period_bounds(from_date,to_date)
