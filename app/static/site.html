@@ -10,6 +10,7 @@
   <link rel="stylesheet" href="/static/simple_field_v1.css?v=kocp-mcl-daily-monthly-r12">
   <link rel="stylesheet" href="/static/kocp_masters_compact.css?v=erp-master-r2">
   <link rel="stylesheet" href="/static/kocp_shift_register.css?v=shift-register-r4">
+  <link rel="stylesheet" href="/static/portal_ui.css?v=20261116-1">
 </head>
 <body class="field-mode">
   <div id="appView" class="field-app-shell">
@@ -19,7 +20,7 @@
         <div><strong>NMTPL</strong><span id="brandSub">Daily Operations</span></div>
       </div>
       <div class="field-header-tools">
-        <div class="field-site-picker"><label>Site</label><select id="siteSwitcher"></select></div>
+        <div class="field-site-picker"><label for="siteSwitcher">Site</label><select id="siteSwitcher"></select></div>
         <span id="clockChip" class="field-clock"></span>
         <button id="centralBtn" class="btn outline">Management</button>
         <button id="logoutBtn" class="btn outline">Sign out</button>
@@ -32,7 +33,7 @@
       <div id="siteFoot" class="field-site-name">Loading site…</div>
     </section>
 
-    <nav id="sideNav" class="field-nav"></nav>
+    <nav id="sideNav" class="field-nav" aria-label="Site navigation"></nav>
     <main id="workspace" class="field-content"><div class="empty"><b>Loading daily operations…</b></div></main>
   </div>
 
@@ -54,3 +55,4 @@
   <script src="/static/site_access_master.js?v=site-permissions-20261103-r1"></script>
 </body>
 </html>
+

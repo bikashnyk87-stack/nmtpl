@@ -1,0 +1,243 @@
+/* Shared operations presentation. Loaded last; no data or workflow rules.
+   Legacy styles contain !important sizing, so those overrides are explicit.
+   All rules are scoped to the two existing portal shells. */
+:root {
+  --portal-ink:#183444; --portal-muted:#526977; --portal-bg:#f3f6f8;
+  --portal-line:#d6e0e6; --portal-nav:#142f40; --portal-accent:#08786e;
+  --portal-soft:#eaf5f2; --portal-radius:8px; --portal-header:64px;
+}
+body.field-mode,html.tiom-management-ui body {
+  background:var(--portal-bg);color:var(--portal-ink);
+  font-family:"Segoe UI",Arial,sans-serif;font-size:13px;line-height:1.45;
+}
+body.field-mode *,html.tiom-management-ui * {box-sizing:border-box}
+.field-content,html.tiom-management-ui #app {min-width:0}
+.field-content :is(button,input,select,textarea),html.tiom-management-ui :is(button,input,select,textarea) {font-family:inherit}
+.field-content :is(button,a,summary,input,select,textarea):focus-visible,
+.field-app-header :focus-visible,.field-nav :focus-visible,
+html.tiom-management-ui :is(button,a,summary,input,select,textarea):focus-visible {
+  outline:3px solid #177baf!important;outline-offset:2px!important;
+}
+.field-app-header,html.tiom-management-ui .top {
+  background:#fff;color:var(--portal-ink);border-bottom:1px solid var(--portal-line);
+  box-shadow:0 1px 4px #1834440a;gap:16px;
+}
+.field-brand .brand-logo,html.tiom-management-ui .brand-mark {
+  background:var(--portal-accent);color:#fff;border-radius:8px;width:36px;height:36px;
+  font-size:21px;box-shadow:none;
+}
+.field-brand strong,html.tiom-management-ui .brand .title {
+  color:var(--portal-ink);font-size:16px;font-weight:750;letter-spacing:-.2px;
+}
+.field-brand span,html.tiom-management-ui .brand .eyebrow {
+  color:var(--portal-muted);font-size:11px;opacity:1;letter-spacing:.03em;
+}
+.field-header-tools {gap:10px;min-width:0}
+.field-site-picker {min-width:0}
+.field-site-picker label,html.tiom-management-ui .tiom-site-switch {color:var(--portal-muted);font-size:12px;opacity:1}
+.field-site-picker select,html.tiom-management-ui #tiomSiteSelect {
+  min-height:36px;background:#f7fafb;border:1px solid var(--portal-line);
+  color:var(--portal-ink);border-radius:6px;font-size:13px;
+}
+.field-app-header .btn,html.tiom-management-ui .top .mini {
+  background:#fff;color:var(--portal-ink);border:1px solid var(--portal-line);
+  font-size:12px;min-height:36px!important;border-radius:6px;
+}
+.field-app-header .btn:hover,html.tiom-management-ui .top .mini:hover {background:var(--portal-soft)}
+.field-clock,html.tiom-management-ui .topmeta #ctx {color:var(--portal-muted);font-size:11px;opacity:1}
+.field-user .avatar {background:var(--portal-soft);color:var(--portal-accent)}
+.field-user div b {color:var(--portal-ink);font-size:12px}
+.field-user div span {color:var(--portal-muted);font-size:10px}
+.field-nav,html.tiom-management-ui #nav {background:var(--portal-nav);border-right:1px solid #233f50;scrollbar-width:thin}
+.field-nav-btn,.field-nav .nav-item,html.tiom-management-ui #nav button {
+  color:#d7e4ec;border-radius:6px;background:transparent;box-shadow:none;
+  white-space:normal;line-height:1.35;text-align:left;min-width:0;
+}
+.field-nav-btn:hover,.field-nav .nav-item:hover,html.tiom-management-ui #nav button:hover {background:#234456;color:#fff}
+.field-nav-btn.active,.field-nav .nav-item.active,html.tiom-management-ui #nav button.active {
+  background:#08786e;color:#fff;box-shadow:inset 3px 0 #78d6c1;
+}
+.field-nav-btn b {overflow-wrap:break-word}
+.field-nav-section,.field-nav .nav-section,html.tiom-management-ui #nav:before {
+  color:#a4bdcb;font-size:10px!important;letter-spacing:.09em;font-weight:650;
+}
+.field-content :is(.page-head,.software-page-head,.ops-dashboard-top),
+html.tiom-management-ui :is(.mc-page-head,.page-heading,.dashboard-heading) {gap:16px;margin-bottom:16px}
+.field-content :is(.page-head,.software-page-head,.ops-dashboard-top) h1,
+.sr-heading h1,html.tiom-management-ui :is(.mc-page-head,.page-heading,.dashboard-heading) h1 {
+  font-size:24px!important;line-height:1.25;letter-spacing:-.5px;color:var(--portal-ink);font-weight:700;
+}
+.field-content :is(.page-head,.software-page-head,.ops-dashboard-top) p,
+html.tiom-management-ui .mc-page-head p {font-size:12px!important;color:var(--portal-muted)!important;line-height:1.5}
+.field-content :is(.panel,.simple-form,.sr-card,.ops-panel,.ops-fuel-dashboard),
+html.tiom-management-ui :is(.panel,.mc-panel) {
+  border:1px solid var(--portal-line);border-radius:var(--portal-radius);background:#fff;box-shadow:0 1px 3px #18344406;
+}
+.field-content :is(.panel-head,.ops-panel-head),html.tiom-management-ui .mc-section-head {
+  background:#f7fafb;color:var(--portal-ink);border-bottom:1px solid var(--portal-line);
+  padding:12px 14px;flex-wrap:wrap;gap:4px 12px;
+}
+.field-content :is(.panel-head h2,.ops-panel-head b),html.tiom-management-ui .mc-section-head b {font-size:14px}
+html.tiom-management-ui .mc-section-head small {color:var(--portal-muted);font-size:11px;text-align:left}
+.field-content .field>span,.field-content .field>label,.sr-field,
+html.tiom-management-ui label {font-size:12px!important;letter-spacing:0;text-transform:none;font-weight:600;color:var(--portal-muted)}
+.field-content :is(.simple-form,.form-grid) :is(input:not([type=checkbox]):not([type=radio]):not([type=hidden]),select,textarea),
+.field-content .lookup>input[type=text] {
+  min-height:38px!important;height:auto;font-size:13px!important;padding:8px 10px!important;
+  border:1px solid #bdcdd6!important;border-radius:6px!important;color:var(--portal-ink)!important;
+}
+.field-content .software-entry-grid :is(input,select,.lookup>input[type=text]) {min-height:36px!important;font-size:13px!important}
+.field-content :is(.btn,.sr-btn,.sr-small,.simple-tab,.hsd-mode-tab),html.tiom-management-ui :is(.btn,.mini,.mc-tabline button) {
+  min-height:36px;font-size:13px;padding:8px 12px;border-radius:6px;font-weight:600;
+}
+.field-content :is(.btn.primary,.sr-btn),html.tiom-management-ui .btn.primary {background:var(--portal-accent);color:#fff}
+.field-content :is(.data-table,.simple-grid-table,.sr-grid),html.tiom-management-ui :is(table,.mc-table) {font-size:13px}
+.field-content :is(.data-table,.simple-grid-table,.sr-grid) th,
+html.tiom-management-ui :is(table,.mc-table) th {
+  font-size:11px!important;line-height:1.4!important;letter-spacing:.015em;
+  background:#eef3f6!important;color:#425d6c!important;padding:10px!important;
+}
+.field-content :is(.data-table,.simple-grid-table,.sr-grid) td,
+html.tiom-management-ui :is(table,.mc-table) td {font-size:13px!important;padding:8px 10px!important}
+.field-content :is(.simple-table-wrap,.table-wrap,.sr-scroll),html.tiom-management-ui :is(.tablewrap,.mc-table-wrap) {
+  max-width:100%;scrollbar-width:thin;border-color:var(--portal-line);
+}
+.field-content :is(.simple-grid-table,.sr-grid) tbody tr:nth-child(even) td {background:#f9fbfc}
+.field-content :is(.simple-grid-table,.sr-grid) tbody tr:focus-within td {background:#f0f8f6}
+.field-content .simple-actions {padding-top:12px;gap:8px}
+.field-content :is(.simple-note,.field-help,.draft-state),html.tiom-management-ui :is(.note,.mc-caveat,.mc-empty) {font-size:12px;color:var(--portal-muted)}
+/* Dashboard hierarchy: neutral surfaces, status colour reserved for data. */
+.field-content .ops-dashboard-top {background:transparent;border:0;box-shadow:none;padding:0}
+.field-content .ops-dashboard-top h1 {color:var(--portal-ink)}
+.field-content .ops-kpi {background:#fff!important;box-shadow:none;border-radius:8px;min-height:96px;padding:14px}
+.field-content .ops-kpi span {font-size:11px;color:var(--portal-muted)}
+.field-content .ops-kpi b {font-size:24px;line-height:1.25;color:var(--portal-ink)}
+.field-content .ops-kpi small {font-size:11px;color:var(--portal-muted)}
+.field-content .ops-quick button {min-height:52px}
+.field-content .ops-quick button b {font-size:12px}
+.field-content .ops-quick button small {font-size:11px}
+html.tiom-management-ui .mc-page-head {align-items:flex-start;flex-direction:column}
+html.tiom-management-ui .mc-head-filters {width:100%;gap:8px;align-items:end}
+html.tiom-management-ui .mc-head-filters label {display:flex;flex-direction:column;align-items:stretch;gap:4px;flex:1 1 130px}
+html.tiom-management-ui .mc-head-filters :is(input,select) {min-width:0;max-width:none;width:100%;min-height:36px;font-size:13px}
+html.tiom-management-ui .mc-head-filters>select {width:auto;flex:1 1 140px}
+html.tiom-management-ui .mc-metric {min-height:96px;padding:13px 14px;border-radius:8px}
+html.tiom-management-ui .mc-metric>span {font-size:11px;line-height:1.4}
+html.tiom-management-ui .mc-metric strong {font-size:24px;line-height:1.3}
+html.tiom-management-ui .mc-metric small {font-size:11px}
+html.tiom-management-ui .mc-owner-kpis {gap:10px;margin-bottom:14px}
+html.tiom-management-ui .mc-owner-main {gap:14px}
+html.tiom-management-ui .mc-panel-body {padding:14px}
+html.tiom-management-ui .mc-attention b {font-size:13px}
+html.tiom-management-ui .mc-attention small {font-size:12px}
+html.tiom-management-ui .mc-attention {padding:12px;grid-template-columns:26px minmax(0,1fr) auto}
+/* Register: fixed-width numeric/action columns and a single scrollable grid. */
+.sr-workbench {gap:12px}
+.sr-workbench .sr-card {padding:14px}
+.sr-card h2 {font-size:15px;margin:0 0 12px}
+.sr-workbench .sr-head {gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+.sr-field {gap:5px}
+.sr-field :is(input,select),.sr-combo .sr-combo-input {min-height:38px;font-size:13px;border-color:#bdcdd6}
+.sr-toolbar {gap:10px;margin-bottom:12px}
+.sr-toolbar h2,.sr-entry-actions {margin:0}
+.sr-entry-actions strong {padding:5px 10px;border-radius:5px;background:var(--portal-soft);color:#176456;font-size:13px}
+.sr-entry-actions #srTotal {color:inherit;font-size:inherit}
+.sr-tabs {border-bottom:1px solid var(--portal-line);gap:20px;padding:0 2px}
+.sr-tabs button {background:transparent;border:0;border-bottom:3px solid transparent;border-radius:0;padding:10px 2px;color:var(--portal-muted);font-size:14px}
+.sr-tabs button.active {background:transparent;border-color:var(--portal-accent);color:var(--portal-accent)}
+.sr-badge {border-radius:5px;font-weight:600;padding:6px 10px}
+.sr-entry-scroll .sr-grid {table-layout:fixed;min-width:900px}
+.sr-entry-scroll .sr-grid th:first-child {width:44px}
+.sr-entry-scroll .sr-grid th:last-child {width:90px}
+.sr-entry-scroll .sr-grid th.sr-trip-column {width:100px}
+.sr-grid .sr-numeric {width:100%;max-width:none;min-width:0;text-align:right;font-variant-numeric:tabular-nums}
+.sr-grid .sr-small {padding:6px 9px;font-size:12px}
+.sr-grid td {vertical-align:middle}
+.sr-entry-scroll {border:1px solid var(--portal-line);border-radius:6px;max-height:clamp(200px,40vh,420px)}
+.sr-action-card .sr-actions {margin:0}
+.sr-action-card #srNotice:empty {display:none}
+.sr-actions .sr-secondary {background:#fff;color:var(--portal-ink);border-color:#bdcdd6}
+.sr-card>summary {font-size:13px;font-weight:600;cursor:pointer}
+.sr-card[open]>summary {margin-bottom:12px}
+.sr-card-details summary {color:var(--portal-muted);cursor:pointer;padding:4px 0}
+.sr-combo-option {font-size:13px;min-height:38px}
+@media(min-width:901px) {
+  .field-app-shell {grid-template-columns:236px minmax(0,1fr)!important;grid-template-rows:64px 1fr!important}
+  .field-app-header {height:64px!important;min-height:64px!important;padding:0 20px!important}
+  .field-nav {top:64px!important;height:calc(100vh - 64px)!important;padding:16px 12px!important}
+  .field-nav-btn {min-height:42px!important;padding:9px 10px!important;gap:10px!important}
+  .field-nav-btn b {font-size:13px!important}
+  .field-nav-btn span {width:26px!important;height:26px!important;flex-basis:26px!important}
+  .field-content {padding:20px 24px 32px!important}
+  html.tiom-management-ui .top {height:64px;min-height:64px;padding:0 20px}
+  html.tiom-management-ui #nav {top:64px;width:220px;padding:16px 10px}
+  html.tiom-management-ui #nav button {font-size:13px;min-height:42px;margin:2px 0;padding:10px 14px}
+  html.tiom-management-ui .signed-in #app {margin-left:220px;padding:20px 24px 32px}
+}
+@media(min-width:901px) and (max-width:1200px) {
+  .field-clock,.field-user {display:none}
+  .field-app-shell {grid-template-columns:210px minmax(0,1fr)!important}
+  .field-content {padding:16px!important}
+  html.tiom-management-ui .brand .title {font-size:14px}
+  html.tiom-management-ui .topmeta #ctx {display:none}
+}
+@media(max-width:900px) {
+  .field-app-header,html.tiom-management-ui .top {position:relative;height:auto;min-height:64px;padding:12px;flex-wrap:wrap;gap:10px}
+  .field-brand,html.tiom-management-ui .brand {min-width:0}
+  .field-header-tools,html.tiom-management-ui .topmeta {flex-wrap:wrap;gap:8px;min-width:0;max-width:100%}
+  .field-context-head {display:none}
+  .field-nav,html.tiom-management-ui #nav {
+    position:relative;top:auto!important;left:auto;bottom:auto;width:100%;height:auto!important;
+    max-width:100%;margin:0;padding:8px;display:flex;flex-direction:row;gap:6px;
+    overflow-x:auto;flex-wrap:nowrap;border:0;scrollbar-width:thin;
+  }
+  .field-nav-section,.field-nav .nav-section,html.tiom-management-ui #nav:before {display:none}
+  .field-nav-btn,.field-nav .nav-item,html.tiom-management-ui #nav button {
+    width:auto;flex:0 0 auto;min-height:44px;white-space:nowrap;margin:0;padding:10px 12px;font-size:13px;
+  }
+  .field-nav-btn b {font-size:13px}
+  .field-nav-btn span {display:none}
+  .field-content,html.tiom-management-ui .signed-in #app {margin:0;padding:16px 12px 24px!important;width:100%;max-width:100%}
+  .field-content :is(.ops-grid,.dashboard-grid),html.tiom-management-ui :is(.mc-owner-main,.mc-dash-main) {grid-template-columns:minmax(0,1fr)}
+  .field-content .ops-kpis {grid-template-columns:repeat(2,minmax(0,1fr))}
+  html.tiom-management-ui .topmeta #ctx {display:none}
+}
+@media(max-width:600px) {
+  .field-header-tools {width:100%}
+  .field-site-picker {flex:1}
+  .field-site-picker select {width:100%;max-width:none;min-width:0;font-size:14px}
+  .field-brand span {display:block}
+  .field-app-header #centralBtn {display:inline-flex;align-items:center}
+  .field-content :is(.page-head,.software-page-head,.ops-dashboard-top) h1,.sr-heading h1,
+  html.tiom-management-ui :is(.mc-page-head,.page-heading) h1 {font-size:21px!important}
+  .sr-heading {align-items:center;gap:8px}
+  .sr-badge {font-size:11px;padding:5px 7px}
+  .sr-workbench .sr-head {grid-template-columns:minmax(0,1fr)}
+  .sr-workbench .sr-card {padding:12px}
+  .sr-toolbar {align-items:flex-start}
+  .sr-entry-actions {width:100%;justify-content:flex-start}
+  .sr-actions>* {flex:1 1 140px}
+  .field-content :is(.btn,.sr-btn,.sr-small,.simple-tab),html.tiom-management-ui :is(.btn,.mini) {min-height:44px}
+  .field-content :is(.simple-form,.form-grid) :is(input,select,textarea),.sr-field :is(input,select),
+  .sr-combo .sr-combo-input,.field-content .software-entry-grid :is(input,select,.lookup>input[type=text]),
+  html.tiom-management-ui :is(input,select,textarea) {font-size:16px!important;min-height:44px!important}
+  html.tiom-management-ui .brand .title {font-size:14px;letter-spacing:0}
+  html.tiom-management-ui .brand .eyebrow {font-size:9px}
+  html.tiom-management-ui .mc-head-filters>select {flex-basis:calc(50% - 8px)}
+  html.tiom-management-ui .mc-head-filters label {flex-basis:calc(50% - 8px)}
+  html.tiom-management-ui .mc-owner-kpis {grid-template-columns:repeat(2,minmax(0,1fr))}
+  html.tiom-management-ui .mc-metric {padding:10px;min-height:100px}
+  html.tiom-management-ui .mc-metric strong {font-size:21px}
+  html.tiom-management-ui .mc-attention {grid-template-columns:24px minmax(0,1fr)}
+  html.tiom-management-ui .mc-attention strong {grid-column:2}
+}
+@media(prefers-reduced-motion:reduce) {
+  .field-app-shell *,html.tiom-management-ui * {scroll-behavior:auto!important;animation:none!important;transition:none!important}
+}
+@media print {
+  .field-app-header,.field-nav,html.tiom-management-ui .top,html.tiom-management-ui #nav {display:none!important}
+  .field-app-shell {display:block!important}
+  .field-content,html.tiom-management-ui .signed-in #app {margin:0!important;padding:0!important}
+  .sr-entry-scroll,.simple-table-wrap {max-height:none!important;overflow:visible}
+}
+
