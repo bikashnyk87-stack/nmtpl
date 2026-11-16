@@ -220,7 +220,8 @@ async function renderKocpPointReport(from,to){
     <option value="SEPT_EXCAVATOR">Excavator — September layout</option>
     <option value="SEPT_LOADER">Loader — September layout</option>
   </optgroup>
-  </select></label><button class="btn primary" type="button" onclick="koDownloadFullReport()">Download Excel</button>
+  </select></label><button class="btn primary" type="button" onclick="koDownloadSeptemberReport()">Download September Format (6 sheets)</button>
+  <button class="btn outline" type="button" onclick="koDownloadFullReport()">Download Selected Excel</button>
   <button class="btn outline" onclick="koPointDownloadCategoryCsv()">Category CSV</button></div>
   <p class="simple-note">Full Excel downloads include every matching source row for the selected dates.
   The screen preview is limited for speed; downloaded Excel is not.</p>`;
@@ -262,3 +263,11 @@ function koDownloadFullReport(){
   }
 }
 window.koDownloadFullReport=koDownloadFullReport;
+
+function koDownloadSeptemberReport(){
+  const from=$('koReportFrom')?.value,to=$('koReportTo')?.value;
+  if(!from||!to||to<from){toast('Choose a valid From and To date.','bad');return;}
+  const query=new URLSearchParams({from_date:from,to_date:to,kind:'ALL'});
+  window.location.assign('/api/KOCP/shift-register/reports/management.xlsx?'+query.toString());
+}
+window.koDownloadSeptemberReport=koDownloadSeptemberReport;
