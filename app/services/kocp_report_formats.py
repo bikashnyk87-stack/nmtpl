@@ -159,7 +159,7 @@ def build(db,start:date,end:date,kind="ALL"):
         sheet("LOADER DAILY","LOADER PERFORMANCE — DATE WISE / A B C SHIFTS",daily_head,day)
         sheet("LOADER CUMULATIVE","LOADER — MONTHLY / YEARLY SELECTED PERIOD",cumulative_head,totals)
         sheet("OTHER PARTY LOADER","OTHER PARTY / HIRED LOADER PERFORMANCE",cumulative_head,
-              (r for r in totals if r[2]!="OWN"))
+              (r for r in totals if r[2] in ("HIRED","THIRD PARTY")))
     stream=BytesIO();wb.save(stream);stream.seek(0)
     return StreamingResponse(stream,media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
          headers={"Content-Disposition":f'attachment; filename="KOCP_{kind}_SEPT_STYLE_{start}_to_{end}.xlsx"'})

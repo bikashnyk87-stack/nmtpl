@@ -28,6 +28,7 @@ from app.routers.site_ops import (
     _site_location_or_422
 )
 from app.services.kocp_factor_rules import resolve_kocp_point_factor
+from app.services.kocp_report_formats import build as build_kocp_management_report
 from app.services.kocp_equipment import kocp_asset_allowed, kocp_equipment_category, kocp_role_allowed
 
 router = APIRouter(prefix="/api/KOCP/shift-register", tags=["KOCP shift production register"])
@@ -442,8 +443,7 @@ def management_style_report(request: Request, from_date: date, to_date: date,
     require_site(db, user, "KOCP")
     from app.routers.site_ops import _require_any
     _require_any(db, user, "KOCP", "REPORTS")
-    from app.services.kocp_report_formats import build
-    return build(db, from_date, to_date, kind)
+    return build_kocp_management_report(db, from_date, to_date, kind)
 
 
 @router.get("/review-queue")
