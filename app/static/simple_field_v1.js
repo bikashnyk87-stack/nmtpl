@@ -1048,7 +1048,7 @@ function hsdGridRows(count=10,start=0){
 }
 function hsdBalanceStrip(fuel){
   const balance=fuel?.stockBalance;
-  const verified=balance!==null&&balance!==undefined&&Number.isFinite(Number(balance));
+  const verified=balance!==null&&balance!==undefined&&Number.isFinite(Number(balance))&&Number(balance)>=0;
   const asOf=fuel?.toDate||state.ctx.operatingDate;
   return `<section class="hsd-balance-strip ${verified?'hsd-balance-ready':'hsd-balance-unverified'}" aria-label="Live available diesel stock">
     <div class="hsd-balance-main"><span>Available Fuel · as of ${esc(asOf)}</span>
@@ -1068,10 +1068,10 @@ async function refreshHsdBalance(){
     // never calculate "remaining" stock by blindly subtracting in browser.
     const day=state.ctx.operatingDate;
     const b=await api(`/api/site-ops/${siteId}/fuel/balance?as_of_date=${encodeURIComponent(day)}`);
-    const ready=b.stockBalance!==null&&b.stockBalance!==undefined&&Number.isFinite(Number(b.stockBalance));
+    const ready=b.stockBalance!==null&&b.stockBalance!==undefined&&Number.isFinite(Number(b.stockBalance))&&Number(b.stockBalance)>=0;
     const value=$('hsdBalanceLitres'),received=$('hsdTodayReceived'),issued=$('hsdTodayIssued');
     if(value)value.textContent=ready?dashNum(b.stockBalance,2)+' L':'Not verified';
-    if(note)note.textContent=b.stockNote||'Stock reconciliation required.';
+    if(note)note.textContent=!ready&&Number(b.stockBalance)<0?'Stock balance cannot be negative; reconcile opening, receipts and issues.':(b.stockNote||'Stock reconciliation required.');
     if(received)received.textContent=dashNum(b.todayReceiptL||0,2)+' L';
     if(issued)issued.textContent=dashNum(b.todayIssueL||0,2)+' L';
     strip.classList.toggle('hsd-balance-ready',ready);
@@ -1096,8 +1096,8 @@ function fuelKpiCards(fuel){
     ${dashKpi('Period Receipts',shown?dashNum(p.receiptL,1)+' L':'—',shown?dashNum(p.receiptCount)+' receipts':'No data','good')}
     ${dashKpi('Period Issues',shown?dashNum(p.issueL,1)+' L':'—',shown?dashNum(p.issueCount)+' issues':'No data','warn')}
     ${dashKpi('Opening Stock',fuel?.openingBalance?dashNum(fuel.openingBalance.litres,1)+' L':'Not set',fuel?.openingBalance?'Verified starting balance · '+esc(fuel.openingBalance.date):'Enter in Opening Balance tab','primary')}
-    ${dashKpi('Calculated Stock',fuel?.stockBalance!=null?dashNum(fuel.stockBalance,1)+' L':'—',fuel?.stockBalance!=null?'Ledger at period end · physical check required':'Waiting for reconciled opening stock','good')}
-    ${dashKpi('Net Fuel Movement',shown?dashNum(p.netMovementL,1)+' L':'—','Receipts − issues; NOT closing stock','')}
+    ${dashKpi('Verified Fuel Stock',fuel?.stockBalance!=null&&Number(fuel.stockBalance)>=0?dashNum(fuel.stockBalance,1)+' L':'Not verified',fuel?.stockBalance!=null&&Number(fuel.stockBalance)>=0?'Ledger at period end · physical check required':'Check opening, receipts and issues; do not show negative stock','good')}
+    ${dashKpi('Receipts minus Issues',shown?dashNum(p.netMovementL,1)+' L':'—','May be negative when fuel use exceeds receipts in this period. This is NOT the fuel stock balance.','')}
     ${dashKpi('Fuel / Coal MT',fuel?.litresPerMt!=null?dashNum(fuel.litresPerMt,3)+' L/MT':'—','Only if posted Coal MT exists','')}
     ${dashKpi('Fuel / OB CuM',fuel?.litresPerCum!=null?dashNum(fuel.litresPerCum,3)+' L/CuM':'—','Only if posted OB CuM exists','')}
   </div>`
