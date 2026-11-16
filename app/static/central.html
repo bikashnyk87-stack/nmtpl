@@ -5,16 +5,16 @@
   <meta name="theme-color" content="#0b1f33">
   <title>NMTPL Central Operations Platform</title>
   <link rel="stylesheet" href="/static/platform.css?v=0.12.1">
-<link rel="stylesheet" href="/static/ux_v1.css?v=1.0rc1"></head>
+<link rel="stylesheet" href="/static/ux_v1.css?v=1.0rc1"><link rel="stylesheet" href="/static/nmtpl_brand.css?v=20261116-v1"></head>
 <body>
 <section id="loginView" class="login-screen hidden">
-  <div class="login-copy"><div><div class="brand-logo">N</div><h1>NMTPL Central Operations Platform</h1><p>One controlled operating system for TIOM, SOCP and KOCP — production, trips, weighbridge, HSD, people, equipment, reconciliation, reports, maps and management control.</p><div class="login-bullets"><div><b>3 Sites · One Control Centre</b><span>Site-isolated operations with consolidated management visibility.</span></div><div><b>Role-aware access</b><span>Entry users see only their permitted site, module and action.</span></div><div><b>Operational audit</b><span>Every critical change retains source, user, time and revision history.</span></div><div><b>Scalable foundation</b><span>Designed for staged growth, background jobs and 300+ concurrent users.</span></div></div></div></div>
+  <div class="login-copy"><div><img class="nmtpl-logo nmtpl-central-login-logo" src="/static/nmtpl-company-logo.png?v=nmtpl-brand-20261116-v1" alt="NMTPL company logo"><h1>NMTPL Central Operations Platform</h1><p>One controlled operating system for TIOM, SOCP and KOCP — production, trips, weighbridge, HSD, people, equipment, reconciliation, reports, maps and management control.</p><div class="login-bullets"><div><b>3 Sites · One Control Centre</b><span>Site-isolated operations with consolidated management visibility.</span></div><div><b>Role-aware access</b><span>Entry users see only their permitted site, module and action.</span></div><div><b>Operational audit</b><span>Every critical change retains source, user, time and revision history.</span></div><div><b>Scalable foundation</b><span>Designed for staged growth, background jobs and 300+ concurrent users.</span></div></div></div></div>
   <div class="login-pane"><form id="loginForm" class="login-card"><h2>Sign in</h2><p>Use your NMTPL operations account.</p><div class="field"><span>User ID</span><input id="loginId" autocomplete="username" required></div><div class="field"><span>Password</span><input id="password" type="password" autocomplete="current-password" required></div><button class="btn dark" type="submit">Sign in to Operations</button><div id="loginError" class="login-error"></div></form></div>
 </section>
 
 <div id="appView" class="shell hidden">
   <aside class="sidebar">
-    <div class="brand"><div class="brand-logo">N</div><div><strong>NMTPL</strong><span>Mining Operations</span></div></div>
+    <div class="brand"><img class="nmtpl-logo nmtpl-central-sidebar-logo" src="/static/nmtpl-company-logo.png?v=nmtpl-brand-20261116-v1" alt="NMTPL company logo"><div><strong>NMTPL</strong><span>Mining Operations</span></div></div>
     <div class="site-switcher"><label>Workspace</label><select id="siteSwitcher"><option value="CENTRAL">Central Control Centre</option></select></div>
     <nav id="sideNav" class="nav-scroll"></nav>
     <div class="sidebar-foot"><b id="sideVersion">v0.12</b><br>Central platform structure</div>
