@@ -44,6 +44,8 @@ from app.site_models import (
     SiteSatelliteObservation,
     SiteSurveyMeasurement,
     SiteShift,
+    SiteShiftTripCard,
+    SiteShiftTripCardLine,
     SiteTrip,
     SiteTripReconciliation,
     SiteWbImportBatch,
