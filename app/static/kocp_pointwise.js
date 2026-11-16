@@ -214,6 +214,12 @@ async function renderKocpPointReport(from,to){
   <option value="HSD">Fuel transaction ledger</option>
   <option value="SOURCE">Paper source cards and rows</option>
   <option value="MCL">MCL quantity factors</option>
+  <optgroup label="September-style management formats">
+    <option value="SEPT_ALL">All 3 September-style reports</option>
+    <option value="SEPT_TIPPER">OB Tipper — September layout</option>
+    <option value="SEPT_EXCAVATOR">Excavator — September layout</option>
+    <option value="SEPT_LOADER">Loader — September layout</option>
+  </optgroup>
   </select></label><button class="btn primary" type="button" onclick="koDownloadFullReport()">Download Excel</button>
   <button class="btn outline" onclick="koPointDownloadCategoryCsv()">Category CSV</button></div>
   <p class="simple-note">Full Excel downloads include every matching source row for the selected dates.
@@ -246,7 +252,13 @@ window.koPointDownloadCategoryCsv=koPointDownloadCategoryCsv;
 function koDownloadFullReport(){
   const from=$('koReportFrom')?.value,to=$('koReportTo')?.value,kind=$('koExportKind')?.value||'ALL';
   if(!from||!to||to<from){toast('Choose a valid From and To date.','bad');return;}
-  const query=new URLSearchParams({from_date:from,to_date:to,report_type:kind});
-  window.location.assign('/api/site-ops/KOCP/reports/complete.xlsx?'+query.toString());
+  const september={SEPT_ALL:'ALL',SEPT_TIPPER:'TIPPER',SEPT_EXCAVATOR:'EXCAVATOR',SEPT_LOADER:'LOADER'};
+  if(Object.prototype.hasOwnProperty.call(september,kind)){
+    const query=new URLSearchParams({from_date:from,to_date:to,kind:september[kind]});
+    window.location.assign('/api/KOCP/shift-register/reports/management.xlsx?'+query.toString());
+  }else{
+    const query=new URLSearchParams({from_date:from,to_date:to,report_type:kind});
+    window.location.assign('/api/site-ops/KOCP/reports/complete.xlsx?'+query.toString());
+  }
 }
 window.koDownloadFullReport=koDownloadFullReport;
