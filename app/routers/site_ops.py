@@ -2273,7 +2273,7 @@ def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
     start, end = _period_bounds(from_date, to_date)
     if (end - start).days > 366:
         raise HTTPException(422, "Choose a date range of at most 367 days per download.")
-    choices = {"ALL", "TRIPS", "SHIFT", "COAL", "OB_TIPPER", "EXCAVATOR",
+    choices = {"ALL", "TRIPS", "SHIFT", "CUMULATIVE", "COAL", "OB_TIPPER", "EXCAVATOR",
                "LOADER", "METERS", "HSD", "SOURCE", "MCL"}
     selection = str(report_type or "ALL").upper().strip()
     if selection not in choices:
@@ -2442,7 +2442,7 @@ def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
     summary["A1"].font = Font(size=15, bold=True, color="155E75")
 
     if selection in ("ALL", "TRIPS"):
-        sheet("All Posted Trips", ["Date","Shift","Trip ID","Source Type","Source UID","Trip Count",
+        sheet("Production Trips", ["Date","Shift","Trip ID","Source Type","Source UID","Trip Count",
               "Vehicle ID","Tipper / Vehicle","Vehicle class","Driver ID","Driver",
               "Loader ID","Loader / Excavator","Loading class","Operator ID","Operator",
               "Patch","Unloading Point","Material","Route / Lead","MT","CuM",
@@ -2513,6 +2513,47 @@ def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
               ((h.operating_date,h.shift,h.transaction_id,h.transaction_type,h.asset_id,
                 asset(h.asset_id),asset_class(h.asset_id),num(h.litres),h.supplier,
                 h.reference_no,num(h.meter_reading),h.status,h.source_type,h.entered_by) for h in hsd))
+    if selection in ("ALL", "CUMULATIVE"):
+        monthly = defaultdict(lambda: {
+            "trips": 0, "mt": Decimal("0"), "cum": Decimal("0"),
+            "mt_known": False, "cum_known": False, "pending": 0
+        })
+        for (role, operating_day, shift, asset_id), val in daily.items():
+            key = (operating_day.strftime("%Y-%m"), role, asset_id)
+            m = monthly[key]
+            m["trips"] += val["trips"]
+            m["mt"] += val["mt"]
+            m["cum"] += val["cum"]
+            m["mt_known"] |= val["has_mt"]
+            m["cum_known"] |= val["has_cum"]
+            m["pending"] += val["pending"]
+        sheet("Monthly Equipment Totals",
+              ["Month","Operating Role","Equipment ID","Equipment / Door","Physical Class",
+               "Trips","Coal MT","OB CuM","Trips awaiting approved factor"],
+              ((month,role,ident,asset(ident),asset_class(ident),val["trips"],
+                num(val["mt"]) if val["mt_known"] else None,
+                num(val["cum"]) if val["cum_known"] else None,val["pending"])
+               for (month,role,ident),val in sorted(monthly.items())))
+    if selection in ("ALL", "HSD"):
+        grouped_hsd = defaultdict(lambda: {"litres": Decimal("0"),"issues":0})
+        shift_hsd = defaultdict(lambda: {"litres": Decimal("0"),"issues":0})
+        for h in hsd:
+            if h.status != "POSTED" or h.transaction_type != "ISSUE":
+                continue
+            key = (h.operating_date,h.shift,h.asset_id)
+            grouped_hsd[key]["litres"] += _decimal(h.litres)
+            grouped_hsd[key]["issues"] += 1
+            shift_hsd[(h.operating_date,h.shift)]["litres"] += _decimal(h.litres)
+            shift_hsd[(h.operating_date,h.shift)]["issues"] += 1
+        sheet("HSD by Equipment", ["Date","Shift","Equipment ID","Equipment / Door",
+              "Physical Class","Issue Records","HSD Litres"],
+              ((day,sh,ident,asset(ident),asset_class(ident),v["issues"],num(v["litres"]))
+               for (day,sh,ident),v in sorted(grouped_hsd.items(),
+                  key=lambda x:(x[0][0],x[0][1] or "",x[0][2] or ""))))
+        sheet("HSD by Shift", ["Date","Shift","Issue Records","HSD Litres"],
+              ((day,shift,v["issues"],num(v["litres"]))
+               for (day,shift),v in sorted(shift_hsd.items(),
+                  key=lambda x:(x[0][0],x[0][1] or ""))))
     if selection in ("ALL", "SOURCE"):
         bycard = {x.card_id:x for x in cards}
         sheet("Source Cards",["Date","Shift","Kind","Card ID","Paper Ref","Tipper ID","Vehicle",
