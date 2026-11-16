@@ -195,10 +195,16 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, pape
                 assert draft_line.patch_code_id == ("KOCP:PATCH:P" if paper_codes else None)
                 assert draft_line.unload_code_id == ("KOCP:UNLOAD_POINT:U" if paper_codes else None)
             submitted = registers.submit_card(card_id, {"expectedVersion": draft["version"]}, None, db)
+            queue = registers.review_queue(None, db)
+            pending = next((item for item in queue["items"] if item["cardId"] == card_id), None)
+            assert pending is not None
+            assert pending["kind"] == kind and pending["tripCount"] == count
+            assert queue["totalPending"] >= 1
             user.login_id = "CHECKER"
             decision = {"action": "VERIFY", "expectedVersion": submitted["version"]}
             assert registers.decide_card(card_id, decision, None, db)["status"] == "VERIFIED"
             assert registers.decide_card(card_id, decision, None, db)["idempotent"]
+            assert all(item["cardId"] != card_id for item in registers.review_queue(None, db)["items"])
 
         trips = db.scalars(select(SiteTrip)).all()
         assert sorted(row.trip_count for row in trips) == [5, 8]
