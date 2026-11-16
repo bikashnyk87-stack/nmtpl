@@ -329,12 +329,12 @@ async function renderSimpleDashboard(){
   const materialKey=isK?(p.quantityCum>p.quantityMt?'quantityCum':'quantityMt'):'quantityMt';
 
   const kpis=isK?[
-    dashKpi('Today Trips',dashNum(t.trips),'Current operating day','primary'),
-    dashKpi('Coal / MT',dashNum(t.quantityMt,1),`Period ${dashNum(p.quantityMt,1)} MT`,'good'),
-    dashKpi('OB / CuM',dashNum(t.quantityCum,1),`Period ${dashNum(p.quantityCum,1)} CuM`,'warn'),
-    dashKpi('HSD Issued',dashNum(t.hsdIssuedL,1)+' L',p.lPerCum?`${dashNum(p.lPerCum,2)} L/CuM period`:'Period fuel',''),
-    dashKpi('Fleet Updated',dashNum(Object.values(d.fleet?.status||{}).reduce((a,b)=>a+Number(b||0),0)),`${dashNum(d.fleet?.assigned||0)} assigned`,''),
-    dashKpi('Open Exceptions',dashNum((d.openDataQuality||0)+(d.missingTripFieldsToday||0)),'Data quality / incomplete','bad')
+    dashKpi('Today Trips',dashNum(t.trips),'Operating day '+esc(today),'primary'),
+    dashKpi('Period Trips',dashNum(p.trips),esc(from)+' to '+esc(to),'good'),
+    dashKpi('Coal / MT',dashNum(p.quantityMt,1)+' MT','Period posted quantity','good'),
+    dashKpi('OB / CuM',dashNum(p.quantityCum,1)+' CuM','Period posted quantity','warn'),
+    dashKpi('Qty Pending',dashNum(p.pendingFactorTrips||0)+' trips','MCL daily factor required','warn'),
+    dashKpi('Fleet Assigned',dashNum(d.fleet?.assigned||0),'Current ERP fleet','')
   ]:[
     dashKpi('Today Trips',dashNum(t.trips),'Current operating day','primary'),
     dashKpi('Trip Qty',dashNum(t.quantityMt,1)+' MT',`Period ${dashNum(p.quantityMt,1)} MT`,'good'),

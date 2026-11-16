@@ -1988,6 +1988,18 @@ def operations_dashboard(
 
     today_totals=trip_totals(today_filters)
     period_totals=trip_totals(trip_filters)
+    if site_id == "KOCP":
+        source_filters = [
+            SiteTrip.status == "POSTED",
+            SiteTrip.source_type.in_(["SHIFT_COAL_REGISTER", "SHIFT_OB_CARD"]),
+            SiteTrip.factor_id.is_(None),
+        ]
+        today_totals["pendingFactorTrips"] = int(
+            db.scalar(select(func.coalesce(func.sum(SiteTrip.trip_count), 0)).where(
+                *today_filters, *source_filters)) or 0)
+        period_totals["pendingFactorTrips"] = int(
+            db.scalar(select(func.coalesce(func.sum(SiteTrip.trip_count), 0)).where(
+                *trip_filters, *source_filters)) or 0)
 
     today_wb=db.execute(select(
         func.count(),

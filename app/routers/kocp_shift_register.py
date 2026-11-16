@@ -247,6 +247,9 @@ def _detail(db, card):
         "closingKmr": str(card.closing_kmr) if card.closing_kmr is not None else "",
         "declaredTotal": card.declared_total, "status": card.status,
         "version": card.version, "enteredBy": card.entered_by,
+        "enteredAt": card.entered_at.isoformat() if card.entered_at else None,
+        "submittedBy": card.submitted_by,
+        "submittedAt": card.submitted_at.isoformat() if card.submitted_at else None,
         "verifiedBy": card.verified_by,
         "reviewNote": card.review_note,
         "tripCount": sum(line.trip_count for line in lines),
@@ -433,25 +436,78 @@ def list_cards(request: Request, operating_date: date|None=None, kind: str="", d
 
 @router.get("/review-queue")
 def review_queue(request: Request, db: Session = Depends(get_db)):
-    """Unverified KOCP Coal/OB source cards, regardless of entry screen date."""
+    """Pending Coal/OB cards from all dates; ERP labels are read-only."""
     user = _auth(db, request)
     filters = (SiteShiftTripCard.site_id == "KOCP", SiteShiftTripCard.status == "SUBMITTED")
-    count = db.scalar(select(func.count()).select_from(SiteShiftTripCard).where(*filters)) or 0
+    total = db.scalar(select(func.count()).select_from(SiteShiftTripCard).where(*filters)) or 0
     cards = list(db.scalars(select(SiteShiftTripCard).where(*filters).order_by(
-        SiteShiftTripCard.operating_date.asc(),
-        SiteShiftTripCard.entered_at.asc(),
+        SiteShiftTripCard.operating_date.asc(), SiteShiftTripCard.entered_at.asc(),
         SiteShiftTripCard.card_id,
     ).limit(301)))
-    can_approve = bool(user.admin or has_permission(db, user, "KOCP", "TRIP", "APPROVE"))
-    return {
-        "totalPending": count,
-        "hasMore": len(cards) > 300,
-        "items": [
-            {**_detail(db, card),
-             "canVerify": bool(can_approve and (user.admin or card.entered_by != user.login_id))}
-            for card in cards[:300]
-        ],
-    }
+    authorized = bool(user.admin or has_permission(db, user, "KOCP", "TRIP", "APPROVE"))
+    items = []
+    for card in cards[:300]:
+        detail = _detail(db, card)
+        detail["canVerify"] = bool(authorized and (user.admin or card.entered_by != user.login_id))
+        items.append(detail)
+    machine_ids, person_ids, material_ids, route_ids, loc_ids = set(), set(), set(), set(), set()
+    for card in items:
+        machine_ids.update(x for x in [card["vehicleId"]] if x)
+        person_ids.update(x for x in [card["driverId"]] if x)
+        material_ids.update(x for x in [card["materialId"]] if x)
+        route_ids.update(x for x in [card["routeId"]] if x)
+        for line in card["lines"]:
+            machine_ids.update(x for x in [line["vehicleId"], line["excavatorId"]] if x)
+            person_ids.update(x for x in [line["driverId"]] if x)
+            route_ids.update(x for x in [line["routeId"]] if x)
+            loc_ids.update(x for x in [line["sourceLocationId"], line["destinationLocationId"]] if x)
+    machines = {x.machine_id: x for x in db.scalars(
+        select(Equipment).where(Equipment.machine_id.in_(machine_ids))
+    )} if machine_ids else {}
+    persons = {x.employee_id: x.name for x in db.scalars(
+        select(Person).where(Person.employee_id.in_(person_ids))
+    )} if person_ids else {}
+    materials = {x.site_material_id: x.name for x in db.scalars(
+        select(SiteMaterial).where(SiteMaterial.site_id == "KOCP",
+            SiteMaterial.site_material_id.in_(material_ids))
+    )} if material_ids else {}
+    routes = {x.route_id: x for x in db.scalars(
+        select(SiteMovementRoute).where(SiteMovementRoute.site_id == "KOCP",
+            SiteMovementRoute.route_id.in_(route_ids))
+    )} if route_ids else {}
+    locations = {x.site_location_id: x.name for x in db.scalars(
+        select(SiteLocation).where(SiteLocation.site_id == "KOCP",
+            SiteLocation.site_location_id.in_(loc_ids))
+    )} if loc_ids else {}
+
+    def machine_label(ident):
+        eq = machines.get(ident)
+        return " · ".join(str(x) for x in (
+            f"Door {eq.door_no}" if eq and eq.door_no else None,
+            eq.vehicle_no if eq else None, eq.make_model if eq else None
+        ) if x) or ident
+
+    def route_label(ident):
+        route = routes.get(ident)
+        return f"{route.route_group} → {route.destination_label} · {route.distance_range}" if route else ident
+
+    for card in items:
+        card["vehicleLabel"] = machine_label(card["vehicleId"])
+        card["driverName"] = persons.get(card["driverId"], card["driverId"])
+        card["materialName"] = materials.get(card["materialId"], card["materialId"])
+        card["routeName"] = route_label(card["routeId"])
+        for line in card["lines"]:
+            line["vehicleLabel"] = machine_label(line["vehicleId"])
+            line["excavatorLabel"] = machine_label(line["excavatorId"])
+            line["driverName"] = persons.get(line["driverId"], line["driverId"])
+            source = locations.get(line["sourceLocationId"], line["sourceLocationId"])
+            dest = locations.get(line["destinationLocationId"], line["destinationLocationId"])
+            line["sourceLocationName"] = source
+            line["destinationLocationName"] = dest
+            line["patchLabel"] = " — ".join(x for x in [line["patchCode"], source] if x)
+            line["pointLabel"] = " — ".join(x for x in [line["pointCode"], dest] if x)
+            line["routeName"] = route_label(line["routeId"] or card["routeId"])
+    return {"totalPending": total, "hasMore": len(cards) > 300, "items": items}
 
 
 @router.get("/cards/{card_id}")
