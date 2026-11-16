@@ -70,12 +70,12 @@ def test_hsd_modes_drafts_globals_and_stock_label():
     assert "Recover Previous Draft" in js
     assert "Fuel Issues" in js and "Fuel Receipts" in js
     cards=js[js.index("function fuelKpiCards"):js.index("function fuelAssetBreakdown")]
-    assert "fuel?.stockBalance!=null" in cards
-    assert "physical check required" in cards
-    assert "NOT closing stock" in cards
-    assert "NOT closing stock" in js
+    assert "fuel.stockBalance!==null" in cards
+    assert "compare with physical stock" in cards
+    assert "Closing stock" in cards
+    assert "Period receipts" in cards and "Period issues" in cards
     assert "sourceRecordUid:uid.value" in js
-    assert "simple_field_v1.js?v=kocp-single-copy-r13" in html
+    assert "simple_field_v1.js?v=kocp-reports-r18" in html
     proc=subprocess.run(["node","--check",str(JS)],capture_output=True,text=True,timeout=20)
     assert proc.returncode==0,proc.stderr
 
@@ -124,7 +124,8 @@ def test_read_only_fuel_summary_separates_receipts_issues_and_opening(monkeypatc
 def test_kocp_dashboard_has_fuel_panel_and_old_kpis_preserved():
     js=JS.read_text("utf-8")
     assert "Fuel / HSD — Operating Summary" in js
-    assert "Top Diesel-Using Equipment" in js
-    assert "Fuel / Coal MT" in js
-    assert "Fuel / OB CuM" in js
-    assert "HSD Issued" in js
+    assert "Top Diesel-Using Equipment" not in js
+    assert "Issue by Shift" not in js
+    assert "Fuel / Coal:" in js
+    assert "Fuel / OB:" in js
+    assert "Closing stock" in js and "HSD Issued" in js
