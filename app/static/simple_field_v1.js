@@ -377,13 +377,7 @@ async function renderSimpleDashboard(){
     ${isK?`<section class="ops-fuel-dashboard">
       <div class="ops-panel-head"><div><b>Fuel / HSD — Operating Summary</b><span>Selected date range · Posted receipts and issues only</span></div><div class="ops-fuel-cta"><button type="button" onclick="openHsdOpening()">${fuel?.openingBalance?'View Opening Stock':'Set Opening Stock'}</button><button type="button" onclick="openSiteModule('HSD')">Fuel / HSD Entry</button></div></div>
       ${fuelKpiCards(fuel)}
-      <div class="ops-fuel-detail">
-        <div><b>Top Diesel-Using Equipment</b>${fuelAssetBreakdown(fuel)}</div>
-        <div><b>Issue by Shift</b>
-          ${(fuel?.issueByShift||[]).length?dashBars((fuel.issueByShift||[]).map(x=>({label:x.shift,litres:x.litres})),'litres',' L',5):'<div class="ops-empty">No posted fuel issue by shift.</div>'}
-          <p class="field-help">${esc(fuel?.stockNote||'Opening balance required to report closing stock.')}</p>
-        </div>
-      </div>
+
     </section>`:''}
 
     <div class="ops-grid">

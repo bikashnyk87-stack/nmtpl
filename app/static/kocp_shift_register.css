@@ -70,3 +70,15 @@
 .sr-workbench .sr-grid td{padding:3px 5px}
 .sr-workbench .sr-head{gap:6px}
 .sr-workbench .sr-combo-menu .sr-combo-option{font-size:11px}
+
+/* Compact equipment meter entry within the KOCP source register. */
+.sr-meter-card{margin-top:6px}
+.sr-meter-card>summary{font-size:12px;font-weight:700;cursor:pointer}
+.sr-meter-card p.sr-muted{font-size:11px;margin:6px 0}
+.sr-meter-grid{display:grid;grid-template-columns:minmax(180px,2fr) minmax(95px,.7fr) minmax(90px,.8fr) minmax(90px,.8fr) minmax(130px,1.2fr) auto;gap:6px;align-items:end}
+.sr-meter-grid .sr-field{min-width:0}
+.sr-meter-grid .sr-btn{align-self:end;white-space:nowrap}
+#srMeterRows{margin-top:7px}
+#srMeterRows .sr-grid{min-width:650px}
+@media(max-width:1100px){.sr-meter-grid{grid-template-columns:repeat(3,minmax(0,1fr))}}
+@media(max-width:700px){.sr-meter-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
