@@ -205,7 +205,7 @@ async function changeDate(){
    assets?"Select from Masters":"Equipment Master could not be loaded");
   refreshSearchDropdown(select);
  }
- await Promise.all([history(),loadSummary()]);
+ await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.()]);
 }
 function existing(line,key){return String(line?.[key]??"")}
 function blank(){return model.kind==="COAL"?{vehicleId:"",driverId:"",tripCount:"",routeId:""}:
@@ -346,7 +346,7 @@ function values(){
 }
 function notice(message,error=false){const n=h("srNotice");if(n){n.textContent=message;n.className=error?"sr-error":"sr-success"}else if(window.toast)toast(message,error?"bad":"good")}
 function sync(){const inputs=values();model.lines=readRows(true);model.pendingHeader=inputs}
-async function renderSelf(){await fetchMasters();const w=h("workspace");if(w){w.innerHTML=screen();enhanceSearchDropdowns(w);await Promise.all([history(),loadSummary()])}}
+async function renderSelf(){await fetchMasters();const w=h("workspace");if(w){w.innerHTML=screen();enhanceSearchDropdowns(w);await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.()])}}
 async function save(silent=false){
  try{
   validateSearchDropdowns();
@@ -514,6 +514,6 @@ async function renderKocpShiftRegister(){
 }
 window.renderKocpShiftRegister=renderKocpShiftRegister;
 window.KOCPSR={save:()=>save().catch(()=>{}),submit,verify,reject,history,open,updateTotal,addRow,removeRow,
- copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,afterRender:async()=>{enhanceSearchDropdowns(h("workspace"));await Promise.all([history(),loadSummary()])}};
+ copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,afterRender:async()=>{enhanceSearchDropdowns(h("workspace"));await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.()])}};
 })();
 
