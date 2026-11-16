@@ -434,6 +434,18 @@ def list_cards(request: Request, operating_date: date|None=None, kind: str="", d
 
 
 
+@router.get("/reports/management.xlsx")
+def management_style_report(request: Request, from_date: date, to_date: date,
+                            kind: str = "ALL", db: Session = Depends(get_db)):
+    """September-style KOCP reports; no mutation and no historical imports."""
+    user = get_user(db, request)
+    require_site(db, user, "KOCP")
+    from app.routers.site_ops import _require_any
+    _require_any(db, user, "KOCP", "REPORTS")
+    from app.services.kocp_report_formats import build
+    return build(db, from_date, to_date, kind)
+
+
 @router.get("/review-queue")
 def review_queue(request: Request, db: Session = Depends(get_db)):
     """Pending Coal/OB cards from all dates; ERP labels are read-only."""
