@@ -430,6 +430,30 @@ def list_cards(request: Request, operating_date: date|None=None, kind: str="", d
     return [{key:value for key,value in _detail(db,row).items() if key!="lines"} for row in rows]
 
 
+
+@router.get("/review-queue")
+def review_queue(request: Request, db: Session = Depends(get_db)):
+    """Unverified KOCP Coal/OB source cards, regardless of entry screen date."""
+    user = _auth(db, request)
+    filters = (SiteShiftTripCard.site_id == "KOCP", SiteShiftTripCard.status == "SUBMITTED")
+    count = db.scalar(select(func.count()).select_from(SiteShiftTripCard).where(*filters)) or 0
+    cards = list(db.scalars(select(SiteShiftTripCard).where(*filters).order_by(
+        SiteShiftTripCard.operating_date.asc(),
+        SiteShiftTripCard.entered_at.asc(),
+        SiteShiftTripCard.card_id,
+    ).limit(301)))
+    can_approve = bool(user.admin or has_permission(db, user, "KOCP", "TRIP", "APPROVE"))
+    return {
+        "totalPending": count,
+        "hasMore": len(cards) > 300,
+        "items": [
+            {**_detail(db, card),
+             "canVerify": bool(can_approve and (user.admin or card.entered_by != user.login_id))}
+            for card in cards[:300]
+        ],
+    }
+
+
 @router.get("/cards/{card_id}")
 def get_card(card_id: str,request:Request,db:Session=Depends(get_db)):
     _auth(db,request)
