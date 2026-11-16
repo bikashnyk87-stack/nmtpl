@@ -1826,3 +1826,44 @@ body.field-mode{
 .kocp-fuel-detail-row[hidden],#simpleTripRows tr[hidden],#simpleHsdRows tr[hidden]{display:none!important}
 #kocpFuelVehicleResults details table{width:100%}
 .kcm-tag.missing{color:#a43a2b}
+
+/* KOCP dashboard / verification layout (2026-11): compact, still legible. */
+.ops-theme-kocp .ops-dashboard-top{padding:7px 10px;border-radius:7px;box-shadow:none}
+.ops-theme-kocp .ops-dashboard-top h1{font-size:19px}
+.ops-theme-kocp .ops-dashboard-top p{font-size:11px}
+.ops-theme-kocp .ops-entry-strip{padding:6px 8px;border-radius:7px;margin-bottom:6px}
+.ops-theme-kocp .ops-strip-head{margin-bottom:3px}
+.ops-theme-kocp .ops-strip-head b{font-size:11px}
+.ops-theme-kocp .ops-strip-head span,.ops-theme-kocp .ops-strip-head small{font-size:10px}
+.ops-theme-kocp .ops-quick{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}
+.ops-theme-kocp .ops-quick button{min-height:32px;padding:4px 7px;grid-template-rows:auto;grid-template-columns:20px 1fr;border-radius:6px;gap:5px}
+.ops-theme-kocp .ops-quick button>span{grid-row:1;width:19px;height:19px;font-size:10px}
+.ops-theme-kocp .ops-quick button b{align-self:center;font-size:11px}
+.ops-theme-kocp .ops-quick button small{display:none}
+.ops-theme-kocp .ops-kpis{gap:6px;margin-bottom:7px}
+.ops-theme-kocp .ops-kpi{min-height:54px;padding:6px 8px;border-radius:6px;border-top-width:3px;box-shadow:none}
+.ops-theme-kocp .ops-kpi span{font-size:10px;letter-spacing:0}
+.ops-theme-kocp .ops-kpi b{font-size:19px;line-height:1.15;margin-top:2px}
+.ops-theme-kocp .ops-kpi small{font-size:10px;line-height:1.2;margin-top:2px;white-space:normal;overflow:visible}
+.ops-theme-kocp .ops-panel{padding:7px 9px;border-radius:7px;box-shadow:none}
+.ops-theme-kocp .ops-grid{gap:7px}
+.ops-theme-kocp .ops-fuel-dashboard{padding:9px 11px;margin:7px 0 10px;border-radius:8px;box-shadow:none}
+.ops-theme-kocp .ops-fuel-dashboard .ops-panel-head{padding-bottom:5px;margin-bottom:5px}
+.ops-theme-kocp .ops-fuel-dashboard .ops-panel-head b{font-size:13px}
+.ops-theme-kocp .ops-fuel-dashboard .hsd-kpi-grid{grid-template-columns:repeat(4,minmax(0,1fr));margin:5px 0}
+.ops-theme-kocp .ops-fuel-dashboard .ops-kpi{min-height:57px}
+.ops-theme-kocp .ops-fuel-detail{gap:8px;margin-top:7px}
+.ops-theme-kocp .ops-fuel-detail>div{padding:7px}
+.ops-theme-kocp .ops-range input{min-height:29px;height:29px;font-size:11px}
+.ops-theme-kocp .ops-range button,.ops-theme-kocp .ops-panel-head button{min-height:28px;padding:4px 8px;font-size:11px}
+.ops-theme-kocp .ops-fuel-cta{gap:5px}
+.ops-fuel-ledger{display:flex;flex-wrap:wrap;align-items:center;gap:5px 18px;font-size:11px;color:#3e5e70;padding:5px 6px;border:1px solid #d5e8ea;border-radius:6px;background:#f6fcfa}
+.ops-fuel-ledger b{color:#17614c}
+.ops-theme-kocp #kocpPendingQueue{margin-top:10px;border:1px solid #c9dce7;padding:9px 11px;border-radius:8px;background:#fff}
+@media(max-width:1100px){
+ .ops-theme-kocp .ops-fuel-dashboard .hsd-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:760px){
+ .ops-theme-kocp .ops-quick{grid-template-columns:repeat(2,minmax(0,1fr))}
+ .ops-theme-kocp .ops-fuel-dashboard .hsd-kpi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
+}

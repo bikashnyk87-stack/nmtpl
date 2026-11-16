@@ -57,3 +57,16 @@
 .sr-combo-option{display:block;width:100%;text-align:left;border:0;background:transparent;color:#143c4e;font-size:12px;padding:9px 10px;white-space:normal;cursor:pointer;border-radius:5px}
 .sr-combo-option:hover,.sr-combo-option.active{background:#d8efe9}
 .sr-combo-empty{font-size:12px;color:#697984;padding:10px}
+
+/* Compact KOCP source entry controls without shrinking text below legibility. */
+.sr-workbench .sr-card{padding:8px 10px}
+.sr-workbench .sr-field{gap:3px;font-size:11px}
+.sr-workbench .sr-field input,.sr-workbench .sr-field select,
+.sr-workbench .sr-grid input,.sr-workbench .sr-grid select,
+.sr-workbench .sr-combo .sr-combo-input{min-height:30px;padding:4px 7px;font-size:11px}
+.sr-workbench .sr-actions{gap:6px;margin-top:7px}
+.sr-workbench .sr-btn,.sr-workbench .sr-small{padding:5px 9px;border-radius:6px;font-size:11px;min-height:29px}
+.sr-workbench .sr-grid th{padding:6px 5px;font-size:11px}
+.sr-workbench .sr-grid td{padding:3px 5px}
+.sr-workbench .sr-head{gap:6px}
+.sr-workbench .sr-combo-menu .sr-combo-option{font-size:11px}

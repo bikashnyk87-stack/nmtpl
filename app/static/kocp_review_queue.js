@@ -6,10 +6,10 @@ const s={items:[],total:0,more:false,selected:new Set(),dateOnly:false,kind:"ALL
 const get=id=>document.getElementById(id);
 const esc=x=>String(x??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const enc=x=>encodeURIComponent(String(x));
-const visible=()=>s.items.filter(x=>(!s.dateOnly||x.operatingDate===get("srDate")?.value)&&
+const visible=()=>s.items.filter(x=>(!s.dateOnly||x.operatingDate===(get("srDate")?.value||get("opsTo")?.value))&&
  (s.kind==="ALL"||s.kind===x.kind));
 function mount(){
- const parent=document.querySelector("#workspace .sr-workbench");
+ const parent=document.querySelector("#workspace .sr-workbench")||document.querySelector("#workspace .ops-dashboard");
  if(!parent)return false;
  if(get("kocpPendingQueue"))return true;
  const section=document.createElement("section");
@@ -20,9 +20,9 @@ function mount(){
  '<label>Type <select id="srQKind" onchange="KOCPQueue.kind(this.value)"><option value="ALL">Coal + OB</option>'+
  '<option value="COAL">Coal</option><option value="OB">OB</option></select></label></div>'+
  '<div id="srQList" aria-live="polite">Loading pending cards…</div>'+
- '<div class="sr-q-actions"><button id="srQVerify" type="button" class="sr-btn" onclick="KOCPQueue.verify()">Verify selected (0)</button>'+
+ '<div class="sr-q-actions"><button id="srQVerify" type="button" class="sr-btn" onclick="KOCPQueue.verify()">Verify selected (0)</button><button id="srQVerifyAll" type="button" class="sr-small" onclick="KOCPQueue.verifyAll()">Verify all pending</button>'+
  '<span id="srQMessage" class="sr-muted">Compare with physical trip cards before verification.</span></div>';
- parent.querySelector(".sr-tabs")?.before(section);
+ parent.appendChild(section);
  if(!get("kocpQueueStyle")){
   const st=document.createElement("style");st.id="kocpQueueStyle";
   st.textContent='.sr-q-head,.sr-q-filter,.sr-q-actions{display:flex;gap:10px;align-items:center;justify-content:space-between;flex-wrap:wrap}'+
@@ -45,45 +45,58 @@ function draw(){
  const rows=visible();
  get("srQCount").textContent="("+s.total+")";
  get("srQDateOnly").checked=s.dateOnly;get("srQKind").value=s.kind;
- const limited=s.more?'<p class="sr-error">More than 300 pending cards. Oldest 300 shown first.</p>':"";
+ const limited=s.more?'<p class="sr-error">More than 300 pending cards; oldest 300 shown. Bulk action is limited to the cards on screen.</p>':"";
  if(!rows.length)get("srQList").innerHTML=limited+'<p class="sr-q-empty">'+
- (s.total?"No pending for this filter; untick Selected date only to see other dates.":"No pending cards.")+'</p>';
+ (s.total?"Nothing pending for this date/type. Untick Selected date only to see other days.":"No pending Coal or OB cards.")+'</p>';
  else get("srQList").innerHTML=limited+'<div class="sr-q-scroll"><table class="sr-q-table"><thead><tr>'+
- '<th><input id="srQAll" type="checkbox" title="Select eligible visible cards" onchange="KOCPQueue.all(this.checked)"></th>'+
- '<th>Date / Shift</th><th>Type</th><th>Paper / Vehicle</th><th>Trips</th><th></th></tr></thead><tbody>'+
+ '<th><input id="srQAll" type="checkbox" title="Select all eligible cards" onchange="KOCPQueue.all(this.checked)"></th>'+
+ '<th>Date / shift</th><th>Register / equipment</th><th>Material / driver</th><th>Trips</th><th>Verify</th></tr></thead><tbody>'+
  rows.map(x=>{
-  const open=x.cardId===s.opened;
-  return '<tr><td><input type="checkbox" value="'+esc(x.cardId)+'" '+(s.selected.has(x.cardId)?"checked ":"")+
-   (!x.canVerify||s.busy?"disabled ":"")+'onchange="KOCPQueue.select(this.value,this.checked)"></td>'+
+  const can=!!x.canVerify;
+  return '<tr class="sr-q-card-row"><td><input type="checkbox" value="'+esc(x.cardId)+'" '+(s.selected.has(x.cardId)?"checked ":"")+
+   (!can||s.busy?"disabled ":"")+'aria-label="Select '+esc(x.kind)+' '+esc(x.operatingDate)+'" onchange="KOCPQueue.select(this.value,this.checked)"></td>'+
    '<td><b>'+esc(x.operatingDate)+'</b><small>Shift '+esc(x.shift)+'</small></td>'+
-   '<td>'+esc(x.kind)+'</td><td><b>'+esc(x.sourceRef||x.cardId.slice(-12))+'</b>'+
-   '<small>'+(x.kind==="OB"?"Tipper "+esc(x.vehicleId||"—")+" · Driver "+esc(x.driverId||"—"):
-   "Coal shift sheet")+'</small><small>Entered by '+esc(x.enteredBy)+'</small></td>'+
+   '<td><b>'+esc(x.kind)+'</b><small>'+esc(x.sourceRef||x.cardId)+'</small>'+
+   '<small>Tipper '+esc(x.vehicleLabel||x.vehicleId||"—")+'</small></td>'+
+   '<td>'+esc(x.materialName||x.materialId||"—")+'<small>Driver '+esc(x.driverName||x.driverId||"—")+'</small>'+
+   '<small>Entered by '+esc(x.enteredBy)+'</small></td>'+
    '<td><b>'+Number(x.tripCount||0)+'</b><small>'+Number(x.rowCount||0)+' rows</small></td>'+
-   '<td><button type="button" class="sr-small" onclick="KOCPQueue.detail(\''+esc(x.cardId)+'\')">'+
-   (open?"Close":"Review")+'</button></td></tr>'+
-   (open?'<tr class="sr-q-detail"><td colspan="6">'+detailHtml(x)+'</td></tr>':"");
+   '<td>'+(can?'<div class="sr-q-row-actions"><button type="button" class="sr-small sr-q-approve" onclick="KOCPQueue.verifyOne(\''+esc(x.cardId)+'\')">Verify</button>'+
+   '<button type="button" class="sr-small" onclick="KOCPQueue.rejectOne(\''+esc(x.cardId)+'\')">Return</button></div>':
+   '<small>Checker permission required</small>')+'</td></tr>'+
+   '<tr class="sr-q-detail"><td colspan="6">'+detailHtml(x)+'</td></tr>';
  }).join("")+'</tbody></table></div>';
  update();
 }
 function detailHtml(card){
  const isOb=card.kind==="OB";
- const head='<p class="sr-q-note"><b>'+esc(card.kind)+' · '+esc(card.operatingDate)+' · '+esc(card.shift)+
- ' shift</b> · Material '+esc(card.materialId||"—")+' · Paper total '+esc(card.declaredTotal??"Not entered")+'</p>';
- const body=(card.lines||[]).map(l=>'<tr><td>'+esc(l.lineNo)+'</td><td>'+esc(isOb?l.excavatorId:l.vehicleId)+'</td>'+
- '<td>'+esc(isOb?(l.patchCode||l.sourceLocationId):l.driverId)+'</td>'+
- '<td>'+esc(isOb?(l.pointCode||l.destinationLocationId):"—")+'</td>'+
- '<td>'+esc(l.routeId||card.routeId||"—")+'</td><td><b>'+Number(l.tripCount||0)+'</b></td></tr>').join("");
- return head+'<div class="sr-q-scroll"><table class="sr-q-table"><thead><tr><th>#</th><th>'+(isOb?"Excavator":"Vehicle")+
- '</th><th>'+(isOb?"Patch":"Driver")+'</th><th>Unloading</th><th>Route</th><th>Trips</th></tr></thead>'+
- '<tbody>'+body+'</tbody></table></div>'+
- '<p class="sr-q-note">Check the source paper before selecting this card.</p>';
+ const pairs=[
+  ['Source ref',card.sourceRef||card.cardId],['Material',card.materialName||card.materialId],
+  ['Tipper',card.vehicleLabel||card.vehicleId],['Driver',card.driverName||card.driverId],
+  ['Paper trips',card.declaredTotal??"Not stated"],['Entered by',card.enteredBy]
+ ];
+ if(card.routeId)pairs.push(['Default route',card.routeName||card.routeId]);
+ if(card.relayCode)pairs.push(['Relay',card.relayCode]);
+ if(card.openingHmr!==''||card.closingHmr!=='')pairs.push(['HMR',String(card.openingHmr||"—")+' → '+String(card.closingHmr||"—")]);
+ if(card.openingKmr!==''||card.closingKmr!=='')pairs.push(['KMR',String(card.openingKmr||"—")+' → '+String(card.closingKmr||"—")]);
+ const head='<div class="sr-q-meta">'+pairs.map(([name,value])=>
+  '<span><b>'+esc(name)+':</b> '+esc(value||"—")+'</span>').join("")+'</div>';
+ const body=(card.lines||[]).map(l=>'<tr><td>'+esc(l.lineNo)+'</td>'+
+ '<td>'+esc(isOb?(l.excavatorLabel||l.excavatorId):(l.vehicleLabel||l.vehicleId))+'</td>'+
+ '<td>'+esc(isOb?(l.patchLabel||l.patchCode||l.sourceLocationName||l.sourceLocationId):(l.driverName||l.driverId))+'</td>'+
+ '<td>'+esc(isOb?(l.pointLabel||l.pointCode||l.destinationLocationName||l.destinationLocationId):"—")+'</td>'+
+ '<td>'+esc(l.routeName||l.routeId||card.routeName||card.routeId||"—")+'</td><td><b>'+Number(l.tripCount||0)+'</b></td></tr>').join("");
+ return head+'<div class="sr-q-line-scroll"><table class="sr-q-line-table"><thead><tr><th>#</th><th>'+
+ (isOb?"Excavator":"Vehicle")+'</th><th>'+(isOb?"Patch":"Driver")+
+ '</th><th>Unloading point</th><th>Route / lead</th><th>Trips</th></tr></thead>'+
+ '<tbody>'+body+'</tbody></table></div>';
 }
 function update(){
  const eligible=visible().filter(x=>x.canVerify),selected=eligible.filter(x=>s.selected.has(x.cardId));
  const button=get("srQVerify"),all=get("srQAll");
  button.disabled=s.busy||!selected.length;
  button.textContent=s.busy?"Verifying…":"Verify selected ("+selected.length+")";
+ const allButton=get("srQVerifyAll");if(allButton){allButton.disabled=s.busy||!eligible.length;allButton.textContent=s.more?"Verify all shown ("+eligible.length+")":"Verify all pending ("+eligible.length+")";}
  if(all){all.checked=eligible.length>0&&eligible.every(x=>s.selected.has(x.cardId));
  all.indeterminate=!all.checked&&eligible.some(x=>s.selected.has(x.cardId));}
 }
@@ -102,19 +115,17 @@ async function refresh(){
   draw();
  }catch(e){const area=get("srQList");if(area)area.textContent="Could not load pending records: "+e.message;}
 }
-async function verify(){
- if(s.busy)return;
- const cards=visible().filter(x=>x.canVerify&&s.selected.has(x.cardId));
- if(!cards.length)return;
+async function verifyCards(cards){
+ if(s.busy||!cards.length)return;
  const trips=cards.reduce((v,x)=>v+Number(x.tripCount||0),0);
- if(!confirm("I have checked "+cards.length+" selected paper card(s), totalling "+trips+
- " trips. Verify and post them to KOCP production?"))return;
+ if(!confirm("Have you checked these "+cards.length+" physical paper card(s), totalling "+trips+
+ " trips? Confirm to verify and post them to KOCP production."))return;
  s.busy=true;draw();
  let approved=0,posted=0;const errors=[];
  for(const card of cards){
   try{
    const current=await api(API+"/cards/"+enc(card.cardId));
-   if(current.status!=="SUBMITTED"||current.version!==card.version||current.tripCount!==card.tripCount)
+   if(current.status!=="SUBMITTED"||current.version!==card.version||Number(current.tripCount)!==Number(card.tripCount))
     throw Error("Record changed. Refresh and review it again.");
    await api(API+"/cards/"+enc(card.cardId)+"/decision",{
     method:"POST",headers:{"Content-Type":"application/json"},
@@ -128,8 +139,26 @@ async function verify(){
  await window.KOCPSR?.history?.();
  const msg=get("srQMessage");
  if(msg){msg.textContent=approved+" verified ("+posted+" trips posted)."+
-  (errors.length?" "+errors.length+" failed: "+errors.join("; "):"");
+  (errors.length?" "+errors.length+" not verified: "+errors.join("; "):"");
   msg.className=errors.length?"sr-error":"sr-success";}
 }
-window.KOCPQueue={mount,refresh,draw,select,all,date,kind,detail,verify};
+async function verify(){return verifyCards(visible().filter(x=>x.canVerify&&s.selected.has(x.cardId)))}
+async function verifyAll(){return verifyCards(visible().filter(x=>x.canVerify))}
+async function verifyOne(id){const card=s.items.find(x=>x.cardId===id&&x.canVerify);if(card)return verifyCards([card])}
+async function rejectOne(id){
+ if(s.busy)return;
+ const card=s.items.find(x=>x.cardId===id&&x.canVerify);
+ if(!card)return;
+ const reason=prompt("Reason to return this paper card for correction (minimum 5 characters):");
+ if(!reason||reason.trim().length<5)return;
+ try{
+  const current=await api(API+"/cards/"+enc(card.cardId));
+  if(current.status!=="SUBMITTED"||current.version!==card.version)throw Error("Card changed; refresh before returning.");
+  await api(API+"/cards/"+enc(id)+"/decision",{method:"POST",headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({action:"REJECT",expectedVersion:current.version,reason:reason.trim()})});
+  await refresh();await window.KOCPSR?.history?.();
+  get("srQMessage").textContent="Card returned for correction.";
+ }catch(e){const msg=get("srQMessage");if(msg){msg.textContent=e.message;msg.className="sr-error";}}
+}
+window.KOCPQueue={mount,refresh,draw,select,all,date,kind,detail,verify,verifyAll,verifyOne,rejectOne};
 })();

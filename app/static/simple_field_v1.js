@@ -1088,19 +1088,36 @@ async function refreshHsdBalance(){
   }
 }
 function fuelKpiCards(fuel){
-  const t=fuel?.todayTotals||{},p=fuel?.periodTotals||{};
-  const shown=!!fuel;
-  return `<div class="ops-kpis hsd-kpi-grid">
-    ${dashKpi('Today Receipts',shown?dashNum(t.receiptL,1)+' L':'—',shown?'Posted HSD receipts':'Unable to read summary','good')}
-    ${dashKpi('Today Issues',shown?dashNum(t.issueL,1)+' L':'—',shown?'Posted HSD issues':'Unable to read summary','warn')}
-    ${dashKpi('Period Receipts',shown?dashNum(p.receiptL,1)+' L':'—',shown?dashNum(p.receiptCount)+' receipts':'No data','good')}
-    ${dashKpi('Period Issues',shown?dashNum(p.issueL,1)+' L':'—',shown?dashNum(p.issueCount)+' issues':'No data','warn')}
-    ${dashKpi('Opening Stock',fuel?.openingBalance?dashNum(fuel.openingBalance.litres,1)+' L':'Not set',fuel?.openingBalance?'Verified starting balance · '+esc(fuel.openingBalance.date):'Enter in Opening Balance tab','primary')}
-    ${dashKpi('Verified Fuel Stock',fuel?.stockBalance!=null&&Number(fuel.stockBalance)>=0?dashNum(fuel.stockBalance,1)+' L':'Not verified',fuel?.stockBalance!=null&&Number(fuel.stockBalance)>=0?'Ledger at period end · physical check required':'Check opening, receipts and issues; do not show negative stock','good')}
-    ${dashKpi('Receipts minus Issues',shown?dashNum(p.netMovementL,1)+' L':'—','May be negative when fuel use exceeds receipts in this period. This is NOT the fuel stock balance.','')}
-    ${dashKpi('Fuel / Coal MT',fuel?.litresPerMt!=null?dashNum(fuel.litresPerMt,3)+' L/MT':'—','Only if posted Coal MT exists','')}
-    ${dashKpi('Fuel / OB CuM',fuel?.litresPerCum!=null?dashNum(fuel.litresPerCum,3)+' L/CuM':'—','Only if posted OB CuM exists','')}
-  </div>`
+ if(!fuel)return '<p class="ops-empty">Fuel summary unavailable. No stock figures shown.</p>';
+ const t=fuel.todayTotals||{},p=fuel.periodTotals||{},opening=fuel.openingBalance;
+ const stock=Number(fuel.stockBalance);
+ const verified=fuel.stockBalance!==null&&fuel.stockBalance!==undefined&&Number.isFinite(stock)&&stock>=0;
+ const expected=opening?Number(opening.litres)+Number(p.receiptL||0)-Number(p.issueL||0):null;
+ const fullPeriod=Boolean(opening&&fuel.fromDate===opening.date);
+ const agrees=fullPeriod&&verified&&Math.abs(expected-stock)<0.01;
+ const activity='Operating day '+esc(fuel.today||"—")+': receipts '+dashNum(t.receiptL||0,1)+
+  ' L · issues '+dashNum(t.issueL||0,1)+' L';
+ const summary=agrees
+  ?'Stock check: '+dashNum(opening.litres,1)+' + '+dashNum(p.receiptL,1)+' − '+
+     dashNum(p.issueL,1)+' = '+dashNum(stock,1)+' L'
+  :(verified?'Closing stock includes posted movements from the opening date, including dates outside this filter.':
+    'Fuel stock is not verified. Check opening stock and transaction history.');
+ const note=verified?'Ledger stock as of '+esc(fuel.toDate||"—")+'; compare with physical stock.':
+   esc(fuel.stockNote||"Reconciliation required.");
+ return '<div class="ops-kpis hsd-kpi-grid ops-fuel-core">'+
+  dashKpi('Opening stock',opening?dashNum(opening.litres,1)+' L':'Not set',
+   opening?'Opening '+esc(opening.date):'Physical opening required','primary')+
+  dashKpi('Period receipts',dashNum(p.receiptL||0,1)+' L',
+   dashNum(p.receiptCount||0)+' posted receipts','good')+
+  dashKpi('Period issues',dashNum(p.issueL||0,1)+' L',
+   dashNum(p.issueCount||0)+' posted issues','warn')+
+  dashKpi('Closing stock',verified?dashNum(stock,1)+' L':'Not verified',
+   note,verified?'good':'bad')+'</div>'+
+  '<div class="ops-fuel-ledger"><b>'+esc(summary)+'</b><span>'+activity+'</span>'+
+  ((fuel.litresPerMt!=null||fuel.litresPerCum!=null)?
+    '<span>'+(fuel.litresPerMt!=null?'Fuel / Coal: '+dashNum(fuel.litresPerMt,3)+' L/MT  ':'')+
+    (fuel.litresPerCum!=null?'Fuel / OB: '+dashNum(fuel.litresPerCum,3)+' L/CuM':'')+'</span>':'')+
+  '</div>';
 }
 
 let kocpFuelReportRange={from:'',to:'',shift:'ALL'};
@@ -1670,6 +1687,7 @@ async function simpleRender(){
   if(html!==null&&typeof html==='string')$('workspace').innerHTML=html;
   afterSimpleRender();
   if(siteId==='KOCP'&&state.module==='SHIFT_REGISTER'&&window.KOCPSR)window.KOCPSR.afterRender().catch(e=>console.warn(e));
+   if(siteId==='KOCP'&&state.module==='DASHBOARD'&&window.KOCPQueue)window.KOCPQueue.refresh().catch(e=>console.warn(e));
 }
 render=simpleRender;window.render=simpleRender;
 Object.assign(window,{saveTiomSimpleProduction,clearTiomSimpleDraft,addSimpleTripRows,rebuildSimpleTripRows,setSimpleHsdMode,openHsdOpening,saveHsdOpening,refreshHsdBalance,saveCompactHsdReceipt,clearCompactHsdReceipt,addSimpleHsdRows,applyTripDefaults,applyKocpRoute,syncKocpHmrMachines,calcKocpHmr,saveSimpleTrips,clearSimpleTripDraft,rebuildSimpleWbRows,simpleCalcWbRow,saveSimpleWB,clearSimpleWbDraft,rebuildSimpleHsdRows,toggleHsdRow,saveSimpleHsd,clearSimpleHsdDraft,openKocpHsdCorrection,closeKocpHsdCorrection,saveKocpHsdCorrection,reloadKocpHsdHistory,clearKocpHsdHistory,applyKocpFuelVehicleFilters,setKocpFuelMonthToDate,filterKocpFuelVehicles,downloadKocpFuelVehicleCsv,filterKocpFuelDetails,filterKocpHsdEntryRows,filterKocpHsdSavedRecords,filterKocpSavedTrips,filterKocpEntryRows,loadKocpTripHistory,copyKocpTripRow,copyKocpLastTripRow,rebuildSimpleMeterRows,calcMeterRow,saveSimpleMeters,clearSimpleMeterDraft,addKocpHmrRows,openKocpTripCorrection,closeKocpTripCorrection,applyKocpEditRoute,saveKocpTripCorrection});
