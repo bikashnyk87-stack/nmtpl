@@ -46,3 +46,14 @@
 .sr-workbench .sr-head{gap:7px}
 .sr-card-details{margin-top:8px;font-size:12px}
 .sr-card-details[open] .sr-head{margin-top:8px}
+
+/* Master-backed searchable dropdowns, with popovers outside narrow table cells. */
+.sr-combo{position:relative;width:100%;min-width:0}
+.sr-combo select.sr-combo-source{display:none!important}
+.sr-combo .sr-combo-input{width:100%;min-width:0;min-height:35px;box-sizing:border-box;border:1px solid #cfdae1;border-radius:7px;background:#fff;color:#183542;font-size:12px;padding:7px 10px}
+.sr-combo .sr-combo-input:focus{outline:2px solid #72c3bc}
+.sr-combo .sr-combo-input[aria-invalid="true"]{border-color:#bf783a}
+.sr-combo-menu{position:fixed;z-index:20000;display:none;overflow:auto;border:1px solid #bbcfd6;border-radius:8px;background:#fff;box-shadow:0 9px 24px rgba(12,40,60,.2);padding:4px}
+.sr-combo-option{display:block;width:100%;text-align:left;border:0;background:transparent;color:#143c4e;font-size:12px;padding:9px 10px;white-space:normal;cursor:pointer;border-radius:5px}
+.sr-combo-option:hover,.sr-combo-option.active{background:#d8efe9}
+.sr-combo-empty{font-size:12px;color:#697984;padding:10px}

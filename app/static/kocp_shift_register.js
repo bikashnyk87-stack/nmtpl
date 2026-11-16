@@ -68,6 +68,102 @@ function driverOptions(value){
 function driverSelect(id,value){
  return '<select id="'+id+'" data-sr-driver aria-label="Driver">'+driverOptions(value)+'</select>';
 }
+
+/* Type-to-search controls retain existing <select> IDs and master-backed values. */
+function closeSearchDropdowns(except){
+ document.querySelectorAll(".sr-combo").forEach(box=>{if(box!==except)box._srClose?.()});
+}
+function refreshSearchDropdown(select){select?.closest(".sr-combo")?._srRefresh?.()}
+function enhanceSearchDropdowns(scope){
+ if(!scope)return;
+ scope.querySelectorAll("select[id]").forEach(select=>{
+  if(select.id==="srShift"||select.closest(".sr-combo"))return;
+  const box=document.createElement("div");box.className="sr-combo";
+  select.parentNode.insertBefore(box,select);box.appendChild(select);
+  select.classList.add("sr-combo-source");select.tabIndex=-1;
+  const input=document.createElement("input");
+  input.type="search";input.autocomplete="off";input.className="sr-combo-input";
+  const field=box.closest(".sr-field");
+  const label=select.getAttribute("aria-label")||field?.querySelector("span")?.textContent||select.id;
+  input.setAttribute("aria-label","Search "+label+" from Masters");
+  input.setAttribute("role","combobox");input.setAttribute("aria-autocomplete","list");
+  input.setAttribute("aria-expanded","false");
+  const menu=document.createElement("div");menu.className="sr-combo-menu";
+  menu.id="srComboList-"+select.id;menu.setAttribute("role","listbox");
+  input.setAttribute("aria-controls",menu.id);
+  box.insertBefore(input,select);box.appendChild(menu);
+  let choices=[],active=0;
+  const selectedLabel=()=>select.selectedOptions?.[0]?.value?select.selectedOptions[0].textContent:"";
+  const close=()=>{menu.style.display="none";input.setAttribute("aria-expanded","false");input.removeAttribute("aria-activedescendant")};
+  function mark(){
+   const items=menu.querySelectorAll(".sr-combo-option");
+   items.forEach((b,i)=>{b.classList.toggle("active",i===active);b.setAttribute("aria-selected",String(i===active))});
+   if(items[active]){input.setAttribute("aria-activedescendant",items[active].id);items[active].scrollIntoView({block:"nearest"})}
+  }
+  function choose(choice){
+   select.value=choice.value;input.value=choice.textContent;
+   input.setAttribute("aria-invalid","false");close();
+   select.dispatchEvent(new Event("change",{bubbles:true}));
+  }
+  function show(query){
+   closeSearchDropdowns(box);
+   const filter=String(query||"").trim().toLocaleLowerCase();
+   choices=[...select.options].filter(o=>o.value&&!o.disabled&&(!filter||o.textContent.toLocaleLowerCase().includes(filter))).slice(0,60);
+   menu.replaceChildren();
+   choices.forEach((choice,i)=>{
+    const b=document.createElement("button");b.type="button";
+    b.className="sr-combo-option";b.id=menu.id+"-"+i;
+    b.setAttribute("role","option");b.textContent=choice.textContent;
+    b.addEventListener("mousedown",e=>e.preventDefault());
+    b.addEventListener("click",()=>choose(choice));menu.appendChild(b);
+   });
+   if(!choices.length){
+    const empty=document.createElement("div");empty.className="sr-combo-empty";
+    empty.textContent="No matching approved master option";menu.appendChild(empty);
+   }
+   const r=input.getBoundingClientRect(),width=Math.min(Math.max(r.width,290),window.innerWidth-16);
+   menu.style.left=Math.max(8,Math.min(r.left,window.innerWidth-width-8))+"px";menu.style.width=width+"px";
+   const below=window.innerHeight-r.bottom-8,above=r.top-8;
+   menu.style.maxHeight=Math.min(240,Math.max(100,below<170&&above>below?above:below))+"px";
+   menu.style.top=(below<170&&above>below?Math.max(8,r.top-Math.min(240,above)):r.bottom+3)+"px";
+   menu.style.display="block";input.setAttribute("aria-expanded","true");
+   active=0;mark();
+  }
+  box._srClose=close;
+  box._srRefresh=()=>{
+   input.value=selectedLabel();input.placeholder=select.options[0]?.textContent||"Search approved Masters";
+   input.setAttribute("aria-invalid","false");close();
+  };
+  input.addEventListener("focus",()=>{input.select();show("")});
+  input.addEventListener("input",()=>{
+   input.setAttribute("aria-invalid",String(input.value.trim()!==selectedLabel().trim()));show(input.value);
+  });
+  input.addEventListener("keydown",e=>{
+   if(e.key==="Escape"){e.preventDefault();box._srRefresh();return}
+   if(e.key==="ArrowDown"||e.key==="ArrowUp"){
+    e.preventDefault();
+    if(menu.style.display==="none")show(input.value);
+    else if(choices.length){active=Math.max(0,Math.min(choices.length-1,active+(e.key==="ArrowDown"?1:-1)));mark()}
+   }else if(e.key==="Enter"&&menu.style.display!=="none"){
+    e.preventDefault();if(choices[active])choose(choices[active]);
+   }
+  });
+  input.addEventListener("blur",()=>setTimeout(close,150));
+  box._srRefresh();
+ });
+}
+function validateSearchDropdowns(){
+ for(const box of document.querySelectorAll(".sr-workbench .sr-combo")){
+  const select=box.querySelector("select"),input=box.querySelector(".sr-combo-input");
+  const chosen=select.selectedOptions?.[0]?.value?select.selectedOptions[0].textContent:"";
+  if(input.value.trim()!==chosen.trim()){
+   input.focus();throw Error("Choose a matching approved master option from the search results before saving.");
+  }
+ }
+}
+document.addEventListener("pointerdown",e=>{if(!e.target.closest?.(".sr-combo"))closeSearchDropdowns()});
+document.addEventListener("scroll",e=>{if(!e.target.closest?.(".sr-combo-menu"))closeSearchDropdowns()},true);
+
 function cardDate(){
  return model.card?.operatingDate||state.ctx?.operatingDate||new Date().toISOString().slice(0,10);
 }
@@ -97,6 +193,7 @@ async function changeDate(){
  for(const select of document.querySelectorAll("[data-sr-driver]")){
   const current=select.value;
   select.innerHTML=driverOptions(result.error||model.drivers.some(x=>x.id===current)?current:"");
+  refreshSearchDropdown(select);
  }
  if(assets){
   [model.masters.vehicles,model.masters.vehiclesOb,model.masters.excavators]=assets;
@@ -106,6 +203,7 @@ async function changeDate(){
   const current=select.value;
   select.innerHTML=retainedOptions(items,!assets||items.some(x=>x.id===current)?current:"",
    assets?"Select from Masters":"Equipment Master could not be loaded");
+  refreshSearchDropdown(select);
  }
  await Promise.all([history(),loadSummary()]);
 }
@@ -158,6 +256,7 @@ function changePoints(i){
  const selected=matches.some(x=>x.routeId===previous)?previous:
   patch&&point&&matches.length===1&&matches[0].routeId!==defaultRoute?matches[0].routeId:"";
  select.innerHTML=routeOptions("OB",selected,patch,point,false);
+ refreshSearchDropdown(select);
  updateTotal();
 }
 function headerHtml(){
@@ -247,9 +346,10 @@ function values(){
 }
 function notice(message,error=false){const n=h("srNotice");if(n){n.textContent=message;n.className=error?"sr-error":"sr-success"}else if(window.toast)toast(message,error?"bad":"good")}
 function sync(){const inputs=values();model.lines=readRows(true);model.pendingHeader=inputs}
-async function renderSelf(){await fetchMasters();const w=h("workspace");if(w){w.innerHTML=screen();await Promise.all([history(),loadSummary()])}}
+async function renderSelf(){await fetchMasters();const w=h("workspace");if(w){w.innerHTML=screen();enhanceSearchDropdowns(w);await Promise.all([history(),loadSummary()])}}
 async function save(silent=false){
  try{
+  validateSearchDropdowns();
   const payload=values();payload.clientKey=model.clientKey||(model.clientKey=newKey());
   if(!payload.lines.length)throw Error("Enter at least one complete Coal/OB source row.");
   let data;
@@ -333,9 +433,10 @@ function updateTotal(){
 }
 function redrawRows(focusIndex){
  h("srRows").innerHTML=model.lines.map(lineHtml).join("");
+ enhanceSearchDropdowns(h("srRows"));
  updateTotal();
  if(focusIndex!==undefined){
-  h((model.kind==="OB"?"srExcavator":"srVehicle")+focusIndex)?.focus();
+  h((model.kind==="OB"?"srExcavator":"srVehicle")+focusIndex)?.closest(".sr-combo")?.querySelector(".sr-combo-input")?.focus();
  }
 }
 function addRow(){
@@ -413,5 +514,5 @@ async function renderKocpShiftRegister(){
 }
 window.renderKocpShiftRegister=renderKocpShiftRegister;
 window.KOCPSR={save:()=>save().catch(()=>{}),submit,verify,reject,history,open,updateTotal,addRow,removeRow,
- copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,afterRender:async()=>{await Promise.all([history(),loadSummary()])}};
+ copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,afterRender:async()=>{enhanceSearchDropdowns(h("workspace"));await Promise.all([history(),loadSummary()])}};
 })();
