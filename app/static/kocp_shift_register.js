@@ -231,20 +231,20 @@ function val(id){return h(id)?.value||""}
 function availableShifts(){return (state.ctx?.shifts||[]).filter(x=>x.active!==false).map(x=>({id:x.shift,label:x.shift+" | "+(x.start||"")+"–"+(x.end||"")}))}
 function lineHtml(line,i){
  if(model.kind==="COAL")return '<tr class="sr-row" data-no="'+i+'"><td>'+(i+1)+'</td>'+
- '<td><select data-sr-asset="vehicles" id="srVehicle'+i+'">'+vehicleOptions("COAL",existing(line,"vehicleId"))+'</select></td>'+
+ '<td><select data-sr-asset="vehicles" aria-label="Vehicle" id="srVehicle'+i+'">'+vehicleOptions("COAL",existing(line,"vehicleId"))+'</select></td>'+
  '<td>'+driverSelect("srDriver"+i,existing(line,"driverId"))+'</td>'+
- '<td><input class="sr-numeric" id="srCount'+i+'" type="number" min="1" max="200" step="1" value="'+esc(existing(line,"tripCount"))+'" oninput="KOCPSR.updateTotal()"></td>'+
- '<td><select id="srLineRoute'+i+'">'+routeOptions("COAL",existing(line,"routeId"))+'</select></td>'+
+ '<td><input class="sr-numeric" aria-label="Trips" id="srCount'+i+'" type="number" min="1" max="200" step="1" value="'+esc(existing(line,"tripCount"))+'" oninput="KOCPSR.updateTotal()"></td>'+
+ '<td><select aria-label="Route / Lead" id="srLineRoute'+i+'">'+routeOptions("COAL",existing(line,"routeId"))+'</select></td>'+
  '<td><button class="sr-small" type="button" onclick="KOCPSR.removeRow('+i+')">Remove</button></td></tr>';
  const patch=pointValue(line,"patchCode","sourceLocationId");
  const point=pointValue(line,"pointCode","destinationLocationId");
  return '<tr class="sr-row" data-no="'+i+'"><td>'+(i+1)+'</td>'+
- '<td><select data-sr-asset="excavators" id="srExcavator'+i+'" onchange="KOCPSR.updateTotal()">'+retainedOptions(model.masters.excavators,existing(line,"excavatorId"),"Select excavator")+'</select></td>'+
+ '<td><select data-sr-asset="excavators" aria-label="Excavator" id="srExcavator'+i+'" onchange="KOCPSR.updateTotal()">'+retainedOptions(model.masters.excavators,existing(line,"excavatorId"),"Select excavator")+'</select></td>'+
  '<td><select id="srPatch'+i+'" aria-label="Loading patch" onchange="KOCPSR.changePoints('+i+')">'+
  locationOptions("PATCH",patch)+'</select></td>'+
  '<td><select id="srPoint'+i+'" aria-label="Unloading point" onchange="KOCPSR.changePoints('+i+')">'+
  locationOptions("UNLOAD_POINT",point)+'</select></td>'+
- '<td><select id="srLineRoute'+i+'" aria-label="Route / Lead">'+
+ '<td><select aria-label="Route / Lead" id="srLineRoute'+i+'">'+
  routeOptions("OB",existing(line,"routeId"),patch,point)+'</select></td>'+
  '<td><input class="sr-numeric" aria-label="Trips" id="srCount'+i+'" type="number" min="1" max="200" step="1" value="'+esc(existing(line,"tripCount"))+'" oninput="KOCPSR.updateTotal()"></td>'+
  '<td><button class="sr-small" type="button" onclick="KOCPSR.removeRow('+i+')">Remove</button></td></tr>';
@@ -286,7 +286,7 @@ function screen(){
  return '<section class="sr-workbench"><div class="sr-heading"><div><h1>Shift Production Register</h1>'+
  '</div>'+
  '<div class="sr-badge">Status: '+esc(status)+'</div></div>'+
- '<div class="sr-tabs"><button type="button" class="'+(ob?'':'active')+'" onclick="KOCPSR.switchKind(\'COAL\')">Coal Register</button>'+
+ '<div class="sr-tabs" role="group" aria-label="Register type"><button type="button" class="'+(ob?'':'active')+'" onclick="KOCPSR.switchKind(\'COAL\')">Coal Register</button>'+
  '<button type="button" class="'+(ob?'active':'')+'" onclick="KOCPSR.switchKind(\'OB\')">OB Trip Cards</button></div>'+
  '<div class="sr-card"><h2>'+(ob?'Tipper Card':'Coal Shift Sheet')+'</h2>'+
  headerHtml()+'</div>'+
@@ -295,12 +295,12 @@ function screen(){
  '<button class="sr-small" type="button" onclick="KOCPSR.addRow()">Add row</button>'+
  '<button class="sr-small" type="button" onclick="KOCPSR.copyDown()">Copy down</button></div></div>'+
  '<div class="sr-scroll sr-entry-scroll" tabindex="0" aria-label="Trip entry rows"><table class="sr-grid"><thead><tr>'+(ob?
- '<th>#</th><th>Excavator</th><th>Patch</th><th>Unloading Point</th><th>Route / Lead</th><th>Trips</th><th></th>':
- '<th>#</th><th>Vehicle</th><th>Driver</th><th>Trip count</th><th>Route / Lead (override)</th><th></th>')+
+ '<th>#</th><th>Excavator</th><th>Patch</th><th>Unloading Point</th><th>Route / Lead</th><th class="sr-trip-column">Trips</th><th>Action</th>':
+ '<th>#</th><th>Vehicle</th><th>Driver</th><th class="sr-trip-column">Trips</th><th>Route / Lead (override)</th><th>Action</th>')+
  '</tr></thead><tbody id="srRows">'+lines.map((x,i)=>lineHtml(x,i)).join("")+'</tbody></table></div>'+
  '</div>'+
- '<div class="sr-card">'+
- '<div class="sr-actions"><button class="sr-btn" type="button" onclick="KOCPSR.save()">Save Draft</button>'+
+ '<div class="sr-card sr-action-card">'+
+ '<div class="sr-actions"><button class="sr-btn sr-secondary" type="button" onclick="KOCPSR.save()">Save Draft</button>'+
  '<button class="sr-btn" type="button" onclick="KOCPSR.submit()">Submit for Check</button>'+
  '<button class="sr-small" type="button" onclick="KOCPSR.newCard()">New '+model.kind+' Sheet</button>'+
  ((status==="SUBMITTED")?'<button class="sr-btn" type="button" onclick="KOCPSR.verify()">MIS Verify & Post</button>'+
@@ -516,3 +516,4 @@ window.renderKocpShiftRegister=renderKocpShiftRegister;
 window.KOCPSR={save:()=>save().catch(()=>{}),submit,verify,reject,history,open,updateTotal,addRow,removeRow,
  copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,afterRender:async()=>{enhanceSearchDropdowns(h("workspace"));await Promise.all([history(),loadSummary()])}};
 })();
+
