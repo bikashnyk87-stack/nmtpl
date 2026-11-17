@@ -63,10 +63,10 @@ function paperInput(id,value,label,type="text",attrs=""){return '<label class="s
 function selectBox(id,label,html){return '<label class="sr-field"><span>'+esc(label)+'</span><select id="'+id+'">'+html+'</select></label>'}
 function driverOptions(value){
  return retainedOptions(model.drivers,value,model.driverError||(
-  model.drivers.length?"Select driver / employee code":"No eligible KOCP drivers for this date"));
+  model.drivers.length?"Driver optional — select from Masters":"Driver optional — leave blank if not available"));
 }
 function driverSelect(id,value){
- return '<select id="'+id+'" data-sr-driver aria-label="Driver">'+driverOptions(value)+'</select>';
+ return '<select id="'+id+'" data-sr-driver aria-label="Driver (optional)">'+driverOptions(value)+'</select>';
 }
 
 /* Type-to-search controls retain existing <select> IDs and master-backed values. */
@@ -268,7 +268,7 @@ function headerHtml(){
  selectBox("srShift","Shift",opts(availableShifts(),shift,"Choose shift"))+
  selectBox("srMaterial","Material",materialOptions(model.kind,c.materialId||""))+
  (ob?'<label class="sr-field"><span>Tipper</span><select id="srHeaderVehicle" data-sr-asset="vehiclesOb">'+vehicleOptions("OB",c.vehicleId||"")+'</select></label>'+
- '<label class="sr-field"><span>Driver</span>'+driverSelect("srHeaderDriver",c.driverId||"")+'</label>':
+ '<label class="sr-field"><span>Driver (optional)</span>'+driverSelect("srHeaderDriver",c.driverId||"")+'</label>':
  selectBox("srRelay","Relay",codeOptions("RELAY",c.relayCode||"")))+
  paperInput("srDeclared",c.declaredTotal??"","Paper trip total","number",'min="0" step="1"')+
  '</div><details class="sr-card-details" '+(ob?'open':'')+'><summary>'+(ob?'Tipper HMR / KMR & paper reference':'Paper reference & route')+'</summary><div class="sr-head">'+
@@ -360,7 +360,7 @@ function screen(){
  '<button class="sr-small" type="button" onclick="KOCPSR.copyDown()">Copy down</button></div></div>'+
  '<div class="sr-scroll sr-entry-scroll" tabindex="0" aria-label="Trip entry rows"><table class="sr-grid"><thead><tr>'+(ob?
  '<th>#</th><th>Excavator</th><th>Patch</th><th>Unloading Point</th><th>Route / Lead</th><th class="sr-trip-column">Trips</th><th>Action</th>':
- '<th>#</th><th>Vehicle</th><th>Driver</th><th class="sr-trip-column">Trips</th><th>Route / Lead (override)</th><th>Action</th>')+
+ '<th>#</th><th>Vehicle</th><th>Driver (optional)</th><th class="sr-trip-column">Trips</th><th>Route / Lead (override)</th><th>Action</th>')+
  '</tr></thead><tbody id="srRows">'+lines.map((x,i)=>lineHtml(x,i)).join("")+'</tbody></table></div>'+
  '</div>'+
  meterPanel()+

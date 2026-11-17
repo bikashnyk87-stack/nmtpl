@@ -50,6 +50,14 @@ def test_ob_rejects_invalid_trip_counts(count):
     assert error.value.status_code == 422
 
 
+def test_driver_is_optional_on_coal_source_lines():
+    without = validate_register_lines("COAL", [{"vehicleId": "V1", "tripCount": 5}])[0]
+    assert without["driverId"] == ""
+    assert validate_register_lines("COAL", [{"vehicleId": "V1", "driverId": None, "tripCount": 5}])[0]["driverId"] == ""
+    with pytest.raises(HTTPException):
+        validate_register_lines("COAL", [{"vehicleId": "", "tripCount": 5}])
+
+
 def test_coal_count_requires_positive_integer():
     for value in ["4.5", -1, 0, "abc", True]:
         with pytest.raises(HTTPException):
@@ -143,6 +151,7 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, pape
         db.add_all([
             Site(site_id="KOCP", site_name="KOCP", short_name="KOCP"),
             SiteShift(site_id="KOCP", shift="A", start_time=time(5), end_time=time(13), scheduled_hours=8),
+            SiteShift(site_id="KOCP", shift="B", start_time=time(13), end_time=time(21), scheduled_hours=8),
             Person(employee_id="D1", name="Test Driver", role="TIPPER DRIVER"),
             Person(employee_id="D2", name="Future Driver", role="DRIVER"),
             Person(employee_id="D3", name="Test Helper", role="HELPER"),
@@ -206,11 +215,33 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, pape
             assert registers.decide_card(card_id, decision, None, db)["idempotent"]
             assert all(item["cardId"] != card_id for item in registers.review_queue(None, db)["items"])
 
+        # Fully verify driver-less Coal and OB records on a distinct shift.
+        for kind, count in [("COAL", 6), ("OB", 9)]:
+            user.login_id = "ENTRY"
+            payload = {"clientKey": f"driver-optional-{kind}", "kind": kind,
+                       "operatingDate": day.isoformat(), "shift": "B",
+                       "materialId": kind, "routeId": kind, "declaredTotal": count}
+            if kind == "OB":
+                points = ({"patchCode": "P", "pointCode": "U"} if paper_codes else
+                          {"sourceLocationId": "KOCP:FACE", "destinationLocationId": "KOCP:DUMP"})
+                payload.update(vehicleId="T1", driverId="", lines=[
+                    {"excavatorId": "E1", "tripCount": count, **points}])
+            else:
+                payload["lines"] = [{"vehicleId": "T1", "tripCount": count}]
+            draft = registers.create_card(payload, None, db)
+            assert draft["driverId"] == ""
+            assert draft["lines"][0]["driverId"] == ""
+            submitted = registers.submit_card(draft["cardId"], {"expectedVersion": draft["version"]}, None, db)
+            user.login_id = "CHECKER"
+            outcome = registers.decide_card(draft["cardId"], {"action": "VERIFY",
+                                                  "expectedVersion": submitted["version"]}, None, db)
+            assert outcome["status"] == "VERIFIED"
         trips = db.scalars(select(SiteTrip)).all()
-        assert sorted(row.trip_count for row in trips) == [5, 8]
+        assert sorted(row.trip_count for row in trips) == [5, 6, 8, 9]
+        assert sorted(row.trip_count for row in trips if row.driver_id is None) == [6, 9]
         posted_lines = db.scalars(select(SiteShiftTripCardLine)).all()
         assert {line.trip_id for line in posted_lines} == {trip.trip_id for trip in trips}
-        assert {row.driver_id for row in trips} == {"D1"}
+        assert {row.driver_id for row in trips} == {"D1", None}
         assert {row.source_location_id for row in trips} == {"KOCP:FACE"}
         assert {row.destination_location_id for row in trips} == {"KOCP:DUMP"}
 

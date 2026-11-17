@@ -106,8 +106,8 @@ def validate_register_lines(kind, lines):
             count = int(value)
             if not (1 <= count <= 200):
                 raise HTTPException(422, f"Coal line {number}: trip count must be 1–200.")
-            if not vehicle or not driver:
-                raise HTTPException(422, f"Coal line {number}: vehicle and driver are required.")
+            if not vehicle:
+                raise HTTPException(422, f"Coal line {number}: vehicle is required.")
             normalized.append({"lineNo": number, "vehicleId": vehicle,
                                "driverId": driver, "tripCount": count,
                                "routeId": _txt(raw.get("routeId"), 80)})
@@ -286,7 +286,8 @@ def _write_fields(db, card, payload, *, initial=False):
         route = _route(db, line["routeId"], kind) if line.get("routeId") else header_route
         if kind == "COAL":
             _asset(db, line["vehicleId"], operating_day, "COAL", "TRANSPORT")
-            _driver(db, line["driverId"], operating_day)
+            if line["driverId"]:
+                _driver(db, line["driverId"], operating_day)
         else:
             _asset(db, line["excavatorId"], operating_day, "OB", "LOADING")
             patch, unload, source, destination = _ob_locations(
@@ -615,7 +616,8 @@ def submit_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
     _material(db, row.material_id, row.kind)
     if row.kind == "OB":
         _asset(db, row.vehicle_id, row.operating_date, "OB", "TRANSPORT")
-        _driver(db, row.driver_id, row.operating_date)
+        if row.driver_id:
+            _driver(db, row.driver_id, row.operating_date)
     if row.relay_source:
         _code(db, "RELAY", row.relay_source)
     for line in lines:
@@ -625,7 +627,8 @@ def submit_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
                           line.source_location_id, line.destination_location_id)
             _asset(db, line.excavator_id, row.operating_date, "OB", "LOADING")
         else:
-            _driver(db, line.driver_id, row.operating_date)
+            if line.driver_id:
+                _driver(db, line.driver_id, row.operating_date)
             _asset(db, line.vehicle_id, row.operating_date, "COAL", "TRANSPORT")
     # On repeat submissions from a different browser, detect the same source
     # reference or identical paper content before allowing MIS review.
@@ -707,7 +710,8 @@ def decide_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
         row.relay_code_id=relay.code_id
     if row.kind=="OB":
         vehicle=_asset(db, row.vehicle_id, row.operating_date, "OB", "TRANSPORT")
-        _driver(db, row.driver_id, row.operating_date)
+        if row.driver_id:
+            _driver(db, row.driver_id, row.operating_date)
         if row.opening_hmr is not None and row.closing_hmr is not None:
             _save_meter(db,user,row,"HMR",row.opening_hmr,row.closing_hmr)
         if row.opening_kmr is not None and row.closing_kmr is not None:
@@ -742,7 +746,8 @@ def decide_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
         vehicle_id=line.vehicle_id if row.kind=="COAL" else row.vehicle_id
         driver_id=line.driver_id if row.kind=="COAL" else row.driver_id
         eq=_asset(db, vehicle_id, row.operating_date, row.kind, "TRANSPORT")
-        _driver(db, driver_id, row.operating_date)
+        if driver_id:
+            _driver(db, driver_id, row.operating_date)
         excavator_id=line.excavator_id if row.kind=="OB" else None
         if excavator_id:
             _asset(db, excavator_id, row.operating_date, "OB", "LOADING")
