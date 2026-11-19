@@ -160,8 +160,10 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, pape
             PersonSiteAssignment(employee_id="D3", site_id="KOCP", effective_from=day),
             Equipment(machine_id="T1", type="TIPPER", group="COAL OB"),
             Equipment(machine_id="E1", type="EXCAVATOR", group="OB"),
+            Equipment(machine_id="L1", type="LOADER", group="COAL"),
             EquipmentSiteAssignment(machine_id="T1", site_id="KOCP", effective_from=day),
             EquipmentSiteAssignment(machine_id="E1", site_id="KOCP", effective_from=day),
+            EquipmentSiteAssignment(machine_id="L1", site_id="KOCP", effective_from=day),
             SiteLocation(site_location_id="KOCP:FACE", site_id="KOCP", code="FACE", name="Test Face"),
             SiteLocation(site_location_id="KOCP:DUMP", site_id="KOCP", code="DUMP", name="Test Dump"),
             SiteOperationalCode(code_id="KOCP:PATCH:P", site_id="KOCP", code_kind="PATCH",
@@ -191,7 +193,7 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, pape
                                 {"sourceLocationId": "KOCP:FACE", "destinationLocationId": "KOCP:DUMP"})
                 payload.update(vehicleId="T1", driverId="D1", lines=[{"excavatorId": "E1", "tripCount": count, **point_fields}])
             else:
-                payload["lines"] = [{"vehicleId": "T1", "driverId": "D1", "tripCount": count}]
+                payload["lines"] = [{"vehicleId": "T1", "driverId": "D1", "excavatorId": "L1", "tripCount": count}]
             draft = registers.create_card(payload, None, db)
             card_id = draft["cardId"]
             assert registers.create_card(payload, None, db)["idempotent"]
@@ -244,6 +246,34 @@ def test_master_backed_coal_and_ob_save_reopen_submit_and_post(monkeypatch, pape
         assert {row.driver_id for row in trips} == {"D1", None}
         assert {row.source_location_id for row in trips} == {"KOCP:FACE"}
         assert {row.destination_location_id for row in trips} == {"KOCP:DUMP"}
+        # Coal linked loader is retained through verification into the report grain.
+        coal_posted = next(t for t in trips if t.trip_count == 5)
+        assert coal_posted.loading_equipment_id == "L1"
+
+        # Draft/returned deletion keeps an audit trail and cannot remove verified production.
+        from app.site_models import SiteShiftTripCard
+        for kind in ("COAL", "OB"):
+            user.login_id = "ENTRY"
+            payload = {"clientKey": f"cancel-draft-{kind}-NOV26", "kind": kind,
+                       "operatingDate": day.isoformat(), "shift": "A",
+                       "materialId": kind, "routeId": kind, "declaredTotal": 2}
+            if kind == "COAL":
+                payload["lines"] = [{"vehicleId": "T1", "excavatorId": "L1", "tripCount": 2}]
+            else:
+                p = ({"patchCode": "P", "pointCode": "U"} if paper_codes else
+                     {"sourceLocationId": "KOCP:FACE", "destinationLocationId": "KOCP:DUMP"})
+                payload.update(vehicleId="T1", lines=[{"excavatorId":"E1","tripCount":2,**p}])
+            new = registers.create_card(payload, None, db)
+            deleted = registers.cancel_card(new["cardId"],
+                          {"expectedVersion":new["version"],"reason":"Incorrect paper entry"},None,db)
+            assert deleted["status"] == "CANCELLED"
+            assert db.get(SiteShiftTripCard,new["cardId"]).status == "CANCELLED"
+            assert all(x["cardId"]!=new["cardId"] for x in registers.list_cards(None,day,kind,db))
+        with pytest.raises(HTTPException) as locked:
+            registers.cancel_card(coal_posted.source_record_uid.split(":")[0],
+                {"expectedVersion":2,"reason":"Invalid physical card"},None,db)
+        assert locked.value.status_code == 409
+
 
 
 def test_grouped_ob_and_individual_ob_have_same_duplicate_signature():
