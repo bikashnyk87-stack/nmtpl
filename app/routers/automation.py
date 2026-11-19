@@ -284,6 +284,10 @@ WB_WINDOWS = ((5, "C", -1), (13, "A", 0), (21, "B", 0))
 WB_SEARCH_MINUTES = 120
 WB_RETRY_SECONDS = 900
 DESPATCH_RETRY_SECONDS = 900
+# Late approved files can enrich missing WB Time / Permit Qty even after an
+# earlier Date Wise file has created the first E-Pass records. Run at most two
+# additional Gmail checks daily, not a continuous polling loop.
+DESPATCH_LATE_SOURCE_HOURS_IST = (12, 18)
 
 
 def wb_search_window(now: datetime) -> tuple[str, datetime.date, str] | None:
@@ -326,12 +330,15 @@ async def automation_loop():
     WB 05:00-07:00 for prior C, 13:00-15:00 for current A, 21:00-23:00
     for current B. Every 15 min until that shift is confirmed, max two hours.
     Despatch 06:00 onward for previous day's report, every 15 min until
-    that date has E-Pass trips, then no more Despatch scans that day.
+    that date has E-Pass trips. Recheck for later-approved detail reports
+    once after 12:00 and 18:00 IST, including source corrections for earlier
+    dates, with bounded polling instead of endless checks.
     """
     wb_checked: dict[str, float] = {}
     wb_done: set[str] = set()
     dispatch_checked: dict[str, float] = {}
     dispatch_done: set[str] = set()
+    dispatch_late_done: set[str] = set()
     volvo_interval = max(1800, int(os.getenv("VOLVO_POLL_SECONDS", "1800")))
     volvo_due = 0.0
     gmail_missing_logged = False
@@ -347,6 +354,8 @@ async def automation_loop():
         wb_checked = {k:v for k,v in wb_checked.items() if k.startswith(today_key + ":")}
         dispatch_done = {x for x in dispatch_done if x == today_key}
         dispatch_checked = {k:v for k,v in dispatch_checked.items() if k == today_key}
+        dispatch_late_done = {x for x in dispatch_late_done
+                              if x.startswith(today_key + ":")}
         window = wb_search_window(local)
         if window and os.getenv("WB_GMAIL_ENABLED", "true").strip().lower() not in {"0","no","off","false"}:
             key, operating_date, shift = window
@@ -383,6 +392,32 @@ async def automation_loop():
                                 logger.info("Despatch %s imported; stopping today's Gmail scans", report_date)
                     except Exception:
                         logger.exception("Scheduled Despatch Gmail scan failed for %s", report_date)
+
+        # First successful E-Pass import must NOT end automatic enrichment:
+        # late Trip Summary / Date Wise attachments may provide approved
+        # Permit Qty or WB Time absent from the first imported report.
+        # Two capped, idempotent follow-ups daily also find new approved
+        # attachments correcting older dates. They never invent missing data.
+        if (local.hour >= 6 and today_key in dispatch_done
+                and os.getenv("TIOM_DESPATCH_GMAIL_ENABLED", "true").strip().lower()
+                    not in {"0","no","off","false"}):
+            due_hours = [
+                hour for hour in DESPATCH_LATE_SOURCE_HOURS_IST
+                if local.hour >= hour
+                and f"{today_key}:{hour}" not in dispatch_late_done
+            ]
+            if due_hours and _gmail_token_raw():
+                # A late process start performs one consolidated sweep, not
+                # a burst for every historical time slot already passed.
+                dispatch_late_done.update(f"{today_key}:{h}" for h in due_hours)
+                try:
+                    await asyncio.to_thread(despatch_gmail_once)
+                    logger.info(
+                        "Despatch late-source enrichment sweep complete for %s at %02d IST",
+                        today_key, local.hour,
+                    )
+                except Exception:
+                    logger.exception("Despatch late-source sweep failed for %s", today_key)
 
         if monotonic >= volvo_due:
             volvo_due = monotonic + volvo_interval
