@@ -194,6 +194,7 @@ def apply_verified_source_fields(db, days, month):
     if not set(incoming).issubset(saved):
         raise ValueError("Live ledger missing validated source E-Passes: "
                          + str(len(set(incoming) - set(saved))))
+    existing_time_differences = []
     for key, source in incoming.items():
         row = saved[key]
         if not _match(source, row):
@@ -201,7 +202,9 @@ def apply_verified_source_fields(db, days, month):
         prior = str(row.dispatch_time or "").strip()
         newer = str(source["dispatch_time"]).strip()
         if prior and prior != newer:
-            raise ValueError("Existing WB Time conflicts for " + key)
+            # Respect previously corrected MIS fields. A different nonblank
+            # value is flagged for manual verification, never overwritten.
+            existing_time_differences.append(key)
 
     # A separate MIS monthly report supplies full-permit quantities. Never
     # insert a new permit or infer the limit from summed dispatch tonnage.
@@ -215,6 +218,7 @@ def apply_verified_source_fields(db, days, month):
             group_quantities[source["permit_no"].upper().strip()].add(value)
     if any(len(amounts) != 1 for amounts in group_quantities.values()):
         raise ValueError("Monthly permit quantity changed within a single permit")
+    existing_qty_differences = []
     for key, source in monthly.items():
         row = saved.get(key)
         if not row or not _match(source, row):
@@ -224,7 +228,7 @@ def apply_verified_source_fields(db, days, month):
             raise ValueError("Negative permit qty in approved report " + key)
         prior = Decimal(str(row.permit_qty or 0))
         if source_qty > 0 and prior > 0 and prior != source_qty:
-            raise ValueError("Existing permit quantity conflicts with report for " + key)
+            existing_qty_differences.append(key)
 
     neighbor = _approved_neighbor_quantity(db, month)
     qty_updates = 0
@@ -234,6 +238,8 @@ def apply_verified_source_fields(db, days, month):
     for key, source in monthly.items():
         row = saved[key]
         value = Decimal(str(source.get("permit_qty") or "0"))
+        if key in existing_qty_differences:
+            value = Decimal(str(row.permit_qty))
         if value <= 0:
             value = neighbor.get(source["permit_no"].upper().strip(),Decimal("0"))
         if value <= 0 and Decimal(str(row.permit_qty or "0")) > 0:
@@ -256,10 +262,12 @@ def apply_verified_source_fields(db, days, month):
 
     _audit(db, "WB_TIME_SOURCE_REPAIR", "2026-11-01..04", {
         "matched": len(incoming),"filled": time_updates,
+        "preexistingDifferentTimes": len(existing_time_differences),
         "originalAttachments": [s[1] for s in SOURCE_FILES]
     })
     _audit(db, "PERMIT_QTY_SOURCE_REPAIR", "2026-11-03", {
         "matched": len(month), "filled": qty_updates,
+        "preexistingDifferentQuantities": len(existing_qty_differences),
         "verifiedPermitValues": {k: sorted(str(v) for v in s)
                                 for k,s in qty_permit_values.items()},
         "unresolvedPermitNumbers": sorted(skipped_permits),
@@ -267,7 +275,9 @@ def apply_verified_source_fields(db, days, month):
     })
     db.commit()
     return {"matchedWb":len(incoming),"wbFilled":time_updates,
+            "existingTimeDifferences":len(existing_time_differences),
             "matchedQty":len(month),"qtyFilled":qty_updates,
+            "existingQtyDifferences":len(existing_qty_differences),
             "unresolved":sorted(skipped_permits)}
 
 
