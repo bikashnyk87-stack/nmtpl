@@ -497,14 +497,33 @@ async def lifespan(app):
 
     gc.collect()
 
+    # Explicit, source-verified one-time correction requested for TIOM Despatch
+    # 1-4 November WB times and 3-Nov permit quantities. Read only from the
+    # authorised MIS mailbox; validate every E-Pass against the live database.
+    # Run after startup so Gmail latency cannot delay the portal's /health.
+    async def _repair_despatch_nov_source():
+        try:
+            from app.services.tiom_despatch_nov_source_repair import repair_nov_despatch_fields
+            result = await asyncio.to_thread(repair_nov_despatch_fields)
+            print("TIOM_DESPATCH_NOV_REPAIR_OK=" +
+                  json.dumps(result,sort_keys=True),flush=True)
+        except Exception as exc:
+            print("TIOM_DESPATCH_NOV_REPAIR_FAILED=" +
+                  type(exc).__name__ + ": " + str(exc)[:280],flush=True)
 
+    historical_despatch_task = asyncio.create_task(
+        _repair_despatch_nov_source(), name="despatch-nov-verified-source-repair"
+    )
     attendance_task = asyncio.create_task(automation_loop(), name="attendance-auto-close")
     cloud_automation_task = asyncio.create_task(automation.automation_loop(), name="cloud-integrations")
     try:
         yield
     finally:
+        historical_despatch_task.cancel()
         attendance_task.cancel()
         cloud_automation_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await historical_despatch_task
         with suppress(asyncio.CancelledError):
             await attendance_task
         with suppress(asyncio.CancelledError):
