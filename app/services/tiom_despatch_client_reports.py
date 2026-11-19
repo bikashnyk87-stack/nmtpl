@@ -191,6 +191,12 @@ def _finish_client_format(wb, report_type):
         ws.sheet_format.defaultRowHeight=24
         last=ws.max_column
         if report_type == "trip":
+            if ws.title == "WB Date-Time":
+                table(ws,3,max(3,ws.max_row),1,8,headers=(3,))
+                title(ws,1,1,8)
+                ws.row_dimensions[2].height=42
+                ws.row_dimensions[3].height=40
+                continue
             table(ws,2,max(3,ws.max_row),1,16,headers=(2,))
             ws.row_dimensions[2].height=42
             table(ws,1,1,13,16,totals=(1,))
@@ -283,13 +289,20 @@ def _material_counts(trips):
 
 
 def _trip_row(x, index):
-    dtext = (x.report_date.strftime("%b %e %Y") if hasattr(x.report_date,"strftime")
-             else str(x.report_date))
+    # Preserve the E-Pass report date as a real Excel date, rather than
+    # a text value that cannot be sorted/filtered as a date.
+    report_day = x.report_date
+    if isinstance(report_day, datetime):
+        excel_day = report_day
+    elif isinstance(report_day, date):
+        excel_day = datetime(report_day.year, report_day.month, report_day.day)
+    else:
+        excel_day = datetime.fromisoformat(str(report_day)[:10])
     return (
         index, x.permit_no, float(x.permit_qty) if x.permit_qty and x.permit_qty > 0 else None, x.buyer,
         x.epass_no, x.vehicle_no, x.transporter, x.destination,
         x.material_grade, x.stack_no, x.consignee,
-        float(x.tare_mt), float(x.gross_mt), float(x.net_mt), dtext.strip(),
+        float(x.tare_mt), float(x.gross_mt), float(x.net_mt), excel_day,
         x.dispatch_time or None,
     )
 
@@ -328,12 +341,64 @@ def _detail_page(ws, trips, cancellation=False):
                 c.fill = STRIPE
             if c.column in (3, 12, 13, 14):
                 c.number_format=NUM
+            elif c.column == 15:
+                c.number_format=DATE
     ws.print_title_rows="1:2"
     ws.auto_filter.ref=f"A2:P{max(3,len(trips)+2)}"
     ws.print_area=f"A1:P{max(5,len(trips)+2)}"
 
 
+def _build_wb_date_time_register(wb, active, to_date):
+    """Quick front-facing WB time view. Original client A:P layout unchanged.
+
+    report_date is the imported E-Pass reporting date, not a separately
+    verified physical weighbridge event date. WB Time is copied directly
+    from the validated source. Never substitute an estimated time.
+    """
+    ws = wb.create_sheet("WB Date-Time", 0)
+    _fmt(ws, 8, freeze_at="C4")
+    ws.sheet_view.zoomScale = 90
+    ws.merge_cells("A1:H1")
+    ws["A1"] = "DESPATCH / E-PASS DATE & RECORDED WB TIME — " + to_date.strftime("%b %Y").upper()
+    ws.merge_cells("A2:H2")
+    missing = sum(not str(getattr(x, "dispatch_time", "") or "").strip() for x in active)
+    ws["A2"] = (
+        f"{len(active)} active E-Passes · {len(active)-missing} with recorded WB Time · "
+        f"{missing} missing in imported source. Date = E-Pass report date; "
+        "do not treat it as an independently verified WB date."
+    )
+    headings = (
+        "E-Pass Date", "WB Time (source)", "E-Pass No.", "Permit No.",
+        "Vehicle No.", "Net MT", "Transporter", "WB Time Status",
+    )
+    for col_num, heading in enumerate(headings, 1):
+        _style(ws, 3, col_num, heading, header=True)
+    for i, width in enumerate((19, 26, 26, 20, 20, 16, 46, 23), 1):
+        ws.column_dimensions[col(i)].width = width
+    ws.row_dimensions[2].height = 40
+    ws.row_dimensions[3].height = 40
+    # Latest dates first: avoids showing an all-blank WB Time page for
+    # early-month sources which genuinely did not contain WB Time.
+    for trip in sorted(active, key=lambda x:(x.report_date, x.epass_no), reverse=True):
+        report_day = trip.report_date
+        clock = str(getattr(trip, "dispatch_time", "") or "").strip()
+        ws.append((
+            datetime(report_day.year, report_day.month, report_day.day),
+            clock or None,
+            trip.epass_no, trip.permit_no, trip.vehicle_no,
+            float(trip.net_mt), trip.transporter,
+            "RECORDED" if clock else "NOT IN SOURCE",
+        ))
+        ws.cell(ws.max_row, 1).number_format = DATE
+        ws.cell(ws.max_row, 6).number_format = NUM
+    ws.print_title_rows = "1:3"
+    ws.auto_filter.ref = f"A3:H{max(4,ws.max_row)}"
+    ws.print_area = f"A1:H{max(4,ws.max_row)}"
+    return ws
+
+
 def _build_trip(wb,active,cancelled,from_date,to_date):
+    _build_wb_date_time_register(wb, active, to_date)
     per_day=_groups(active)
     for d in _days(from_date,to_date):
         ws=wb.create_sheet(d.strftime("%d.%m.%y"))
