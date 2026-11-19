@@ -332,9 +332,16 @@ async function saveCoalCount(i){
       (input&&input.value.trim()!==select.selectedOptions[0].textContent.trim()))
      throw Error("Choose a machine from Equipment Masters.");
   }
+  let reason="";
+  if(old&&Number(value)!==Number(old.loadedTrips)){
+   const entered=window.prompt("Reason for changing this machine's loaded trips:");
+   if(entered===null)return;
+   reason=entered.trim();
+   if(reason.length<5)throw Error("A correction reason of at least 5 characters is required.");
+  }
   const res=await api(PREFIX+"/coal-loading-counts",{method:"POST",
    headers:{"Content-Type":"application/json"},
-   body:JSON.stringify({operatingDate:day,shift,rows:[{
+   body:JSON.stringify({operatingDate:day,shift,reason,rows:[{
        machineId,loadedTrips:value,expectedVersion:old?.version??null
    }]})});
   if(!old){h("srCoalNewMachine").value="";refreshSearchDropdown(h("srCoalNewMachine"));h("srCoalNewTrips").value="";}
