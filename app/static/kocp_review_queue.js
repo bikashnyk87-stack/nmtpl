@@ -84,11 +84,11 @@ function detailHtml(card){
  const body=(card.lines||[]).map(l=>'<tr><td>'+esc(l.lineNo)+'</td>'+
  '<td>'+esc(isOb?(l.excavatorLabel||l.excavatorId):(l.vehicleLabel||l.vehicleId))+'</td>'+
  '<td>'+esc(isOb?(l.patchLabel||l.patchCode||l.sourceLocationName||l.sourceLocationId):(l.driverName||l.driverId))+'</td>'+
- '<td>'+esc(isOb?(l.pointLabel||l.pointCode||l.destinationLocationName||l.destinationLocationId):"—")+'</td>'+
+ '<td>'+esc(isOb?(l.pointLabel||l.pointCode||l.destinationLocationName||l.destinationLocationId):(l.excavatorLabel||l.excavatorId||"—"))+'</td>'+
  '<td>'+esc(l.routeName||l.routeId||card.routeName||card.routeId||"—")+'</td><td><b>'+Number(l.tripCount||0)+'</b></td></tr>').join("");
  return head+'<div class="sr-q-line-scroll"><table class="sr-q-line-table"><thead><tr><th>#</th><th>'+
  (isOb?"Excavator":"Vehicle")+'</th><th>'+(isOb?"Patch":"Driver")+
- '</th><th>Unloading point</th><th>Route / lead</th><th>Trips</th></tr></thead>'+
+ '</th><th>'+(isOb?'Unloading point':'Loader / Excavator')+'</th><th>Route / lead</th><th>Trips</th></tr></thead>'+
  '<tbody>'+body+'</tbody></table></div>';
 }
 function update(){
