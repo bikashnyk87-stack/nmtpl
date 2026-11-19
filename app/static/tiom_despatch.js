@@ -280,6 +280,7 @@ window.tiomDDPanel=async function(which){
        '<span>Reporting date: '+h(v('dd_to'))+' · Client submission next day</span></div>'+
        [['trip','Trip Summary · Daily, Cumulative, Cancellation'],['transporter','Transporter-wise Dispatch · FTD / FTM'],['material','Material-wise Dispatch · Date & Total'],['destination','Destination-wise · Buyers, Trips, Quantity'],['despatch','Captive / Non-captive · Date & Cumulative']].map(x=>
        '<div class="dd-report"><strong>'+x[1]+'</strong><a class="btn primary small" href="#" target="_blank" rel="noopener noreferrer" onclick="return tiomDDNativeLink(this,\''+x[0]+'\')">Download Client XLSX</a></div>').join('')+
+       '<p class="dd-note"><b>Trip Summary WB Date & Time:</b> Open the first sheet, <b>WB Date-Time</b>, to see E-Pass date and the recorded WB time beside each trip. The original daily and cumulative sheets still show Date (column O) and WB Time (column P). A blank WB Time means the imported source did not contain it.</p>'+
        '<p class="dd-note">If a remaining source field needs verification, use Open in MIS Permit Entry above. Five Reports does not accept duplicate classifications.</p></section>';
     } else {
       const users=await api('senders');last.senders=users;
