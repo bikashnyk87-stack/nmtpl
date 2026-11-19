@@ -187,7 +187,7 @@ def apply_verified_source_fields(db, days, month):
         x.epass_no.upper().strip(): x
         for x in db.scalars(select(DespatchTrip).where(
             DespatchTrip.report_date.between(date(2026, 11, 1),date(2026, 11, 4))
-        ))
+        ).with_for_update())
     }
     if len(incoming) != 1516:
         raise ValueError("Source count not 1,516")
@@ -206,6 +206,15 @@ def apply_verified_source_fields(db, days, month):
     # A separate MIS monthly report supplies full-permit quantities. Never
     # insert a new permit or infer the limit from summed dispatch tonnage.
     monthly = {r["epass_no"].upper().strip(): r for r in month}
+    if len(monthly) != 475:
+        raise ValueError("Duplicate 03-Nov monthly E-Pass")
+    group_quantities = defaultdict(set)
+    for source in month:
+        value = Decimal(str(source.get("permit_qty") or "0"))
+        if value > 0:
+            group_quantities[source["permit_no"].upper().strip()].add(value)
+    if any(len(amounts) != 1 for amounts in group_quantities.values()):
+        raise ValueError("Monthly permit quantity changed within a single permit")
     for key, source in monthly.items():
         row = saved.get(key)
         if not row or not _match(source, row):
@@ -227,6 +236,10 @@ def apply_verified_source_fields(db, days, month):
         value = Decimal(str(source.get("permit_qty") or "0"))
         if value <= 0:
             value = neighbor.get(source["permit_no"].upper().strip(),Decimal("0"))
+        if value <= 0 and Decimal(str(row.permit_qty or "0")) > 0:
+            # Keep an existing approved row value rather than treating that
+            # permit as unresolved on an incomplete historical source.
+            value = Decimal(str(row.permit_qty))
         if value > 0:
             qty_permit_values[row.permit_no.upper()].add(value)
         else:
