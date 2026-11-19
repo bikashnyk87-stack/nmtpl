@@ -51,7 +51,8 @@ async def lifespan(app):
     from sqlalchemy import inspect as sa_inspect
     inspected = sa_inspect(engine)
     kocp_requirements = {
-        "site_shift_trip_card", "site_shift_trip_card_line", "site_operational_code"
+        "site_shift_trip_card", "site_shift_trip_card_line", "site_operational_code",
+        "site_coal_loading_count"
     }
     present = {name for name in kocp_requirements if inspected.has_table(name)}
     trip_columns = {
@@ -70,11 +71,15 @@ async def lifespan(app):
         current_trip_count = dbconn.exec_driver_sql(
             "SELECT COUNT(*) FROM site_trip WHERE site_id = 'KOCP'"
         ).scalar_one()
+        coal_loading_count = dbconn.exec_driver_sql(
+            "SELECT COUNT(*) FROM site_coal_loading_count WHERE site_id = 'KOCP'"
+        ).scalar_one()
     print(
         "KOCP_SHIFT_REGISTER_SCHEMA_OK backend=" + str(engine.url.get_backend_name())
         + " db_name=" + str(engine.url.database)
         + " card_rows=" + str(current_card_count)
-        + " kocp_trip_rows=" + str(current_trip_count),
+        + " kocp_trip_rows=" + str(current_trip_count)
+        + " coal_loading_rows=" + str(coal_loading_count),
         flush=True,
     )
     create_maintenance_tables(engine)
