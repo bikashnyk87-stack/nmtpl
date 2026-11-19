@@ -240,10 +240,19 @@ async function renderKocpPointReport(from,to){
       '<td>'+fmt(x.pendingQtyTrips||0)+'</td></tr>'))+
     (equipmentRows.length>250?'<p class="simple-note">Showing 250 groups; download Excel for all entries.</p>':''),
     equipmentRows.length+' equipment/tipper groups');
-  const billings=data.certifiedBilling||[],monthly=data.monthlyFactors||[];
+  const surveys=data.mclCertifiedEntries||[],billings=data.certifiedBilling||[],monthly=data.monthlyFactors||[];
   const qtyPanel=panel('MCL Quantity — Daily Production vs Certified Billing',
     '<p class="simple-note">Operational quantity is based on posted trips and approved daily rules. Certified monthly quantities remain separate for billing.</p>'+
     '<p class="simple-note"><b>Coal operational: '+fmt(data.totals.COAL.quantity,3)+' MT</b> · <b>OB operational: '+fmt(data.totals.OB.quantity,3)+' CuM</b> · '+fmt(data.pendingOperationalTrips||0)+' trips awaiting approved daily factor.</p>'+
+    '<h4>MCL Certified Quantity Entries</h4>'+
+    (surveys.length?recentTable(['Period','Material','Certified MT','Certified CuM','Status','Reference','Approved by'],
+       surveys.map(v=>'<tr><td>'+esc(v.periodStart)+' to '+esc(v.periodEnd)+'</td>'+
+       '<td>'+esc(v.material||'—')+'</td><td>'+(v.certifiedMt===null?'—':fmt(v.certifiedMt,3))+'</td>'+
+       '<td>'+(v.certifiedCum===null?'—':fmt(v.certifiedCum,3))+'</td>'+
+       '<td>'+esc(v.status)+'</td><td>'+esc(v.reference||'—')+'</td>'+
+       '<td>'+esc(v.approvedBy||'—')+'</td></tr>')):
+       '<p class="simple-note">No MCL certified quantity entry for this date range.</p>')+
+    '<h4>Final MCL Billing Reconciliation</h4>'+
     (billings.length?recentTable(['Period','Material','Status','Certified MT','Certified CuM','Billable MT','Billable CuM'],
       billings.map(b=>'<tr><td>'+esc(b.periodStart)+' to '+esc(b.periodEnd)+'</td>'+
       '<td>'+esc(b.material||'—')+'</td><td>'+esc(b.status)+'</td>'+
