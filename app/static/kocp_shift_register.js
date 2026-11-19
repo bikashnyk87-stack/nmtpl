@@ -4,7 +4,7 @@
 (function(){
 "use strict";
 const PREFIX="/api/KOCP/shift-register";
-const model={kind:"COAL",card:null,clientKey:null,lines:[],masters:{COAL:[],OB:[],codes:[],vehicles:[],excavators:[],loadingCoal:[],materials:[],locations:[]},drivers:[],driverError:""};
+const model={kind:"COAL",card:null,clientKey:null,lines:[],masters:{COAL:[],OB:[],codes:[],vehicles:[],excavators:[],loadingCoal:[],materials:[],locations:[]},drivers:[],driverError:"",coalCounts:{rows:[],totals:{},unreportedMachines:[]}};
 function enc(v){return encodeURIComponent(String(v||""))}
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function newKey(){return (window.crypto?.randomUUID?.()||String(Date.now())+"-"+Math.random()).slice(0,120)}
@@ -162,7 +162,7 @@ function validateSearchDropdowns(){
  }
 }
 document.addEventListener("pointerdown",e=>{if(!e.target.closest?.(".sr-combo"))closeSearchDropdowns()});
-document.addEventListener("change",e=>{if(e.target?.id==="srShift")loadMeterRows()});
+document.addEventListener("change",e=>{if(e.target?.id==="srShift"){loadMeterRows();loadCoalCounts()}});
 document.addEventListener("scroll",e=>{if(!e.target.closest?.(".sr-combo-menu"))closeSearchDropdowns()},true);
 
 function cardDate(){
@@ -207,7 +207,7 @@ async function changeDate(){
    assets?"Select from Masters":"Equipment Master could not be loaded");
   refreshSearchDropdown(select);
  }
- await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows()]);
+ await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows(),loadCoalCounts()]);
 }
 function existing(line,key){return String(line?.[key]??"")}
 function blank(){return model.kind==="COAL"?{vehicleId:"",driverId:"",excavatorId:"",tripCount:"",routeId:""}:
@@ -281,6 +281,66 @@ function headerHtml(){
  paperInput("srKmrOpen",c.openingKmr,"Opening KMR","number",'min="0" step="0.1"')+
  paperInput("srKmrClose",c.closingKmr,"Closing KMR","number",'min="0" step="0.1"'):"")+
  '</div></details>';
+}
+
+
+function coalLoadingPanel(){
+ return '<div class="sr-card"><div class="sr-toolbar"><h2>Coal Loader / Excavator — Trips Loaded</h2></div>'+
+  '<p class="sr-muted">Independent loading count, checked against verified tipper trips. Saving here does NOT add production trips or quantity. HMR stays in the meter section below.</p>'+
+  '<div class="sr-entry-actions"><select id="srCoalNewMachine" aria-label="Loading machine">'+
+   retainedOptions(model.masters.loadingCoal,"","Select Loader / Excavator from Masters")+'</select>'+
+  '<input id="srCoalNewTrips" type="number" min="0" max="10000" step="1" placeholder="Trips loaded" aria-label="Trips loaded">'+
+  '<button type="button" class="sr-btn" onclick="KOCPSR.saveCoalCount(-1)">Save Count</button></div>'+
+  '<div class="sr-scroll"><table class="sr-grid"><thead><tr><th>Excavator / Loader</th><th>Trips loaded</th>'+
+  '<th>Verified tipper trips</th><th>Check</th><th></th></tr></thead>'+
+  '<tbody id="srCoalLoadingLedger"><tr><td colspan="5">Loading machine entries…</td></tr></tbody></table></div>'+
+  '<div id="srCoalLoadingTotals" class="sr-muted"></div><div id="srCoalLoadingNotice" role="status"></div></div>';
+}
+async function loadCoalCounts(){
+ const box=h("srCoalLoadingLedger"),day=val("srDate"),shift=val("srShift");
+ if(!box||model.kind!=="COAL"||!day||!shift)return;
+ try{
+  const data=await api(PREFIX+"/coal-loading-counts?operating_date="+enc(day)+"&shift="+enc(shift));
+  if(h("srCoalLoadingLedger")!==box||val("srDate")!==day||val("srShift")!==shift)return;
+  model.coalCounts=data;
+  box.innerHTML=data.rows.length?data.rows.map((r,i)=>{
+   const name=model.masters.loadingCoal.find(m=>m.id===r.machineId)?.label||r.machineId;
+   const status=r.status==="MATCH"?"Matched":r.status==="WAITING_FOR_TIPPER"?"Awaiting tipper verification":
+      "Difference: "+r.difference;
+   return '<tr><td>'+esc(name)+'</td><td><input type="number" min="0" max="10000" step="1" id="srCoalSavedTrips'+i+'" value="'+r.loadedTrips+'"></td>'+
+    '<td>'+r.postedTipperTrips+'</td><td>'+esc(status)+'</td><td><button type="button" class="sr-small" onclick="KOCPSR.saveCoalCount('+i+')">Update</button></td></tr>';
+  }).join(""):'<tr><td colspan="5">No loading counts recorded yet for this date and shift.</td></tr>';
+  const t=data.totals||{},el=h("srCoalLoadingTotals");
+  if(el)el.textContent="Machine loaded: "+Number(t.loadedTrips||0)+" trips · Verified tipper (linked): "+
+   Number(t.postedMappedTipperTrips||0)+" · Tipper trips without machine: "+
+   Number(t.postedUnmappedTipperTrips||0)+
+   (data.unreportedMachines?.length?" · "+data.unreportedMachines.length+" tipper-linked machine(s) still missing their loading count":"");
+ }catch(e){box.innerHTML='<tr><td colspan="5">'+esc("Cannot load count records: "+e.message)+'</td></tr>';}
+}
+async function saveCoalCount(i){
+ const msg=h("srCoalLoadingNotice");
+ try{
+  const day=val("srDate"),shift=val("srShift"),old=i>=0?model.coalCounts.rows[i]:null;
+  const machineId=old?.machineId||val("srCoalNewMachine");
+  const value=old?val("srCoalSavedTrips"+i):val("srCoalNewTrips");
+  if(!day||!shift||!machineId)throw Error("Select a date, shift and Coal Loader/Excavator.");
+  if(!/^(0|[1-9][0-9]*)$/.test(value)||Number(value)>10000)
+    throw Error("Trips loaded must be a whole number between 0 and 10,000.");
+  if(!old){
+   const select=h("srCoalNewMachine"),input=select?.closest(".sr-combo")?.querySelector(".sr-combo-input");
+   if(!model.masters.loadingCoal.some(m=>m.id===machineId)||
+      (input&&input.value.trim()!==select.selectedOptions[0].textContent.trim()))
+     throw Error("Choose a machine from Equipment Masters.");
+  }
+  const res=await api(PREFIX+"/coal-loading-counts",{method:"POST",
+   headers:{"Content-Type":"application/json"},
+   body:JSON.stringify({operatingDate:day,shift,rows:[{
+       machineId,loadedTrips:value,expectedVersion:old?.version??null
+   }]})});
+  if(!old){h("srCoalNewMachine").value="";refreshSearchDropdown(h("srCoalNewMachine"));h("srCoalNewTrips").value="";}
+  await loadCoalCounts();
+  if(msg){msg.className="sr-success";msg.textContent=res.saved?"Saved machine loading count. Production trips unchanged.":"No change; already saved.";}
+ }catch(e){if(msg){msg.className="sr-error";msg.textContent=e.message}else notice(e.message,true);}
 }
 
 function meterPanel(){
@@ -375,6 +435,7 @@ function screen(){
  '<th>#</th><th>Tipper</th><th>Loader / Excavator</th><th>Driver (optional)</th><th class="sr-trip-column">Trips</th><th>Route / Lead (override)</th><th>Action</th>')+
  '</tr></thead><tbody id="srRows">'+lines.map((x,i)=>lineHtml(x,i)).join("")+'</tbody></table></div>'+
  '</div>'+
+ (!ob?coalLoadingPanel():"")+
  meterPanel()+
  '<div class="sr-card sr-action-card">'+
  '<div class="sr-actions">'+
@@ -426,7 +487,7 @@ function values(){
 }
 function notice(message,error=false){const n=h("srNotice");if(n){n.textContent=message;n.className=error?"sr-error":"sr-success"}else if(window.toast)toast(message,error?"bad":"good")}
 function sync(){const inputs=values();model.lines=readRows(true);model.pendingHeader=inputs}
-async function renderSelf(){await fetchMasters();const w=h("workspace");if(w){w.innerHTML=screen();enhanceSearchDropdowns(w);await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows()])}}
+async function renderSelf(){await fetchMasters();const w=h("workspace");if(w){w.innerHTML=screen();enhanceSearchDropdowns(w);await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows(),loadCoalCounts()])}}
 async function save(silent=false){
  try{
   validateSearchDropdowns();
@@ -610,6 +671,6 @@ async function renderKocpShiftRegister(){
 }
 window.renderKocpShiftRegister=renderKocpShiftRegister;
 window.KOCPSR={save:()=>save().catch(()=>{}),submit,verify,reject,history,open,cancel:cancelCard,updateTotal,addRow,removeRow,
- copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,loadMeterRows,saveMeter,selectCoalLoadingMachine,afterRender:async()=>{enhanceSearchDropdowns(h("workspace"));await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows()])}};
+ copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,loadMeterRows,saveMeter,selectCoalLoadingMachine,saveCoalCount,afterRender:async()=>{enhanceSearchDropdowns(h("workspace"));await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows(),loadCoalCounts()])}};
 })();
 
