@@ -234,7 +234,7 @@ function availableShifts(){return (state.ctx?.shifts||[]).filter(x=>x.active!==f
 function lineHtml(line,i){
  if(model.kind==="COAL")return '<tr class="sr-row" data-no="'+i+'"><td>'+(i+1)+'</td>'+
  '<td><select data-sr-asset="vehicles" aria-label="Vehicle" id="srVehicle'+i+'">'+vehicleOptions("COAL",existing(line,"vehicleId"))+'</select></td>'+
- '<td><select data-sr-asset="loadingCoal" aria-label="Coal loader or excavator" id="srCoalLoader'+i+'">'+retainedOptions(model.masters.loadingCoal,existing(line,"excavatorId"),"Select loader / excavator")+'</select></td>'+ 
+ '<td><select data-sr-asset="loadingCoal" aria-label="Coal loader or excavator" id="srCoalLoader'+i+'" onchange="KOCPSR.selectCoalLoadingMachine('+i+')">'+retainedOptions(model.masters.loadingCoal,existing(line,"excavatorId"),"Select loader / excavator")+'</select></td>'+ 
   '<td>'+driverSelect("srDriver"+i,existing(line,"driverId"))+'</td>'+
  '<td><input class="sr-numeric" aria-label="Trips" id="srCount'+i+'" type="number" min="1" max="200" step="1" value="'+esc(existing(line,"tripCount"))+'" oninput="KOCPSR.updateTotal()"></td>'+
  '<td><select aria-label="Route / Lead" id="srLineRoute'+i+'">'+routeOptions("COAL",existing(line,"routeId"))+'</select></td>'+
@@ -304,6 +304,16 @@ async function loadMeterAssets(){
    "Select assigned equipment by door / machine ID");
   refreshSearchDropdown(target);
  }catch(e){target.innerHTML='<option value="">Equipment Master not available</option>';refreshSearchDropdown(target)}
+}
+function selectCoalLoadingMachine(i){
+ const id=val("srCoalLoader"+i),meter=h("srMeterAsset");
+ if(!id||!meter)return;
+ if([...meter.options].some(o=>o.value===id)){
+   meter.value=id;refreshSearchDropdown(meter);
+   if(h("srMeterType"))h("srMeterType").value="HMR";
+   const msg=h("srMeterMessage");
+   if(msg){msg.className="sr-muted";msg.textContent="HMR equipment selected from Coal trip row. Enter opening and closing HMR once per shift.";}
+ }
 }
 async function loadMeterRows(){
  const box=h("srMeterRows"),day=val("srDate"),shift=val("srShift");
@@ -597,6 +607,6 @@ async function renderKocpShiftRegister(){
 }
 window.renderKocpShiftRegister=renderKocpShiftRegister;
 window.KOCPSR={save:()=>save().catch(()=>{}),submit,verify,reject,history,open,cancel:cancelCard,updateTotal,addRow,removeRow,
- copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,loadMeterRows,saveMeter,afterRender:async()=>{enhanceSearchDropdowns(h("workspace"));await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows()])}};
+ copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,loadMeterRows,saveMeter,selectCoalLoadingMachine,afterRender:async()=>{enhanceSearchDropdowns(h("workspace"));await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows()])}};
 })();
 
