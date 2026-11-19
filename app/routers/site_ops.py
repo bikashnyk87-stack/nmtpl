@@ -762,9 +762,43 @@ def kocp_point_wise_report(
             **row, "quantity": str(row["quantity"]),
             "weightedAverage": str(row["quantity"] / ntrips) if ntrips else None,
         })
+    certified = list(db.scalars(select(SiteBillingReconciliation).where(
+        SiteBillingReconciliation.site_id == "KOCP",
+        SiteBillingReconciliation.period_end >= from_date,
+        SiteBillingReconciliation.period_start <= to_date,
+    ).order_by(SiteBillingReconciliation.period_start,
+               SiteBillingReconciliation.material_id)))
+    monthly_factors = list(db.scalars(select(SiteWeightFactor).where(
+        SiteWeightFactor.site_id == "KOCP",
+        SiteWeightFactor.source_org == "MCL_MONTHLY",
+        SiteWeightFactor.effective_from <= to_date,
+        or_(SiteWeightFactor.effective_to.is_(None),
+            SiteWeightFactor.effective_to >= from_date),
+    ).order_by(SiteWeightFactor.effective_from, SiteWeightFactor.factor_id)))
     return {"fromDate": from_date, "toDate": to_date,
             "pointSummary": summaries, "dailyShift": daily, "totals": totals,
-            "categorySummary": category_summary}
+            "categorySummary": category_summary,
+            "certifiedBilling": [{
+                "periodStart": b.period_start.isoformat(),
+                "periodEnd": b.period_end.isoformat(),
+                "material": materials[b.material_id].name if b.material_id in materials else b.material_id,
+                "status": b.status, "operationalMt": str(b.operational_mt) if b.operational_mt is not None else None,
+                "operationalCum": str(b.operational_cum) if b.operational_cum is not None else None,
+                "certifiedMt": str(b.certified_mt) if b.certified_mt is not None else None,
+                "certifiedCum": str(b.certified_cum) if b.certified_cum is not None else None,
+                "billableMt": str(b.billable_mt) if b.billable_mt is not None else None,
+                "billableCum": str(b.billable_cum) if b.billable_cum is not None else None,
+            } for b in certified],
+            "monthlyFactors": [{
+                "factorId": f.factor_id, "type": f.factor_type,
+                "value": str(f.factor_value), "unit": f.factor_unit,
+                "dateFrom": f.effective_from.isoformat(),
+                "dateTo": f.effective_to.isoformat() if f.effective_to else None,
+                "status": f.status,
+                "material": materials[f.material_id].name if f.material_id in materials else f.material_id,
+                "destination": destinations[f.destination_location_id].name if f.destination_location_id in destinations else f.destination_location_id,
+            } for f in monthly_factors],
+            "pendingOperationalTrips": sum(int(x["missingFactorTrips"]) for x in daily)}
 
 
 @router.get("/TIOM/production/simple")
