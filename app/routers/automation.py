@@ -290,6 +290,15 @@ DESPATCH_RETRY_SECONDS = 900
 DESPATCH_LATE_SOURCE_HOURS_IST = (12, 18)
 
 
+def despatch_due_late_hours(local: datetime, completed: set[str]) -> list[int]:
+    """Return at most the two unswept IST slots for this calendar date."""
+    key = local.date().isoformat()
+    return [
+        hour for hour in DESPATCH_LATE_SOURCE_HOURS_IST
+        if local.hour >= hour and f"{key}:{hour}" not in completed
+    ]
+
+
 def wb_search_window(now: datetime) -> tuple[str, datetime.date, str] | None:
     """Return (window key, operating date, shift) for a 2-hour IST slot."""
     local = now.astimezone(IST)
@@ -401,11 +410,7 @@ async def automation_loop():
         if (local.hour >= 6 and today_key in dispatch_done
                 and os.getenv("TIOM_DESPATCH_GMAIL_ENABLED", "true").strip().lower()
                     not in {"0","no","off","false"}):
-            due_hours = [
-                hour for hour in DESPATCH_LATE_SOURCE_HOURS_IST
-                if local.hour >= hour
-                and f"{today_key}:{hour}" not in dispatch_late_done
-            ]
+            due_hours = despatch_due_late_hours(local, dispatch_late_done)
             if due_hours and _gmail_token_raw():
                 # A late process start performs one consolidated sweep, not
                 # a burst for every historical time slot already passed.
