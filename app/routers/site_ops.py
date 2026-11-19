@@ -790,8 +790,8 @@ def kocp_point_wise_report(
                 "periodEnd": x.period_end.isoformat(),
                 "material": materials[x.material_id].name if x.material_id in materials else x.material_id,
                 "status": x.status,
-                "certifiedMt": str(x.measured_mt) if x.measured_mt is not None else None,
-                "certifiedCum": str(x.measured_cum) if x.measured_cum is not None else None,
+                "certifiedMt": (str(x.measured_mt) if x.measured_mt is not None and x.material_id in materials and str(materials[x.material_id].default_unit or "").upper() == "MT" else None),
+                "certifiedCum": (str(x.measured_cum) if x.measured_cum is not None and x.material_id in materials and str(materials[x.material_id].default_unit or "").upper() in {"CUM","M3","M³"} else None),
                 "reference": x.reference_no,
                 "approvedBy": x.approved_by,
             } for x in surveys],
@@ -2665,7 +2665,9 @@ def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
             "Period Start","Period End","Material","Certified MT","Certified CuM",
             "Status","Certificate Reference","Entered By","Approved By"
         ], ((x.period_start,x.period_end,material(x.material_id),
-             num(x.measured_mt),num(x.measured_cum),x.status,x.reference_no,
+             num(x.measured_mt) if x.material_id in materials and str(materials[x.material_id].default_unit or "").upper()=="MT" else None,
+             num(x.measured_cum) if x.material_id in materials and str(materials[x.material_id].default_unit or "").upper() in {"CUM","M3","M³"} else None,
+             x.status,x.reference_no,
              x.entered_by,x.approved_by) for x in certified_entries))
         sheet("Certified MCL Billing", [
             "Period Start","Period End","Material","Status","Operational MT",
