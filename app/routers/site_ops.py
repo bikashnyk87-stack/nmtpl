@@ -46,6 +46,7 @@ from app.site_models import (
     SiteShift,
     SiteShiftTripCard,
     SiteShiftTripCardLine,
+    SiteCoalLoadingCount,
     SiteTrip,
     SiteTripReconciliation,
     SiteWbImportBatch,
@@ -2325,7 +2326,7 @@ def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
     if (end - start).days > 366:
         raise HTTPException(422, "Choose a date range of at most 367 days per download.")
     choices = {"ALL", "TRIPS", "SHIFT", "CUMULATIVE", "COAL", "OB_TIPPER", "EXCAVATOR",
-               "LOADER", "METERS", "HSD", "SOURCE", "MCL"}
+               "LOADER", "METERS", "HSD", "SOURCE", "MCL", "COAL_LOADING"}
     selection = str(report_type or "ALL").upper().strip()
     if selection not in choices:
         raise HTTPException(422, "Choose a report from the available KOCP report list.")
@@ -2357,9 +2358,15 @@ def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
         or_(SiteWeightFactor.effective_to.is_(None),
             SiteWeightFactor.effective_to >= start)
     ).order_by(SiteWeightFactor.factor_type, SiteWeightFactor.effective_from)))
+    coal_machine_counts = list(db.scalars(select(SiteCoalLoadingCount).where(
+        SiteCoalLoadingCount.site_id == "KOCP",
+        SiteCoalLoadingCount.operating_date >= start,
+        SiteCoalLoadingCount.operating_date <= end,
+    ).order_by(SiteCoalLoadingCount.operating_date, SiteCoalLoadingCount.shift,
+               SiteCoalLoadingCount.machine_id)))
     # Never truncate; fail explicitly if a worksheet would exceed Excel's limit.
     for label, size in [("trip", len(trips)), ("fuel", len(hsd)),
-                        ("meter", len(meters)), ("source", len(lines))]:
+                        ("meter", len(meters)), ("source", len(lines)), ("loading", len(coal_machine_counts))]:
         if size > 1048500:
             raise HTTPException(422, f"{label} records exceed a single Excel worksheet. Use shorter dates.")
     ids = set()
@@ -2367,6 +2374,7 @@ def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
         ids.update(v for v in (t.vehicle_id, t.loading_equipment_id) if v)
     for m in meters:
         if m.asset_id: ids.add(m.asset_id)
+    ids.update(x.machine_id for x in coal_machine_counts)
     for f in hsd:
         if f.asset_id: ids.add(f.asset_id)
     for card in cards:
@@ -2522,6 +2530,39 @@ def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
                   t.factor_id is None)
                  for t in trips if t.loading_equipment_id
                  and asset_class(t.loading_equipment_id)==machine_class))
+    if selection in ("ALL", "COAL", "COAL_LOADING"):
+        # Parallel machine-source counts are a reconciliation, never SiteTrip.
+        posted_machine_trips = defaultdict(int)
+        unassigned = defaultdict(int)
+        for t in trips:
+            if t.status != "POSTED" or t.source_type != "SHIFT_COAL_REGISTER":
+                continue
+            if t.loading_equipment_id:
+                posted_machine_trips[(t.operating_date,t.shift,t.loading_equipment_id)] += int(t.trip_count or 0)
+            else:
+                unassigned[(t.operating_date,t.shift)] += int(t.trip_count or 0)
+        saved = {(c.operating_date,c.shift,c.machine_id):c for c in coal_machine_counts}
+        all_keys = sorted(set(saved) | set(posted_machine_trips))
+        def loading_comparison():
+            for key in all_keys:
+                row = saved.get(key)
+                loaded = row.loaded_trips if row else None
+                tipper = posted_machine_trips.get(key, 0)
+                check = ("NO MACHINE COUNT ENTERED" if row is None
+                         else "TIPPER VERIFICATION PENDING" if tipper == 0
+                         else "MATCH" if loaded == tipper else "DIFFERENCE")
+                yield (key[0], key[1], key[2], asset(key[2]), asset_class(key[2]),
+                       loaded, tipper, loaded-tipper if loaded is not None else None,
+                       check, row.entered_by if row else None,
+                       row.updated_by if row else None)
+            for (day,shift),tipper in sorted(unassigned.items()):
+                yield (day,shift,None,"Tipper not mapped to loading machine",None,
+                       None,tipper,None,"MACHINE NOT MAPPED",None,None)
+        sheet("Coal Loading Count Check",
+              ["Date","Shift","Machine ID","Excavator / Loader","Class",
+               "Machine Loaded Trips","Verified Tipper Trips","Difference",
+               "Check","Entered By","Edited By"],
+              loading_comparison())
     if selection in ("ALL", "SHIFT", "COAL"):
         grouped = defaultdict(lambda: {"trips":0,"mt":Decimal(0),"cum":Decimal(0),"mt_known":False,"cum_known":False})
         for t in trips:
