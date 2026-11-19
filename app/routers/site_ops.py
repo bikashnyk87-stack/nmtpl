@@ -775,9 +775,26 @@ def kocp_point_wise_report(
         or_(SiteWeightFactor.effective_to.is_(None),
             SiteWeightFactor.effective_to >= from_date),
     ).order_by(SiteWeightFactor.effective_from, SiteWeightFactor.factor_id)))
+    surveys = list(db.scalars(select(SiteSurveyMeasurement).where(
+        SiteSurveyMeasurement.site_id == "KOCP",
+        SiteSurveyMeasurement.period_end >= from_date,
+        SiteSurveyMeasurement.period_start <= to_date,
+    ).order_by(SiteSurveyMeasurement.period_start,
+               SiteSurveyMeasurement.material_id)))
     return {"fromDate": from_date, "toDate": to_date,
             "pointSummary": summaries, "dailyShift": daily, "totals": totals,
             "categorySummary": category_summary,
+            "mclCertifiedEntries": [{
+                "id": x.measurement_id,
+                "periodStart": x.period_start.isoformat(),
+                "periodEnd": x.period_end.isoformat(),
+                "material": materials[x.material_id].name if x.material_id in materials else x.material_id,
+                "status": x.status,
+                "certifiedMt": str(x.measured_mt) if x.measured_mt is not None else None,
+                "certifiedCum": str(x.measured_cum) if x.measured_cum is not None else None,
+                "reference": x.reference_no,
+                "approvedBy": x.approved_by,
+            } for x in surveys],
             "certifiedBilling": [{
                 "periodStart": b.period_start.isoformat(),
                 "periodEnd": b.period_end.isoformat(),
@@ -2638,6 +2655,18 @@ def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
             SiteBillingReconciliation.period_start <= end,
         ).order_by(SiteBillingReconciliation.period_start,
                    SiteBillingReconciliation.material_id)))
+        certified_entries = list(db.scalars(select(SiteSurveyMeasurement).where(
+            SiteSurveyMeasurement.site_id == "KOCP",
+            SiteSurveyMeasurement.period_end >= start,
+            SiteSurveyMeasurement.period_start <= end,
+        ).order_by(SiteSurveyMeasurement.period_start,
+                   SiteSurveyMeasurement.material_id)))
+        sheet("MCL Certified Entries", [
+            "Period Start","Period End","Material","Certified MT","Certified CuM",
+            "Status","Certificate Reference","Entered By","Approved By"
+        ], ((x.period_start,x.period_end,material(x.material_id),
+             num(x.measured_mt),num(x.measured_cum),x.status,x.reference_no,
+             x.entered_by,x.approved_by) for x in certified_entries))
         sheet("Certified MCL Billing", [
             "Period Start","Period End","Material","Status","Operational MT",
             "Operational CuM","Certified MT","Certified CuM","Billable MT",
