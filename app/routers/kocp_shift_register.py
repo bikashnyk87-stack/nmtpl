@@ -109,7 +109,8 @@ def validate_register_lines(kind, lines):
             if not vehicle:
                 raise HTTPException(422, f"Coal line {number}: vehicle is required.")
             normalized.append({"lineNo": number, "vehicleId": vehicle,
-                               "driverId": driver, "tripCount": count,
+                               "driverId": driver, "excavatorId": _txt(raw.get("excavatorId"), 50),
+                               "tripCount": count,
                                "routeId": _txt(raw.get("routeId"), 80)})
         else:
             excavator = _txt(raw.get("excavatorId"), 50)
@@ -208,7 +209,7 @@ def _asset(db, machine_id, operating_day, activity, role):
     if not (kocp_asset_allowed(equipment.group, activity)
             and kocp_role_allowed(equipment.type, role, equipment.make_model)):
         raise HTTPException(422, f"Equipment is not assigned to {activity} {role.lower()} in KOCP Masters.")
-    if role == "LOADING" and kocp_equipment_category(equipment.type, equipment.make_model) != "EXCAVATOR":
+    if role == "LOADING" and activity == "OB" and kocp_equipment_category(equipment.type, equipment.make_model) != "EXCAVATOR":
         raise HTTPException(422, "Select an excavator from KOCP Equipment Master.")
     return equipment
 
@@ -286,6 +287,8 @@ def _write_fields(db, card, payload, *, initial=False):
         route = _route(db, line["routeId"], kind) if line.get("routeId") else header_route
         if kind == "COAL":
             _asset(db, line["vehicleId"], operating_day, "COAL", "TRANSPORT")
+            if line.get("excavatorId"):
+                _asset(db, line["excavatorId"], operating_day, "COAL", "LOADING")
             if line["driverId"]:
                 _driver(db, line["driverId"], operating_day)
         else:
@@ -423,7 +426,8 @@ def edit_operational_code(payload: dict, request: Request, db: Session = Depends
 @router.get("/cards")
 def list_cards(request: Request, operating_date: date|None=None, kind: str="", db: Session=Depends(get_db)):
     _auth(db,request)
-    stmt = select(SiteShiftTripCard).where(SiteShiftTripCard.site_id=="KOCP")
+    stmt = select(SiteShiftTripCard).where(SiteShiftTripCard.site_id=="KOCP",
+                                          SiteShiftTripCard.status != "CANCELLED")
     if operating_date:
         stmt=stmt.where(SiteShiftTripCard.operating_date==operating_date)
     if kind:
@@ -577,10 +581,47 @@ def edit_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_db
     return {"ok":True,**_detail(db,row)}
 
 
+@router.post("/cards/{card_id}/cancel")
+def cancel_card(card_id: str, payload: dict, request: Request, db: Session = Depends(get_db)):
+    """Audit-preserving soft delete; a posted/verified source cannot be deleted."""
+    user = _auth(db, request, "TRIP", "CREATE", True)
+    row = db.scalar(select(SiteShiftTripCard).where(
+        SiteShiftTripCard.card_id == card_id,
+        SiteShiftTripCard.site_id == "KOCP",
+    ).with_for_update())
+    if row is None:
+        raise HTTPException(404, "Source register not found.")
+    if not user.admin and row.entered_by != user.login_id and not has_permission(
+        db, user, "KOCP", "TRIP", "EDIT"
+    ):
+        raise HTTPException(403, "Only the creator or authorized editor may delete a draft.")
+    if row.status not in {"DRAFT", "REJECTED"}:
+        raise HTTPException(
+            409, "Only draft/returned records can be deleted. Submitted: return for correction first; "
+                 "verified: request audited production correction after checking billing."
+        )
+    if row.version != payload.get("expectedVersion"):
+        raise HTTPException(409, "Register changed. Reload and try again.")
+    reason = _txt(payload.get("reason"), 500)
+    if len(reason) < 5:
+        raise HTTPException(422, "Provide a deletion reason (at least 5 characters).")
+    if any(x.trip_id for x in _card_lines(db, card_id)):
+        raise HTTPException(409, "Posted source lines cannot be deleted.")
+    previous = {"status": row.status, "version": row.version}
+    row.status = "CANCELLED"
+    row.version += 1
+    row.review_note = reason
+    _audit(db, user, "KOCP", "CANCEL_SHIFT_REGISTER", "site_shift_trip_card", card_id,
+           before=previous, after={"status": row.status, "version": row.version},
+           reason=reason)
+    db.commit()
+    return {"ok": True, "status": row.status, "cardId": card_id, "version": row.version}
+
+
 def _source_signature(card, lines):
     """A second browser/PC cannot repost the identical paper under a new key."""
     if card.kind == "COAL":
-        entries = [(l.vehicle_id,l.driver_id,l.trip_count,l.route_id or card.route_id)
+        entries = [(l.vehicle_id,l.driver_id,l.excavator_id,l.trip_count,l.route_id or card.route_id)
                    for l in lines]
     else:
         counts = Counter()
@@ -630,6 +671,8 @@ def submit_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
             if line.driver_id:
                 _driver(db, line.driver_id, row.operating_date)
             _asset(db, line.vehicle_id, row.operating_date, "COAL", "TRANSPORT")
+            if line.excavator_id:
+                _asset(db, line.excavator_id, row.operating_date, "COAL", "LOADING")
     # On repeat submissions from a different browser, detect the same source
     # reference or identical paper content before allowing MIS review.
     others=db.scalars(select(SiteShiftTripCard).where(
@@ -748,9 +791,9 @@ def decide_card(card_id:str,payload:dict,request:Request,db:Session=Depends(get_
         eq=_asset(db, vehicle_id, row.operating_date, row.kind, "TRANSPORT")
         if driver_id:
             _driver(db, driver_id, row.operating_date)
-        excavator_id=line.excavator_id if row.kind=="OB" else None
+        excavator_id=line.excavator_id or None
         if excavator_id:
-            _asset(db, excavator_id, row.operating_date, "OB", "LOADING")
+            _asset(db, excavator_id, row.operating_date, row.kind, "LOADING")
         route=_route(db,line.route_id or row.route_id,row.kind)
         dest_id=route.destination_location_id
         if row.kind=="OB":
@@ -878,7 +921,8 @@ def shift_register_summary(request:Request,operating_date:date,db:Session=Depend
     _auth(db,request)
     cards=db.scalars(select(SiteShiftTripCard).where(
         SiteShiftTripCard.site_id=="KOCP",
-        SiteShiftTripCard.operating_date==operating_date
+        SiteShiftTripCard.operating_date==operating_date,
+        SiteShiftTripCard.status != "CANCELLED",
     )).all()
     result={"COAL":{"cards":0,"verified":0,"trips":0,"pendingFactorTrips":0},
             "OB":{"cards":0,"verified":0,"trips":0,"pendingFactorTrips":0}}
