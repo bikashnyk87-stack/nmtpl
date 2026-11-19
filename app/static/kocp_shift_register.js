@@ -4,7 +4,7 @@
 (function(){
 "use strict";
 const PREFIX="/api/KOCP/shift-register";
-const model={kind:"COAL",card:null,clientKey:null,lines:[],masters:{COAL:[],OB:[],codes:[],vehicles:[],excavators:[],materials:[],locations:[]},drivers:[],driverError:""};
+const model={kind:"COAL",card:null,clientKey:null,lines:[],masters:{COAL:[],OB:[],codes:[],vehicles:[],excavators:[],loadingCoal:[],materials:[],locations:[]},drivers:[],driverError:""};
 function enc(v){return encodeURIComponent(String(v||""))}
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 function newKey(){return (window.crypto?.randomUUID?.()||String(Date.now())+"-"+Math.random()).slice(0,120)}
@@ -180,14 +180,15 @@ function fetchAssets(day){
  return Promise.all([
   api(path+"&activity=COAL&role=TRANSPORT"),
   api(path+"&activity=OB&role=TRANSPORT"),
-  api(path+"&activity=OB&role=LOADING").then(rows=>rows.filter(x=>x.category==="EXCAVATOR"))
+  api(path+"&activity=OB&role=LOADING").then(rows=>rows.filter(x=>x.category==="EXCAVATOR")),
+   api(path+"&activity=COAL&role=LOADING").then(rows=>rows.filter(x=>["EXCAVATOR","LOADER"].includes(x.category)))
  ]);
 }
 async function changeDate(){
  const dateField=h("srDate"), day=dateField.value;
  const [result,assets]=day?await Promise.all([
   fetchDrivers(day),fetchAssets(day).catch(()=>null)
- ]):[{rows:[],error:"Select an operating date"},[[],[],[]]];
+ ]):[{rows:[],error:"Select an operating date"},[[],[],[],[]]];
  if(h("srDate")!==dateField||dateField.value!==day)return;
  model.drivers=result.rows;
  model.driverError=result.error;
@@ -197,7 +198,7 @@ async function changeDate(){
   refreshSearchDropdown(select);
  }
  if(assets){
-  [model.masters.vehicles,model.masters.vehiclesOb,model.masters.excavators]=assets;
+  [model.masters.vehicles,model.masters.vehiclesOb,model.masters.excavators,model.masters.loadingCoal]=assets;
  }
  for(const select of document.querySelectorAll("[data-sr-asset]")){
   const items=assets?model.masters[select.dataset.srAsset]:[];
@@ -209,7 +210,7 @@ async function changeDate(){
  await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows()]);
 }
 function existing(line,key){return String(line?.[key]??"")}
-function blank(){return model.kind==="COAL"?{vehicleId:"",driverId:"",tripCount:"",routeId:""}:
+function blank(){return model.kind==="COAL"?{vehicleId:"",driverId:"",excavatorId:"",tripCount:"",routeId:""}:
  {excavatorId:"",patchCode:"",pointCode:"",routeId:"",tripCount:""}}
 function fresh(count){model.lines=Array.from({length:count},()=>blank());model.card=null;model.clientKey=newKey()}
 async function fetchMasters(){
@@ -222,7 +223,7 @@ async function fetchMasters(){
   fetchDrivers(cardDate()),
   api("/api/site-ops/KOCP/lookups?kind=LOCATION&limit=100")
  ]);
- model.masters={COAL:a[0],OB:a[1],vehicles:a[2][0],vehiclesOb:a[2][1],excavators:a[2][2],
+ model.masters={COAL:a[0],OB:a[1],vehicles:a[2][0],vehiclesOb:a[2][1],excavators:a[2][2],loadingCoal:a[2][3],
                materials:a[3],codes:a[4],locations:a[6]};
  model.drivers=a[5].rows;
  model.driverError=a[5].error;
@@ -233,7 +234,8 @@ function availableShifts(){return (state.ctx?.shifts||[]).filter(x=>x.active!==f
 function lineHtml(line,i){
  if(model.kind==="COAL")return '<tr class="sr-row" data-no="'+i+'"><td>'+(i+1)+'</td>'+
  '<td><select data-sr-asset="vehicles" aria-label="Vehicle" id="srVehicle'+i+'">'+vehicleOptions("COAL",existing(line,"vehicleId"))+'</select></td>'+
- '<td>'+driverSelect("srDriver"+i,existing(line,"driverId"))+'</td>'+
+ '<td><select data-sr-asset="loadingCoal" aria-label="Coal loader or excavator" id="srCoalLoader'+i+'">'+retainedOptions(model.masters.loadingCoal,existing(line,"excavatorId"),"Select loader / excavator")+'</select></td>'+ 
+  '<td>'+driverSelect("srDriver"+i,existing(line,"driverId"))+'</td>'+
  '<td><input class="sr-numeric" aria-label="Trips" id="srCount'+i+'" type="number" min="1" max="200" step="1" value="'+esc(existing(line,"tripCount"))+'" oninput="KOCPSR.updateTotal()"></td>'+
  '<td><select aria-label="Route / Lead" id="srLineRoute'+i+'">'+routeOptions("COAL",existing(line,"routeId"))+'</select></td>'+
  '<td><button class="sr-small" type="button" onclick="KOCPSR.removeRow('+i+')">Remove</button></td></tr>';
@@ -283,7 +285,7 @@ function headerHtml(){
 
 function meterPanel(){
  return '<details class="sr-card sr-meter-card" open><summary>Equipment HMR / KMR — Excavator, Loader, Tipper</summary>'+
- '<p class="sr-muted">Use the date and shift above. Tipper meters already on the OB paper card post on verification: do not enter those twice.</p>'+
+ '<p class="sr-muted">Select a Loader / Excavator against each Coal tipper row above, then enter that machine\&#39;s HMR once per shift below. OB tipper meters on paper cards post on verification; do not enter those twice.</p>'+
  '<div class="sr-meter-grid"><label class="sr-field"><span>Equipment Master</span>'+
  '<select id="srMeterAsset"><option value="">Loading assigned equipment…</option></select></label>'+
  '<label class="sr-field"><span>Meter</span><select id="srMeterType"><option value="HMR">HMR</option><option value="KMR">KMR</option></select></label>'+
@@ -360,7 +362,7 @@ function screen(){
  '<button class="sr-small" type="button" onclick="KOCPSR.copyDown()">Copy down</button></div></div>'+
  '<div class="sr-scroll sr-entry-scroll" tabindex="0" aria-label="Trip entry rows"><table class="sr-grid"><thead><tr>'+(ob?
  '<th>#</th><th>Excavator</th><th>Patch</th><th>Unloading Point</th><th>Route / Lead</th><th class="sr-trip-column">Trips</th><th>Action</th>':
- '<th>#</th><th>Vehicle</th><th>Driver (optional)</th><th class="sr-trip-column">Trips</th><th>Route / Lead (override)</th><th>Action</th>')+
+ '<th>#</th><th>Tipper</th><th>Loader / Excavator</th><th>Driver (optional)</th><th class="sr-trip-column">Trips</th><th>Route / Lead (override)</th><th>Action</th>')+
  '</tr></thead><tbody id="srRows">'+lines.map((x,i)=>lineHtml(x,i)).join("")+'</tbody></table></div>'+
  '</div>'+
  meterPanel()+
@@ -383,7 +385,7 @@ function readRows(includeBlank=false){
  const result=[];
  for(const tr of document.querySelectorAll("#srRows .sr-row")){
   const i=Number(tr.dataset.no),r={lineNo:i+1,routeId:val("srLineRoute"+i)};
-  if(model.kind==="COAL"){r.vehicleId=val("srVehicle"+i);r.driverId=val("srDriver"+i);r.tripCount=val("srCount"+i)}
+  if(model.kind==="COAL"){r.vehicleId=val("srVehicle"+i);r.excavatorId=val("srCoalLoader"+i);r.driverId=val("srDriver"+i);r.tripCount=val("srCount"+i)}
   else{
    r.excavatorId=val("srExcavator"+i);
    const patch=val("srPatch"+i),point=val("srPoint"+i);
@@ -486,11 +488,27 @@ async function history(){
  '<div class="sr-scroll"><table class="sr-grid"><thead><tr><th>Shift</th><th>Source ref</th><th>Rows</th><th>Trips</th><th>Status</th><th>Action</th></tr></thead><tbody>'+
  rows.map(x=>'<tr><td>'+esc(x.shift)+'</td><td>'+esc(x.sourceRef||x.cardId)+'</td>'+
  '<td>'+x.rowCount+'</td><td>'+x.tripCount+'</td><td>'+esc(x.status)+'</td><td>'+
- '<button class="sr-small" type="button" onclick="KOCPSR.open(\''+esc(x.cardId)+'\')">Open</button></td></tr>').join("")+
+ '<button class="sr-small" type="button" onclick="KOCPSR.open(\''+esc(x.cardId)+'\')">'+(["DRAFT","REJECTED"].includes(x.status)?"Edit":"View")+'</button> '+
+   (["DRAFT","REJECTED"].includes(x.status)?'<button class="sr-small sr-danger" type="button" onclick="KOCPSR.cancel(\''+esc(x.cardId)+'\')">Delete</button>':'<small>Locked</small>')+'</td></tr>').join("")+
  '</tbody></table></div>';
  }catch(e){const out=h("srHistory");if(out)out.textContent=e.message}
 }
 async function open(id){try{const r=await api(PREFIX+"/cards/"+enc(id));model.kind=r.kind;model.card=r;model.lines=r.lines;model.clientKey=r.cardId;await renderSelf()}catch(e){notice(e.message,true)}}
+async function cancelCard(id){
+ try{
+  const card=await api(PREFIX+"/cards/"+enc(id));
+  if(!["DRAFT","REJECTED"].includes(card.status))
+    throw Error("Only Draft or Returned registers can be deleted. Verified production requires authorized correction.");
+  const reason=window.prompt("Reason for deleting this "+card.kind+" register (at least 5 characters):");
+  if(reason===null)return;
+  if(reason.trim().length<5)throw Error("Enter a deletion reason of at least 5 characters.");
+  if(!window.confirm("Delete this unverified register? Its audit history will be retained."))return;
+  await api(PREFIX+"/cards/"+enc(id)+"/cancel",{method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({expectedVersion:card.version,reason:reason.trim()})});
+  if(model.card?.cardId===id)fresh(model.kind==="COAL"?4:2);
+  await renderSelf();notice("Register deleted from active entries; audit record retained.");
+ }catch(e){notice(e.message,true)}
+}
 function updateTotal(){
  const el=h("srTotal");if(!el)return;
  el.textContent=[...document.querySelectorAll("#srRows .sr-numeric")]
@@ -578,7 +596,7 @@ async function renderKocpShiftRegister(){
  return screen();
 }
 window.renderKocpShiftRegister=renderKocpShiftRegister;
-window.KOCPSR={save:()=>save().catch(()=>{}),submit,verify,reject,history,open,updateTotal,addRow,removeRow,
+window.KOCPSR={save:()=>save().catch(()=>{}),submit,verify,reject,history,open,cancel:cancelCard,updateTotal,addRow,removeRow,
  copyDown,switchKind,newCard,renderCodeMasters,editCode,saveCode,changeDate,changePoints,loadMeterRows,saveMeter,afterRender:async()=>{enhanceSearchDropdowns(h("workspace"));await Promise.all([history(),loadSummary(),window.KOCPQueue?.refresh?.(),loadMeterAssets(),loadMeterRows()])}};
 })();
 
