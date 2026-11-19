@@ -1,7 +1,7 @@
-"""Excel must open all client report worksheets without repairing sheet views.
+"""All five Despatch report types must export unfrozen worksheets.
 
-Trip Summary (daily, cumulative, cancellation) previously applied two different
-freeze panes to every sheet, creating contradictory <selection> records.
+Preserve client-format cells and validate the actual XLSX sheetViews,
+including every daily, cumulative and cancellation worksheet.
 """
 from datetime import date
 from decimal import Decimal
@@ -46,15 +46,10 @@ def test_trip_summary_all_three_sheet_views_are_valid_and_qty_is_unmodified():
             root=ET.fromstring(zipped.read(xml_name))
             view=root.find("x:sheetViews/x:sheetView",n)
             assert view is not None, xml_name
-            pane=view.find("x:pane",n)
-            assert pane is not None, xml_name
-            assert pane.get("topLeftCell")=="A3",xml_name
-            assert pane.get("activePane")=="bottomLeft",xml_name
-            assert pane.get("ySplit")=="2",xml_name
-            assert pane.get("xSplit") is None,xml_name
+            assert view.find("x:pane",n) is None, xml_name
             selections=view.findall("x:selection",n)
             assert len(selections)==1, (xml_name,len(selections))
-            assert selections[0].get("pane")=="bottomLeft",xml_name
+            assert selections[0].get("pane") is None, xml_name
     book=load_workbook(BytesIO(data))
     try:
         assert book.sheetnames==["06.11.26","Cummulative","Cancellation"]
@@ -62,27 +57,37 @@ def test_trip_summary_all_three_sheet_views_are_valid_and_qty_is_unmodified():
         assert ws["C2"].value=="Permit Qty."
         assert ws["C3"].value is None  # no approved quantity on this source row
         assert ws["P3"].value=="11:30:05"
-        assert ws.freeze_panes=="A3"
+        assert ws.freeze_panes is None
         assert book["Cummulative"]["C3"].value==8000.62  # first row is 5 Nov
         assert book["Cummulative"]["C4"].value is None   # second row is 6 Nov
-        assert book["Cummulative"].freeze_panes=="A3"
-        assert book["Cancellation"].freeze_panes=="A3"
+        assert book["Cummulative"].freeze_panes is None
+        assert book["Cancellation"].freeze_panes is None
     finally:
         book.close()
 
 
-def test_every_report_sets_one_complete_frozen_pane_not_stale_selections():
+def test_all_five_despatch_reports_have_no_frozen_panes_or_sheetview_pane_xml():
     records=[trip("L102604966/1",date(2026,11,6),qty="8000.620")]
-    expected={"trip":"A3","material":"B3","destination":"B6",
-              "despatch":"B4","transporter":"C28"}
-    for kind,freeze in expected.items():
+    for kind in ("trip","material","destination","despatch","transporter"):
         buf,_=build_client_workbook(kind,records,date(2026,11,6),date(2026,11,6))
+        with ZipFile(BytesIO(buf.getvalue())) as zipped:
+            xml_names=[name for name in zipped.namelist()
+                       if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")]
+            assert xml_names
+            n={"x":"http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
+            for xml_name in xml_names:
+                view=ET.fromstring(zipped.read(xml_name)).find("x:sheetViews/x:sheetView",n)
+                assert view is not None,(kind,xml_name)
+                assert view.find("x:pane",n) is None,(kind,xml_name)
+                selections=view.findall("x:selection",n)
+                assert len(selections)==1,(kind,xml_name,len(selections))
+                assert selections[0].get("pane") is None,(kind,xml_name)
         book=load_workbook(BytesIO(buf.getvalue()))
         try:
             assert book.worksheets
             for ws in book.worksheets:
-                assert ws.freeze_panes==freeze,(kind,ws.title,ws.freeze_panes)
-                assert len(ws.sheet_view.selection)==(1 if freeze.startswith("A") else 3), (kind,ws.title)
+                assert ws.freeze_panes is None,(kind,ws.title,ws.freeze_panes)
+                assert len(ws.sheet_view.selection)==1,(kind,ws.title)
         finally:
             book.close()
 

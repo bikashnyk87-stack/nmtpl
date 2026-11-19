@@ -73,7 +73,7 @@ def _client_logo(ws, anchor):
 
 
 
-def _fmt(ws, last_col=16, landscape=True, freeze_at="B3"):
+def _fmt(ws, last_col=16, landscape=True):
     ws.sheet_view.showGridLines = False
     ws.sheet_properties.pageSetUpPr.fitToPage = True
     # Wide client templates must remain legible when printed; don't squeeze
@@ -84,10 +84,9 @@ def _fmt(ws, last_col=16, landscape=True, freeze_at="B3"):
     ws.page_setup.paperSize = ws.PAPERSIZE_A3
     ws.page_margins = PageMargins(left=.2, right=.2, top=.35, bottom=.35,
                                   header=.13, footer=.13)
-    # Apply frozen panes exactly ONCE per sheet. Reassigning after a B3
-    # freeze leaves stale <selection> elements in openpyxl, which Excel repairs
-    # as invalid sheetView XML (daily, cumulative and cancellation worksheets).
-    ws.freeze_panes = freeze_at
+    # All Despatch client reports must scroll freely. Do not freeze rows or
+    # columns; keep worksheet views free of frozen-pane XML.
+    ws.freeze_panes = None
     ws.print_options.horizontalCentered = True
     # Printed company wordmark and consistent footer on all client reports.
     ws.oddHeader.left.text = "&BNMTPL | TIOM&B"
@@ -302,7 +301,7 @@ def _trip_row(x, index):
 
 
 def _detail_page(ws, trips, cancellation=False):
-    _fmt(ws,16,freeze_at="A3")
+    _fmt(ws,16)
     ws.sheet_view.zoomScale=85
     ws["A1"]="CANCELLATION DETAILS:-" if cancellation else " "
     ws["M1"]="T.Trips:-"
@@ -358,7 +357,7 @@ def _build_trip(wb,active,cancelled,from_date,to_date):
 
 def _build_material(wb,trips,as_of):
     ws=wb.create_sheet(as_of.strftime("%b-%y"))
-    _fmt(ws,15,freeze_at="B3")
+    _fmt(ws,15)
     ws["A1"]="DISPATCH REPORT FOR THE MONTH OF "+as_of.strftime("%B-%Y").upper()
     ws.merge_cells("A1:O1")
     ws["A1"].font=Font(bold=True,size=14,name="Calibri",color=WHITE)
@@ -429,7 +428,7 @@ def _build_captive(wb,trips,as_of):
     last_material_letter = col(last_material_col)
 
     ws=wb.create_sheet("DESTINATION WISE")
-    _fmt(ws,total_col,freeze_at="B4")
+    _fmt(ws,total_col)
     _title(ws,1,"DISPATCH REPORT (CAPTIVE/NON-CAPTIVE) FOR THE MONTH OF "+
            as_of.strftime("%B-%Y").upper(),total_col)
     ws.merge_cells("A2:A3")
@@ -491,7 +490,7 @@ def _build_destination(wb,trips,as_of,matrix,buckets=None):
     ws=wb.create_sheet(as_of.strftime("%b-%y"))
     category_end = 2 + 2*len(buckets)
     ex_col, total_col, cumulative_col = category_end, category_end+2, category_end+4
-    _fmt(ws,cumulative_col,freeze_at="B6");ws.sheet_view.zoomScale=60
+    _fmt(ws,cumulative_col);ws.sheet_view.zoomScale=60
     ws.merge_cells(start_row=1,start_column=1,end_row=1,end_column=cumulative_col)
     x=ws["A1"]
     x.value="THAKURANI IRON ORE MINE OF M/s ARCELORMITTAL INDIA PRIVATE LTD. ( DESTINATION WISE DISPATCH REPORT FOR THE MONTH OF "+as_of.strftime("%B-%Y").upper()+")"
@@ -666,7 +665,7 @@ def _build_transporter(wb,trips,from_date,to_date,matrix,buckets=None):
             day_to_transporter[d] = {k: tuple(v) for k,v in running_transport.items()}
     for day in days:
         ws=wb.create_sheet(day.strftime("%d.%m.%y"))
-        _fmt(ws,90,freeze_at="C28");ws.sheet_view.zoomScale=55
+        _fmt(ws,90);ws.sheet_view.zoomScale=55
         ws.merge_cells("B1:E1")
         mark=ws["B1"]
         mark.value="NMTPL  |  TIOM DESPATCH"
