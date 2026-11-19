@@ -178,7 +178,10 @@ async function renderKocpPointReport(from,to){
   const day=state.ctx.operatingDate;
   from=from||day.slice(0,8)+'01';to=to||day;
   const p=new URLSearchParams({from_date:from,to_date:to});
-  const data=await api('/api/site-ops/KOCP/reports/point-wise?'+p.toString());
+  const [data,loading]=await Promise.all([
+    api('/api/site-ops/KOCP/reports/point-wise?'+p.toString()),
+    api('/api/KOCP/shift-register/reports/loading-tipper?'+p.toString())
+  ]);
   koPointReportData=data;
   function grid(rows){
     return recentTable(['Date','Shift','Material','Unloading point','Movement / Distance','Trips','Quantity','Weighted avg/trip','No MCL factor'],rows.map(x=>
@@ -225,8 +228,39 @@ async function renderKocpPointReport(from,to){
   <button class="btn outline" onclick="koPointDownloadCategoryCsv()">Category CSV</button></div>
   <p class="simple-note">Full Excel downloads include every matching source row for the selected dates.
   The screen preview is limited for speed; downloaded Excel is not.</p>`;
+  const equipmentRows=loading.rows||[];
+  const equipmentPanel=panel('Excavator / Loader — Tipper-wise Trips',
+    '<p class="simple-note">Actual posted machine/tipper links are shown. Old Coal trips without a loading-machine selection remain unmapped rather than guessed.</p>'+
+    recentTable(['Date','Shift','Type','Excavator / Loader','Tipper','Material','Trips','Coal MT','OB CuM','Qty Pending'],
+    equipmentRows.slice(0,250).map(x=>'<tr><td>'+esc(x.date)+'</td><td>'+esc(x.shift)+'</td>'+
+      '<td>'+esc(x.type)+'</td><td>'+esc(x.loadingEquipment)+'</td><td>'+esc(x.tipper)+'</td>'+
+      '<td>'+esc(x.material)+'</td><td>'+fmt(x.trips)+'</td>'+
+      '<td>'+(x.quantityMt===null?'—':fmt(x.quantityMt,3))+'</td>'+
+      '<td>'+(x.quantityCum===null?'—':fmt(x.quantityCum,3))+'</td>'+
+      '<td>'+fmt(x.pendingQtyTrips||0)+'</td></tr>'))+
+    (equipmentRows.length>250?'<p class="simple-note">Showing 250 groups; download Excel for all entries.</p>':''),
+    equipmentRows.length+' equipment/tipper groups');
+  const billings=data.certifiedBilling||[],monthly=data.monthlyFactors||[];
+  const qtyPanel=panel('MCL Quantity — Daily Production vs Certified Billing',
+    '<p class="simple-note">Operational quantity is based on posted trips and approved daily rules. Certified monthly quantities remain separate for billing.</p>'+
+    '<p class="simple-note"><b>Coal operational: '+fmt(data.totals.COAL.quantity,3)+' MT</b> · <b>OB operational: '+fmt(data.totals.OB.quantity,3)+' CuM</b> · '+fmt(data.pendingOperationalTrips||0)+' trips awaiting approved daily factor.</p>'+
+    (billings.length?recentTable(['Period','Material','Status','Certified MT','Certified CuM','Billable MT','Billable CuM'],
+      billings.map(b=>'<tr><td>'+esc(b.periodStart)+' to '+esc(b.periodEnd)+'</td>'+
+      '<td>'+esc(b.material||'—')+'</td><td>'+esc(b.status)+'</td>'+
+      '<td>'+(b.certifiedMt===null?'—':fmt(b.certifiedMt,3))+'</td>'+
+      '<td>'+(b.certifiedCum===null?'—':fmt(b.certifiedCum,3))+'</td>'+
+      '<td>'+(b.billableMt===null?'—':fmt(b.billableMt,3))+'</td>'+
+      '<td>'+(b.billableCum===null?'—':fmt(b.billableCum,3))+'</td></tr>')):
+      '<p class="simple-note">No MCL certified billing record for this date range.</p>')+
+    (monthly.length?'<p class="simple-note">Monthly MCL factors — these are approved averages per trip, not certified quantities.</p>'+
+       recentTable(['Period','Material','Unloading','MCL rate','Status'],monthly.map(f=>
+       '<tr><td>'+esc(f.dateFrom)+' to '+esc(f.dateTo||'—')+'</td><td>'+esc(f.material||'—')+
+       '</td><td>'+esc(f.destination||'—')+'</td><td>'+fmt(f.value,3)+' '+esc(f.unit)+
+       '</td><td>'+esc(f.status)+'</td></tr>')):'')+
+    '<p class="simple-note">If daily quantity is missing after approval, check date, material, unloading point, route and equipment class. Monthly MCL approval never silently overwrites daily production.</p>',
+    fmt(data.pendingOperationalTrips||0)+' trips pending operational QTY');
   return pageHead('KOCP MIS Reports & Excel','Complete source records plus Coal, OB, equipment, HMR/KMR and fuel performance. MT and CuM remain separate.')+
-    context()+panel('Reporting period',form)+summary('COAL')+summary('OB')+
+    context()+panel('Reporting period',form)+qtyPanel+equipmentPanel+summary('COAL')+summary('OB')+
     panel('Date & shift details',details+grid(data.dailyShift.slice(0,1000)),data.dailyShift.length+' groups')+
     panel('Category-wise Coal and OB summary',
       '<p class="simple-note">Physical machine categories and ownership aliases are standardized for reporting. Coal is in MT, OB in CuM. These remain <b>operating quantities</b>; final billable figures are set only in Billing using approved MCL monthly factors or survey.</p>'+
