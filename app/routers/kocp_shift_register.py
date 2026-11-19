@@ -451,6 +451,66 @@ def management_style_report(request: Request, from_date: date, to_date: date,
     return build_kocp_management_report(db, from_date, to_date, kind)
 
 
+@router.get("/reports/loading-tipper")
+def loading_tipper_report(request: Request, from_date: date, to_date: date,
+                          db: Session = Depends(get_db)):
+    """Actual posted trips by excavator/loader and tipper, no inferred links."""
+    user = get_user(db, request)
+    require_site(db, user, "KOCP")
+    if not (user.admin or has_permission(db, user, "KOCP", "REPORTS", "VIEW")
+            or has_permission(db, user, "KOCP", "TRIP", "VIEW")):
+        raise HTTPException(403, "KOCP report access required.")
+    if to_date < from_date or (to_date - from_date).days > 366:
+        raise HTTPException(422, "Select a report range of at most 367 days.")
+    grouped = db.execute(select(
+        SiteTrip.operating_date, SiteTrip.shift,
+        SiteTrip.loading_equipment_id, SiteTrip.vehicle_id, SiteTrip.material_id,
+        SiteTrip.source_type, func.coalesce(func.sum(SiteTrip.trip_count), 0),
+        func.sum(SiteTrip.quantity_mt), func.sum(SiteTrip.quantity_cum),
+        func.coalesce(func.sum(SiteTrip.trip_count).filter(SiteTrip.factor_id.is_(None)), 0),
+    ).where(
+        SiteTrip.site_id == "KOCP", SiteTrip.status == "POSTED",
+        SiteTrip.operating_date >= from_date, SiteTrip.operating_date <= to_date,
+        SiteTrip.loading_equipment_id.is_not(None),
+    ).group_by(SiteTrip.operating_date, SiteTrip.shift,
+               SiteTrip.loading_equipment_id, SiteTrip.vehicle_id,
+               SiteTrip.material_id, SiteTrip.source_type
+    ).order_by(SiteTrip.operating_date, SiteTrip.shift,
+               SiteTrip.loading_equipment_id, SiteTrip.vehicle_id)).all()
+    if len(grouped) > 10000:
+        raise HTTPException(422, "Too many equipment/tipper groups; use a shorter date range.")
+    ids = {m for record in grouped for m in (record[2], record[3]) if m}
+    equipment = {e.machine_id: e for e in db.scalars(
+        select(Equipment).where(Equipment.machine_id.in_(ids)))} if ids else {}
+    mats = {m.site_material_id: m.name for m in db.scalars(
+        select(SiteMaterial).where(SiteMaterial.site_id == "KOCP"))}
+    def label(ident):
+        eq = equipment.get(ident)
+        if not eq: return ident or "—"
+        return " · ".join(str(v) for v in (
+            f"Door {eq.door_no}" if eq.door_no else None, eq.vehicle_no,
+            eq.make_model, ident
+        ) if v)
+    items = []
+    for day,shift,machine,tipper,material,source,trips,mt,cum,pending in grouped:
+        eq = equipment.get(machine)
+        category = kocp_equipment_category(eq.type, eq.make_model) if eq else "UNMAPPED"
+        if category not in {"EXCAVATOR", "LOADER"}:
+            continue
+        items.append({
+            "date": day.isoformat(), "shift": shift, "type": category,
+            "loadingEquipmentId": machine, "loadingEquipment": label(machine),
+            "tipperId": tipper, "tipper": label(tipper),
+            "material": mats.get(material, material or "—"), "source": source,
+            "trips": int(trips or 0), "quantityMt": str(mt) if mt is not None else None,
+            "quantityCum": str(cum) if cum is not None else None,
+            "pendingQtyTrips": int(pending or 0),
+        })
+    return {"fromDate": from_date.isoformat(), "toDate": to_date.isoformat(),
+            "rows": items, "count": len(items),
+            "unmappedHistoryNote": "Older Coal trips without a loading-machine selection cannot be assigned to a machine retroactively."}
+
+
 @router.get("/review-queue")
 def review_queue(request: Request, db: Session = Depends(get_db)):
     """Pending Coal/OB cards from all dates; ERP labels are read-only."""
