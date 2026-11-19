@@ -52,7 +52,7 @@ def test_all_five_client_templates_keep_contracts_and_uniform_headings():
             assert wb.worksheets
             assert all(sheet.sheet_view.showGridLines is False for sheet in wb.worksheets)
             if kind=="trip":
-                assert wb.sheetnames == ["WB Date-Time","02.11.26","Cummulative","Cancellation"]
+                assert wb.sheetnames == ["02.11.26","Cummulative","Cancellation"]
                 sheet=wb["02.11.26"]
                 assert [sheet.cell(2,c).value for c in range(1,17)]==[
                     "Sl.No.","Permit No.","Permit Qty.","Buyer Name",
