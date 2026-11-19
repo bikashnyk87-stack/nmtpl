@@ -21,7 +21,7 @@ from app.site_auth import has_permission, require_site
 from app.site_models import (
     SiteShift, SiteLocation, SiteMaterial, SiteMovementRoute, SiteAssetMeter,
     SiteTrip, SiteWeightFactor, SiteBillingReconciliation, SiteOperationalCode,
-    SiteShiftTripCard, SiteShiftTripCardLine, PersonSiteAssignment,
+    SiteShiftTripCard, SiteShiftTripCardLine, SiteCoalLoadingCount, PersonSiteAssignment,
 )
 from app.routers.site_ops import (
     _audit, _site_person_or_422, _site_equipment_or_422, _site_shift_or_422,
@@ -421,6 +421,127 @@ def edit_operational_code(payload: dict, request: Request, db: Session = Depends
            before=before, after={"name": name, "locationId": location_id, "active": active})
     db.commit()
     return {"ok": True}
+
+
+@router.get("/coal-loading-counts")
+def coal_loading_counts(request: Request, operating_date: date, shift: str,
+                        db: Session = Depends(get_db)):
+    """Independent Loader/Excavator Coal loading totals, not production trips."""
+    _auth(db, request, "TRIP", "VIEW")
+    sh = _source_code(shift)
+    _site_shift_or_422(db, "KOCP", sh)
+    records = list(db.scalars(select(SiteCoalLoadingCount).where(
+        SiteCoalLoadingCount.site_id == "KOCP",
+        SiteCoalLoadingCount.operating_date == operating_date,
+        SiteCoalLoadingCount.shift == sh,
+    ).order_by(SiteCoalLoadingCount.machine_id)))
+    posted = dict(db.execute(select(
+        SiteTrip.loading_equipment_id,
+        func.coalesce(func.sum(SiteTrip.trip_count), 0),
+    ).where(
+        SiteTrip.site_id == "KOCP", SiteTrip.operating_date == operating_date,
+        SiteTrip.shift == sh, SiteTrip.status == "POSTED",
+        SiteTrip.source_type == "SHIFT_COAL_REGISTER",
+    ).group_by(SiteTrip.loading_equipment_id)).all())
+    unassigned = int(posted.pop(None, 0) or 0)
+    items = []
+    for row in records:
+        tipper = int(posted.get(row.machine_id, 0) or 0)
+        difference = row.loaded_trips - tipper
+        items.append({
+            "machineId": row.machine_id, "loadedTrips": row.loaded_trips,
+            "postedTipperTrips": tipper, "difference": difference,
+            "status": ("WAITING_FOR_TIPPER" if tipper == 0
+                       else "MATCH" if difference == 0 else "DIFFERENCE"),
+            "version": row.version, "enteredBy": row.entered_by,
+            "updatedBy": row.updated_by,
+        })
+    known = {x.machine_id for x in records}
+    return {
+        "operatingDate": operating_date.isoformat(), "shift": sh,
+        "rows": items,
+        "unreportedMachines": [
+            {"machineId": mid, "postedTipperTrips": int(count or 0)}
+            for mid, count in sorted(posted.items()) if mid not in known
+        ],
+        "totals": {
+            "loadedTrips": sum(x.loaded_trips for x in records),
+            "postedMappedTipperTrips": sum(int(v or 0) for v in posted.values()),
+            "postedUnmappedTipperTrips": unassigned,
+            "postedAllTipperTrips": sum(int(v or 0) for v in posted.values()) + unassigned,
+        },
+        "explanation": "Machine counts are an independent MIS comparison. They do not create or increase production trips or quantity.",
+    }
+
+
+@router.post("/coal-loading-counts")
+def save_coal_loading_counts(payload: dict, request: Request,
+                             db: Session = Depends(get_db)):
+    """Atomic upsert of machine-wise Coal trips; never modifies SiteTrip."""
+    user = _auth(db, request, "TRIP", "CREATE", True)
+    operating_day = _date(payload.get("operatingDate"))
+    sh = _source_code(payload.get("shift"))
+    _site_shift_or_422(db, "KOCP", sh)
+    entries = payload.get("rows")
+    if not isinstance(entries, list) or not (1 <= len(entries) <= 200):
+        raise HTTPException(422, "Enter 1 to 200 machine loading rows.")
+    seen = set()
+    normalized = []
+    for index, raw in enumerate(entries, 1):
+        if not isinstance(raw, dict):
+            raise HTTPException(422, f"Machine row {index} is invalid.")
+        machine_id = _txt(raw.get("machineId"), 50)
+        if not machine_id or machine_id in seen:
+            raise HTTPException(422, "Select each Coal Loader/Excavator once per shift.")
+        seen.add(machine_id)
+        _asset(db, machine_id, operating_day, "COAL", "LOADING")
+        count = raw.get("loadedTrips")
+        if isinstance(count, bool) or not str(count).isascii() or not str(count).isdecimal():
+            raise HTTPException(422, f"Machine {machine_id}: enter a whole trip count.")
+        n = int(count)
+        if not (0 <= n <= 10000):
+            raise HTTPException(422, "Machine loading count must be 0 to 10,000 trips.")
+        normalized.append((machine_id, n, raw.get("expectedVersion")))
+    affected = 0
+    for mid, count, expected in normalized:
+        row = db.scalar(select(SiteCoalLoadingCount).where(
+            SiteCoalLoadingCount.site_id == "KOCP",
+            SiteCoalLoadingCount.operating_date == operating_day,
+            SiteCoalLoadingCount.shift == sh,
+            SiteCoalLoadingCount.machine_id == mid,
+        ).with_for_update())
+        if row is None:
+            if expected not in (None, ""):
+                raise HTTPException(409, "Machine entry changed; reload the Coal loading list.")
+            ident = f"CLD-KOCP-{uuid4().hex[:16].upper()}"
+            row = SiteCoalLoadingCount(
+                count_id=ident, site_id="KOCP", operating_date=operating_day,
+                shift=sh, machine_id=mid, loaded_trips=count,
+                entered_by=user.login_id, version=1,
+            )
+            db.add(row)
+            _audit(db, user, "KOCP", "CREATE_COAL_LOADING_COUNT",
+                   "site_coal_loading_count", ident,
+                   after={"machineId":mid,"loadedTrips":count,"date":str(operating_day),"shift":sh})
+            affected += 1
+        elif row.loaded_trips != count:
+            if not user.admin and row.entered_by != user.login_id and not has_permission(
+                    db, user, "KOCP", "TRIP", "EDIT"):
+                raise HTTPException(403, "Only the creator or authorized editor may correct loading counts.")
+            if isinstance(expected, bool) or str(expected or "") != str(row.version):
+                raise HTTPException(409, "Machine count changed. Refresh before editing.")
+            previous = {"loadedTrips": row.loaded_trips, "version": row.version}
+            row.loaded_trips = count
+            row.version += 1
+            row.updated_by = user.login_id
+            row.updated_at = datetime.now(timezone.utc)
+            _audit(db, user, "KOCP", "EDIT_COAL_LOADING_COUNT",
+                   "site_coal_loading_count", row.count_id,
+                   before=previous, after={"loadedTrips":count, "version":row.version})
+            affected += 1
+    db.commit()
+    return {"ok":True,"saved":affected,
+            **coal_loading_counts(request, operating_day, sh, db)}
 
 
 @router.get("/cards")
