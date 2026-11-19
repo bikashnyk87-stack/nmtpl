@@ -377,16 +377,19 @@ function screen(){
  '</div>'+
  meterPanel()+
  '<div class="sr-card sr-action-card">'+
- '<div class="sr-actions"><button class="sr-btn sr-secondary" type="button" onclick="KOCPSR.save()">Save Draft</button>'+
- '<button class="sr-btn" type="button" onclick="KOCPSR.submit()">Submit for Check</button>'+
+ '<div class="sr-actions">'+
+ (["NEW","DRAFT","REJECTED"].includes(status)?'<button class="sr-btn sr-secondary" type="button" onclick="KOCPSR.save()">Save Draft</button>'+
+ '<button class="sr-btn" type="button" onclick="KOCPSR.submit()">Submit for Check</button>':'')+
+ (card&&["DRAFT","REJECTED"].includes(status)?'<button class="sr-small sr-danger" type="button" onclick="KOCPSR.cancel(\''+esc(card.cardId)+'\')">Delete Draft</button>':'')+
  '<button class="sr-small" type="button" onclick="KOCPSR.newCard()">New '+model.kind+' Sheet</button>'+
  ((status==="SUBMITTED")?'<button class="sr-btn" type="button" onclick="KOCPSR.verify()">MIS Verify & Post</button>'+
  '<button class="sr-small" type="button" onclick="KOCPSR.reject()">Return for Correction</button>':'')+
  '</div>'+
+ (status==="VERIFIED"?'<p class="sr-muted">This register is verified and already posted. Corrections require audited production reversal and billing review.</p>':'')+
  '<div id="srNotice" aria-live="polite"></div></div>'+
  '<details class="sr-card"><summary>Shift MIS Summary</summary>'+
  '<div id="srSummary" class="sr-muted">Loading verified totals...</div></details>'+
- '<details class="sr-card"><summary>Recent Shift Registers</summary><div class="sr-toolbar">'+
+ '<details class="sr-card" open><summary>Recent Shift Registers — Edit / Delete</summary><div class="sr-toolbar">'+
  '<button class="sr-small" type="button" onclick="KOCPSR.history()">Refresh list</button></div>'+
  '<div id="srHistory" class="sr-muted">Loading saved records...</div></details>'+
  '</section>';
