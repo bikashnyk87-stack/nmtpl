@@ -2455,6 +2455,22 @@ def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
                 material(t.material_id),route_label(t.route_id),
                 num(t.quantity_mt),num(t.quantity_cum),t.factor_id,t.weight_basis,t.gp_no,
                 t.status,t.entered_by) for t in trips))
+    if selection in ("ALL", "EXCAVATOR", "LOADER"):
+        for machine_class, tab in (("EXCAVATOR", "Excavator Tipper Trips"),
+                                   ("LOADER", "Loader Tipper Trips")):
+            if selection != "ALL" and selection != machine_class:
+                continue
+            sheet(tab, ["Date","Shift","Loader/Excavator ID","Loader/Excavator",
+                        "Equipment Type","Tipper ID","Tipper / Door","Trips",
+                        "Coal MT","OB CuM","Material","Route / Lead","Source Record",
+                        "Pending Daily Factor"],
+                ((t.operating_date,t.shift,t.loading_equipment_id,asset(t.loading_equipment_id),
+                  machine_class,t.vehicle_id,asset(t.vehicle_id),t.trip_count,
+                  num(t.quantity_mt),num(t.quantity_cum),material(t.material_id),
+                  route_label(t.route_id),t.source_record_uid,
+                  t.factor_id is None)
+                 for t in trips if t.loading_equipment_id
+                 and asset_class(t.loading_equipment_id)==machine_class))
     if selection in ("ALL", "SHIFT", "COAL"):
         grouped = defaultdict(lambda: {"trips":0,"mt":Decimal(0),"cum":Decimal(0),"mt_known":False,"cum_known":False})
         for t in trips:
@@ -2581,6 +2597,35 @@ def kocp_comprehensive_report(request: Request, from_date: date, to_date: date,
                 material(f.material_id),point(f.destination_location_id),route_label(f.route_id),
                 f.vehicle_class,num(f.factor_value),f.factor_unit,f.source_org,f.reference_no,
                 f.status,f.approved_by) for f in factors))
+    if selection in ("ALL", "MCL"):
+        billing_rows = list(db.scalars(select(SiteBillingReconciliation).where(
+            SiteBillingReconciliation.site_id == "KOCP",
+            SiteBillingReconciliation.period_end >= start,
+            SiteBillingReconciliation.period_start <= end,
+        ).order_by(SiteBillingReconciliation.period_start,
+                   SiteBillingReconciliation.material_id)))
+        sheet("Certified MCL Billing", [
+            "Period Start","Period End","Material","Status","Operational MT",
+            "Operational CuM","Certified MT","Certified CuM","Billable MT",
+            "Billable CuM","Variance MT","Variance CuM","Billing Basis","Approved By"
+        ], ((b.period_start,b.period_end,material(b.material_id),b.status,
+             num(b.operational_mt),num(b.operational_cum),
+             num(b.certified_mt),num(b.certified_cum),
+             num(b.billable_mt),num(b.billable_cum),
+             num(b.variance_mt),num(b.variance_cum),b.billing_basis,b.approved_by)
+            for b in billing_rows))
+        sheet("Missing Operating Qty", [
+            "Date","Shift","Trip ID","Source","Vehicle","Loading Equipment",
+            "Trips","Material","Unloading Point","Route","Status","Cause"
+        ], ((t.operating_date,t.shift,t.trip_id,t.source_type,
+             asset(t.vehicle_id),asset(t.loading_equipment_id),
+             t.trip_count,material(t.material_id),point(t.destination_location_id),
+             route_label(t.route_id),t.status,
+             "No matching approved DAILY operating factor at posting/reconciliation"
+            ) for t in trips if t.source_type in ("SHIFT_COAL_REGISTER","SHIFT_OB_CARD")
+              and t.factor_id is None))
+        summary.append(["Quantity explanation",
+             "Operational Qty uses approved DAILY factors when posted. MCL monthly-certified Qty is shown separately in Certified MCL Billing."])
     data = BytesIO()
     wb.save(data)
     data.seek(0)
