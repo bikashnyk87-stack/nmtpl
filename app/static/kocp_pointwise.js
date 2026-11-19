@@ -210,6 +210,7 @@ async function renderKocpPointReport(from,to){
   <option value="SHIFT">Daily and shift</option>
   <option value="CUMULATIVE">Monthly equipment cumulative</option>
   <option value="COAL">Coal daily vehicle</option>
+   <option value="COAL_LOADING">Coal Loader / Excavator Loaded Trips — Check</option>
   <option value="OB_TIPPER">OB tipper performance</option>
   <option value="EXCAVATOR">Excavator performance</option>
   <option value="LOADER">Loader performance</option>
