@@ -40,32 +40,24 @@ def test_trip_summary_all_three_sheet_views_are_valid_and_qty_is_unmodified():
     with ZipFile(BytesIO(data)) as zipped:
         sheets=[name for name in zipped.namelist()
                 if name.startswith("xl/worksheets/sheet") and name.endswith(".xml")]
-        assert len(sheets)==4
+        assert len(sheets)==3
         n={"x":"http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
-        for index, xml_name in enumerate(sheets):
+        for xml_name in sheets:
             root=ET.fromstring(zipped.read(xml_name))
             view=root.find("x:sheetViews/x:sheetView",n)
             assert view is not None, xml_name
             pane=view.find("x:pane",n)
             assert pane is not None, xml_name
+            assert pane.get("topLeftCell")=="A3",xml_name
+            assert pane.get("activePane")=="bottomLeft",xml_name
+            assert pane.get("ySplit")=="2",xml_name
+            assert pane.get("xSplit") is None,xml_name
             selections=view.findall("x:selection",n)
-            if index == 0:  # front WB Time view has two frozen columns
-                assert pane.get("topLeftCell")=="C4", xml_name
-                assert pane.get("activePane")=="bottomRight", xml_name
-                assert pane.get("ySplit")=="3", xml_name
-                assert pane.get("xSplit")=="2", xml_name
-                assert len(selections)==3, (xml_name,len(selections))
-                assert selections[-1].get("pane")=="bottomRight",xml_name
-            else:
-                assert pane.get("topLeftCell")=="A3", xml_name
-                assert pane.get("activePane")=="bottomLeft", xml_name
-                assert pane.get("ySplit")=="2", xml_name
-                assert pane.get("xSplit") is None, xml_name
-                assert len(selections)==1, (xml_name,len(selections))
-                assert selections[0].get("pane")=="bottomLeft",xml_name
+            assert len(selections)==1, (xml_name,len(selections))
+            assert selections[0].get("pane")=="bottomLeft",xml_name
     book=load_workbook(BytesIO(data))
     try:
-        assert book.sheetnames==["WB Date-Time","06.11.26","Cummulative","Cancellation"]
+        assert book.sheetnames==["06.11.26","Cummulative","Cancellation"]
         ws=book["06.11.26"]
         assert ws["C2"].value=="Permit Qty."
         assert ws["C3"].value is None  # no approved quantity on this source row
@@ -89,9 +81,8 @@ def test_every_report_sets_one_complete_frozen_pane_not_stale_selections():
         try:
             assert book.worksheets
             for ws in book.worksheets:
-                actual_freeze = "C4" if kind=="trip" and ws.title=="WB Date-Time" else freeze
-                assert ws.freeze_panes==actual_freeze,(kind,ws.title,ws.freeze_panes)
-                assert len(ws.sheet_view.selection)==(1 if actual_freeze.startswith("A") else 3), (kind,ws.title)
+                assert ws.freeze_panes==freeze,(kind,ws.title,ws.freeze_panes)
+                assert len(ws.sheet_view.selection)==(1 if freeze.startswith("A") else 3), (kind,ws.title)
         finally:
             book.close()
 

@@ -55,7 +55,7 @@ def test_client_report_against_26_oct_reference(amns_day,type):
     assert totals["quantityMt"]==6869.27
     wb=load_workbook(BytesIO(output.getvalue()),read_only=True)
     if type=="trip":
-        assert wb.sheetnames==["WB Date-Time","26.10.26","Cummulative","Cancellation"]
+        assert wb.sheetnames==["26.10.26","Cummulative","Cancellation"]
         assert wb["26.10.26"]["N1"].value==224
         assert wb["26.10.26"]["P1"].value==6869.27
         assert wb["Cummulative"]["N1"].value==224
