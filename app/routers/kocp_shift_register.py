@@ -530,6 +530,9 @@ def save_coal_loading_counts(payload: dict, request: Request,
                 raise HTTPException(403, "Only the creator or authorized editor may correct loading counts.")
             if isinstance(expected, bool) or str(expected or "") != str(row.version):
                 raise HTTPException(409, "Machine count changed. Refresh before editing.")
+            reason = _txt(payload.get("reason"), 500)
+            if len(reason) < 5:
+                raise HTTPException(422, "Enter a correction reason (at least 5 characters).")
             previous = {"loadedTrips": row.loaded_trips, "version": row.version}
             row.loaded_trips = count
             row.version += 1
@@ -537,7 +540,8 @@ def save_coal_loading_counts(payload: dict, request: Request,
             row.updated_at = datetime.now(timezone.utc)
             _audit(db, user, "KOCP", "EDIT_COAL_LOADING_COUNT",
                    "site_coal_loading_count", row.count_id,
-                   before=previous, after={"loadedTrips":count, "version":row.version})
+                   before=previous, after={"loadedTrips":count, "version":row.version},
+                   reason=reason)
             affected += 1
     db.commit()
     return {"ok":True,"saved":affected,
