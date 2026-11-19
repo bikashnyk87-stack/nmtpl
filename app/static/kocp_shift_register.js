@@ -287,7 +287,7 @@ function headerHtml(){
 function coalLoadingPanel(){
  return '<div class="sr-card"><div class="sr-toolbar"><h2>Coal Loader / Excavator — Trips Loaded</h2></div>'+
   '<p class="sr-muted">Independent loading count, checked against verified tipper trips. Saving here does NOT add production trips or quantity. HMR stays in the meter section below.</p>'+
-  '<div class="sr-entry-actions"><select id="srCoalNewMachine" aria-label="Loading machine">'+
+  '<div class="sr-entry-actions"><select id="srCoalNewMachine" data-sr-asset="loadingCoal" aria-label="Loading machine">'+
    retainedOptions(model.masters.loadingCoal,"","Select Loader / Excavator from Masters")+'</select>'+
   '<input id="srCoalNewTrips" type="number" min="0" max="10000" step="1" placeholder="Trips loaded" aria-label="Trips loaded">'+
   '<button type="button" class="sr-btn" onclick="KOCPSR.saveCoalCount(-1)">Save Count</button></div>'+
