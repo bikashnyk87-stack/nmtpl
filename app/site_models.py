@@ -275,6 +275,31 @@ class SiteOperationalCode(Base):
     __table_args__ = (UniqueConstraint("site_id","code_kind","code",name="uq_site_operational_code"),)
 
 
+class SiteCoalLoadingCount(Base):
+    """Independent Coal machine loading count for MIS cross-check.
+
+    These operator-reported counts are NEVER posted as SiteTrip or quantity.
+    """
+    __tablename__ = "site_coal_loading_count"
+
+    count_id: Mapped[str] = mapped_column(String(60), primary_key=True)
+    site_id: Mapped[str] = mapped_column(ForeignKey("site.site_id"), nullable=False, index=True)
+    operating_date: Mapped[date] = mapped_column(Date, nullable=False, index=True)
+    shift: Mapped[str] = mapped_column(String(20), nullable=False)
+    machine_id: Mapped[str] = mapped_column(ForeignKey("equipment.machine_id"), nullable=False, index=True)
+    loaded_trips: Mapped[int] = mapped_column(Integer, nullable=False)
+    entered_by: Mapped[str] = mapped_column(String(60), nullable=False)
+    entered_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=datetime.utcnow)
+    updated_by: Mapped[str | None] = mapped_column(String(60))
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    version: Mapped[int] = mapped_column(Integer, default=1, nullable=False)
+    __table_args__ = (
+        UniqueConstraint("site_id", "operating_date", "shift", "machine_id",
+                         name="uq_kocp_coal_loader_shift"),
+        Index("ix_kocp_coal_loading_day", "site_id", "operating_date", "shift"),
+    )
+
+
 class SiteShiftTripCard(Base):
     """Physical source grain: Coal shift register OR one OB vehicle card."""
 
@@ -1095,6 +1120,7 @@ MULTISITE_TABLES = [
     MasterImportRow,
     SiteTrip,
     SiteOperationalCode,
+    SiteCoalLoadingCount,
     SiteShiftTripCard,
     SiteShiftTripCardLine,
     SiteOperationalImportBatch,
