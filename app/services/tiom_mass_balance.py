@@ -22,7 +22,7 @@ ROUTES = (
     ("RE_SCREEN_5_18", "Recovered/re-screened CLO"),
     ("LUMPS_FROM_SCREEN", "Lumps produced by MSP"),
     ("LUMPS_FEED_TO_CRUSHER", "MSP lumps to crusher"),
-    ("LUMPS_TO_STOCK", "MSP lumps to stock"),
+    ("LUMPS_SHIFTED_TO_STOCK", "MSP lumps to stock"),
     ("LUMPS_TO_CRUSHER_FROM_STOCK", "Lumps stock to crusher"),
     ("SPILLAGE_RECYCLE_MSP", "Internal MSP re-screen / recycle"),
     ("SPILLAGE_TO_CRUSHER", "Spillage to crusher"),
@@ -167,7 +167,7 @@ def calculate_tiom_mass_balance(facts_by_source, inventory=None):
     stock_complete = all(x is not None for x in (
         stock_open, stock_close, stock_other_in, stock_other_out
     ))
-    stock_receipts = add("ROM_STOCK_YARD", "LUMPS_TO_STOCK")
+    stock_receipts = add("ROM_STOCK_YARD", "LUMPS_SHIFTED_TO_STOCK")
     stock_issues = add("ROM_STOCK_TO_PLANT_FEED",
                        "ROM_STOCK_TO_CRUSHER", "LUMPS_TO_CRUSHER_FROM_STOCK")
     stock_variance = (
