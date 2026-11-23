@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.services.reconcile import auto_reconcile
 from app.services.time_context import TZ, now_local
+from app.services.tiom_shift_schedule import definition_for_day, context_at
 from app.services.wb_mapping import (
     find_wb_sheet, row_value, build_location_resolver, ensure_wb_header_mapping,
     expected_movement_date, operating_date_from_movement,
@@ -301,7 +302,13 @@ def infer_file_context(ws, header_row, idx, db):
         clock = clock_value(row_value(row, idx, "time"))
         if movement_day is not None:
             raw_dates.add(movement_day)
-        op_day = operating_date_from_movement(movement_day, clock, definition)
+        # The operating date controls the applicable shift schedule.
+        # Early-morning C movement dates belong to the previous shift date.
+        candidate = movement_day
+        if candidate and shift == "C" and clock is not None and clock < dtime(6, 0):
+            candidate = candidate - timedelta(days=1)
+        dated_definition = definition_for_day(candidate, definition) if candidate else definition
+        op_day = operating_date_from_movement(movement_day, clock, dated_definition)
         if op_day:
             operating_dates.add(op_day)
             operating_date_counts[op_day] = operating_date_counts.get(op_day, 0) + 1
@@ -389,6 +396,7 @@ def _ingest_single_shift_xlsx(content, filename, cfg, message_id):
         definition = db.get(ShiftMaster, shift)
         if not definition or not definition.active:
             raise ValueError(f"Shift {shift} is not active in Shift Master.")
+        definition = definition_for_day(operating_date, definition)
 
         existing_same = list(db.scalars(select(WbImportBatch).where(
             WbImportBatch.operating_date == operating_date,
@@ -1003,20 +1011,14 @@ def ingest_xlsx(content, filename, cfg, message_id):
     if not definitions:
         raise ValueError("No active A/B/C shifts are configured in Shift Master.")
 
-    def clock_belongs(definition, clock):
-        if clock is None or definition is None:
-            return False
-        start, end = definition.start_time, definition.end_time
-        if end > start:
-            return start <= clock < end
-        return clock >= start or clock < end
-
-    def shift_from_clock(clock):
-        matches = [
-            code for code, definition in definitions.items()
-            if clock_belongs(definition, clock)
-        ]
-        return matches[0] if len(matches) == 1 else ""
+    def shift_from_clock(clock, movement_day):
+        # Physical date + time determines the shift on the operating-date
+        # schedule (before October: 05/13/21; since October: 06/14/22).
+        # Never guess the shift when the physical date is missing.
+        if clock is None or movement_day is None:
+            return ""
+        resolved = context_at(datetime.combine(movement_day, clock, TZ))
+        return resolved[1] if resolved else ""
 
     rows = []
     raw_counts = Counter()
@@ -1035,7 +1037,8 @@ def ingest_xlsx(content, filename, cfg, message_id):
         if raw_code:
             raw_counts[raw_code] += 1
         clock = clock_value(_mixed_shift_row_value(row, idx, "time"))
-        time_code = shift_from_clock(clock)
+        movement_day = date_value(_mixed_shift_row_value(row, idx, "date"))
+        time_code = shift_from_clock(clock, movement_day)
         effective_code = time_code or raw_code
 
         row_list = list(row)
