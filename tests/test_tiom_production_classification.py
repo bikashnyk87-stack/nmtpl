@@ -70,6 +70,12 @@ class TiomProductionClassificationTests(unittest.TestCase):
         self.assertNotIn("LUMPS_FROM_SCREEN", codes)
         self.assertNotIn("CRUSHER_FEED", codes)
 
+    def test_stock_spillage_to_msp_is_external_feed_not_internal_recycle(self):
+        codes = contribution_codes(wb("Spillage", "Spillage stock", "MSP-3", "45"))
+        self.assertIn("SPILLAGE_FROM_STOCK", codes)
+        self.assertIn("MSP_FEED", codes)
+        self.assertNotIn("SPILLAGE_RECYCLE_MSP", codes)
+
     def test_spillage_to_same_msp_is_recycle(self):
         codes = contribution_codes(wb("SPILLAGE", "MSP-4", "MSP-4", "25"))
         self.assertIn("SPILLAGE_RECYCLE_MSP", codes)
