@@ -51,4 +51,4 @@ def test_ten_column_css_and_contained_form_controls():
 
 def test_live_asset_urls_refer_to_updated_scripts():
     assert "/static/tiom_phase1.js?v=tiom-wb-visibility-sync-20261123" in PAGE
-    assert "/static/tiom_phase1.css?v=tiom-wb-visibility-sync-20261123" in PAGE
+    assert "/static/tiom_phase1.css?v=tiom-linked-wb-preview-20261123" in PAGE
