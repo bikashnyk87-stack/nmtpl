@@ -1305,12 +1305,28 @@ def poll_once(service, cfg, labels):
         sender_query,
         exclusions,
     ) if part)
-    response = service.users().messages().list(
-        userId="me", q=query, maxResults=int(cfg.get("max_messages_per_poll", 25))
-    ).execute()
-    ids = [x["id"] for x in response.get("messages", [])]
+    # One inbox page per poll can indefinitely starve genuine WB mail when
+    # newer approved-sender messages fail local subject checks. Page across a
+    # bounded backlog instead of repeating the same first 25 every 3 minutes.
+    # No label or source-record changes are made for ignored messages.
+    page_size = max(1, min(100, int(cfg.get("max_messages_per_poll", 25))))
+    max_pages = max(1, min(20, int(cfg.get("max_pages_per_poll", 10))))
+    ids = []
+    page_token = None
+    for _ in range(max_pages):
+        params = {"userId": "me", "q": query, "maxResults": page_size}
+        if page_token:
+            params["pageToken"] = page_token
+        response = service.users().messages().list(**params).execute()
+        ids.extend(x["id"] for x in response.get("messages", []) if x.get("id"))
+        page_token = response.get("nextPageToken")
+        if not page_token:
+            break
+    if page_token:
+        logger.warning("WB Gmail backlog continues beyond %d pages (%d messages scanned); "
+                       "further pages will be checked on the next poll", max_pages, len(ids))
     processed = []
-    for message_id in reversed(ids):
+    for message_id in reversed(dict.fromkeys(ids)):
         message = service.users().messages().get(userId="me", id=message_id, format="full").execute()
         result = process_message(service, message, cfg, labels)
         processed.append(result)
