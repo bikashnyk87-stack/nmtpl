@@ -828,14 +828,11 @@ def dashboard_desk(db, user, p):
     manual_history_start=min(start_day,end_day.replace(day=1),end_day-timedelta(days=6))
     manual_process_history=unweighed_process_trip_facts(
         db,manual_history_start,end_day,selected_shift,allowed_shifts)
+    # Production totals are whole-period facts. Exploratory WB vehicle/material
+    # filters must not remove manual factors while WB totals remain unfiltered.
+    # Future scoped material-balance filters need to filter BOTH sources.
     manual_process_period=[item for item in manual_process_history
-                         if start_day<=item['date']<=end_day
-                         and (not vehicle_filter or item['vehicleId']==vehicle_filter)
-                         and (not source_filter or item['source'].location_id==source_filter)
-                         and (not destination_filter or item['destination'].location_id==destination_filter)
-                         # An explicit WB-material filter must not silently
-                         # include no-WB factor quantities of another material.
-                         and not material_filter]
+                           if start_day<=item['date']<=end_day]
     manual_crusher_feed=Decimal('0')
     manual_crusher_feed_trips=0
     manual_stock_crusher_feed=Decimal('0')
@@ -867,6 +864,7 @@ def dashboard_desk(db, user, p):
     # Stage movement reconciliation is read-only. Unknown stock, WIP and
     # reject quantities must remain pending until explicit ledgers exist.
     material_balance=calculate_tiom_mass_balance(mass_balance_source_facts)
+    material_balance['scope']='WHOLE_OPERATING_PERIOD'
     for hour,hfacts in hourly_process_facts.items():
         screen_hour=hfacts.get('SCREEN_FINES',Decimal('0'))+hfacts.get('SCREEN_5_18',Decimal('0'))
         crusher_gross_hour=hfacts.get('CRUSHER_FINES',Decimal('0'))+hfacts.get('CRUSHER_5_18',Decimal('0'))
