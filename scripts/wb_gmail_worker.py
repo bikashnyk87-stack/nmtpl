@@ -1197,22 +1197,33 @@ def process_message(service, message, cfg, labels):
     sender = parseaddr(sender_text)[1].lower()
     subject = header_value(message, "Subject")
 
+    def ignored(status, **details):
+        # Gmail's from:@domain search can match ext.domain subdomains even
+        # when our exact sender_allowed check rejects them. Preserve the mail
+        # and UNREAD/INBOX flags; a dedicated label prevents perpetual replay.
+        # Admin can remove NMTPL_WB_SKIPPED to requeue after policy changes.
+        name=cfg.get("skipped_label","NMTPL_WB_SKIPPED")
+        skip_id=labels.get(name) if name else None
+        if skip_id:
+            apply_labels(service, message["id"], [skip_id], [])
+        return dict(status=status,message_id=message["id"],**details)
+
     if not sender_allowed(sender, cfg.get("allowed_senders", [])):
         logger.warning("Skipped message %s from unapproved sender %s", message["id"], sender or sender_text)
-        return {"status": "SKIPPED_SENDER", "message_id": message["id"], "sender": sender}
+        return ignored("SKIPPED_SENDER", sender=sender)
 
     if not subject_allowed(subject, cfg.get("subject_keywords", [])):
         logger.info("Skipped message %s because subject did not match configured keywords", message["id"])
-        return {"status": "SKIPPED_SUBJECT", "message_id": message["id"], "subject": subject}
+        return ignored("SKIPPED_SUBJECT", subject=subject)
 
     start_after = datetime.fromisoformat(str(cfg["start_after_utc"]).replace("Z", "+00:00"))
     internal = datetime.fromtimestamp(int(message.get("internalDate", "0")) / 1000, tz=timezone.utc)
     if internal < start_after:
-        return {"status": "SKIPPED_OLD", "message_id": message["id"]}
+        return ignored("SKIPPED_OLD")
 
     attachments = xlsx_attachments(service, message)
     if not attachments:
-        return {"status": "SKIPPED_NO_XLSX", "message_id": message["id"]}
+        return ignored("SKIPPED_NO_XLSX")
 
     results = []
     for filename, content in attachments:
@@ -1277,6 +1288,9 @@ def process_message(service, message, cfg, labels):
         if cfg.get("archive_success", True):
             remove.extend(["INBOX", "UNREAD"])
 
+    skip_name=cfg.get("skipped_label","NMTPL_WB_SKIPPED")
+    if skip_name and labels.get(skip_name):
+        remove.append(labels[skip_name])
     apply_labels(service, message["id"], add, remove)
     return {
         "status": "DONE",
@@ -1291,6 +1305,7 @@ def poll_once(service, cfg, labels):
     label_names = [
         cfg["processed_label"], cfg["duplicate_label"], cfg["error_label"],
         cfg["review_required_label"],
+        cfg.get("skipped_label", "NMTPL_WB_SKIPPED"),
     ]
     exclusions = " ".join(f"-label:{name}" for name in label_names)
     # Restrict Gmail search BEFORE applying the per-poll cap. Filtering only
@@ -1348,6 +1363,7 @@ def main():
             label_names = [
                 cfg["processed_label"], cfg["duplicate_label"], cfg["error_label"],
                 cfg["review_required_label"], cfg["review_rows_label"],
+                cfg.get("skipped_label", "NMTPL_WB_SKIPPED"),
             ]
             labels = ensure_labels(service, label_names)
             results = poll_once(service, cfg, labels)
