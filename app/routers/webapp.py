@@ -51,7 +51,7 @@ from app.services.tiom_erp import (
 )
 from app.services.tiom_location_erp import canonicalize_wb_rows, location_options, ensure_location_master_roles
 from app.services.tiom_manual_material import canonical_manual_45_material
-from app.services.tiom_manual_process import manual_lump_process_codes, unweighed_lump_trip_facts
+from app.services.tiom_manual_process import manual_process_codes, unweighed_process_trip_facts
 from app.services.tiom_wb_truth import canonical_wb_product, repair_saved_wb_linked_mis
 from app.services.wb_quarantine import WbGmailQuarantine
 from app.site_models import (
@@ -822,9 +822,9 @@ def dashboard_desk(db, user, p):
     # movement. Keep them out of WB movement totals and WB-only vehicle metrics.
     # One source row may produce separate SCREEN_OUTPUT and CRUSHER_FEED facts.
     manual_history_start=min(start_day,end_day.replace(day=1),end_day-timedelta(days=6))
-    manual_lumps_history=unweighed_lump_trip_facts(
+    manual_process_history=unweighed_process_trip_facts(
         db,manual_history_start,end_day,selected_shift,allowed_shifts)
-    manual_lumps_period=[item for item in manual_lumps_history
+    manual_process_period=[item for item in manual_process_history
                          if start_day<=item['date']<=end_day
                          and (not vehicle_filter or item['vehicleId']==vehicle_filter)
                          and (not source_filter or item['source'].location_id==source_filter)
@@ -836,18 +836,18 @@ def dashboard_desk(db, user, p):
     manual_crusher_feed_trips=0
     manual_stock_crusher_feed=Decimal('0')
     manual_msp_transfers={}
-    for item in manual_lumps_period:
+    for item in manual_process_period:
         qty=item['qty']; codes=set(item['codes'])
         for code in codes:
             production_facts[code]=production_facts.get(code,Decimal('0'))+qty
             production_fact_trips[code]=production_fact_trips.get(code,0)+1
-        if 'PRODUCT_REHANDLED' in codes:
+        if 'PRODUCT_REHANDLED' in codes or 'ROM_REHANDLED' in codes:
             old_stock_excluded+=qty
             old_stock_trips+=1
         if 'CRUSHER_FEED' in codes:
             manual_crusher_feed+=qty
             manual_crusher_feed_trips+=1
-            if 'PRODUCT_REHANDLED' in codes:
+            if 'CRUSHER_STOCK_FEED' in codes:
                 manual_stock_crusher_feed+=qty
         if 'LUMPS_FEED_TO_CRUSHER' in codes:
             source=item['source']
@@ -884,6 +884,7 @@ def dashboard_desk(db, user, p):
     screen_intermediate=screen_lumps+spillage_to_crusher
     crusher_feed_fact=production_facts.get('CRUSHER_FEED',Decimal('0'))
     crusher_blend_feed=production_facts.get('CRUSHER_BLEND_FEED',Decimal('0'))
+    crusher_stock_feed=production_facts.get('CRUSHER_STOCK_FEED',Decimal('0'))
 
     screen_direct=screen_fines+screen_518
     screen_accounted=screen_direct+screen_intermediate+spillage_wip
@@ -896,8 +897,8 @@ def dashboard_desk(db, user, p):
     # A missing crusher-feed quantity must never silently prove 100% fresh output.
     allocation_pending=(crusher_final>0 and (
         crusher_feed_fact<=0 or crusher_blend_feed>crusher_feed_fact
-        or manual_stock_crusher_feed>0))
-    allocation_status=('STOCK_FEED_ALLOCATION_REQUIRED' if manual_stock_crusher_feed>0
+        or crusher_stock_feed>0))
+    allocation_status=('STOCK_FEED_ALLOCATION_REQUIRED' if crusher_stock_feed>0
                        else 'CRUSHER_FEED_TONNAGE_MISSING' if crusher_final>0 and crusher_feed_fact<=0
                        else 'BLEND_FEED_EXCEEDS_TOTAL' if crusher_blend_feed>crusher_feed_fact
                        else 'PROPORTIONAL_ALLOCATION' if crusher_blend_feed>0
@@ -1088,7 +1089,7 @@ def dashboard_desk(db, user, p):
         })
 
     crusher_feed=crusher_feed_fact
-    crusher_fresh_feed=max(Decimal('0'),crusher_feed-crusher_blend_feed)
+    crusher_fresh_feed=max(Decimal('0'),crusher_feed-crusher_blend_feed-crusher_stock_feed)
     crusher_recovery=(float(crusher_final/crusher_feed*Decimal('100'))) if crusher_feed>0 else None
     crusher_run_hours=_plant_run_hours('Crusher')
     crusher_feed_tph=round(float(crusher_feed)/crusher_run_hours,2) if crusher_run_hours and crusher_run_hours>0 else None
@@ -1097,7 +1098,9 @@ def dashboard_desk(db, user, p):
         'plant':'Crusher','plantType':'CRUSHER',
         'feedMt':round(float(crusher_fresh_feed),2),'freshFeedMt':round(float(crusher_fresh_feed),2),'feedTrips':len(crusher_feed_rows)+manual_crusher_feed_trips,
         'manualFactorTrips':manual_crusher_feed_trips,
-        'recycleMt':0.0,'blendFeedMt':round(float(crusher_blend_feed),2),'blendTrips':len(crusher_blend_rows),
+        'recycleMt':0.0,'blendFeedMt':round(float(crusher_blend_feed),2),
+        'stockFeedMt':round(float(crusher_stock_feed),2),
+        'blendTrips':len(crusher_blend_rows),
         'grossThroughputMt':round(float(crusher_feed),2),
         'directFinalMt':round(float(crusher_fresh_final),2),'outputMt':round(float(crusher_fresh_final),2),
         'grossOutputMt':round(float(crusher_final),2),'blendOutputMt':round(float(crusher_blend_output),2),
@@ -1203,7 +1206,7 @@ def dashboard_desk(db, user, p):
             if code not in seen_month:
                 month_process_trips[code]=month_process_trips.get(code,0)+1;seen_month.add(code)
     month_manual_stock_trips=0
-    for item in manual_lumps_history:
+    for item in manual_process_history:
         if not (month_start<=item['date']<=end_day):
             continue
         day_store=month_day_facts.setdefault(str(item['date']),{})
@@ -1212,7 +1215,7 @@ def dashboard_desk(db, user, p):
             month_process_facts[code]=month_process_facts.get(code,Decimal('0'))+qty
             month_process_trips[code]=month_process_trips.get(code,0)+1
             day_store[code]=day_store.get(code,Decimal('0'))+qty
-        if 'PRODUCT_REHANDLED' in item['codes']:
+        if 'PRODUCT_REHANDLED' in item['codes'] or 'ROM_REHANDLED' in item['codes']:
             month_old_stock_excluded+=item['qty']
             month_manual_stock_trips+=1
     for key,facts in month_day_facts.items():
@@ -1358,7 +1361,7 @@ def dashboard_desk(db, user, p):
             facts=r['processFacts'];facts[code]=facts.get(code,Decimal('0'))+q
             if code == 'ROM':
                 r['romInput']+=float(q)
-    for item in manual_lumps_history:
+    for item in manual_process_history:
         day_row=seven.get(str(item['date']))
         if day_row:
             for code in set(item['codes']):
@@ -1419,6 +1422,9 @@ def dashboard_desk(db, user, p):
         'crusherFeedMt':round(float(crusher_feed),2),'crusherFeedPct':prod_pct(crusher_feed),
         'crusherFeedManualFactorMt':round(float(manual_crusher_feed),2),
         'crusherFeedManualFactorTrips':manual_crusher_feed_trips,
+        'crusherStockFeedMt':round(float(crusher_stock_feed),2),
+        'romDirectCrusherMt':round(float(production_facts.get('ROM_FEED_TO_CRUSHER',0)),2),
+        'romStockCrusherMt':round(float(production_facts.get('ROM_STOCK_TO_CRUSHER',0)),2),
         'crusherFeedBasis':'WB_AND_MIS_FACTOR' if manual_crusher_feed>0 else 'WB',
         'crusherFreshFeedMt':round(float(crusher_fresh_feed),2),'crusherFreshFeedPct':prod_pct(crusher_fresh_feed),
         'crusherBlendFeedMt':round(float(crusher_blend_feed),2),'crusherBlendFeedPct':prod_pct(crusher_blend_feed),
@@ -5244,6 +5250,9 @@ TIOM_SHIFT_REPORT_LINES = [
     ('PRODUCTION (PROCESSED ORE)','LUMPS_SHIFTED_TO_STOCK','Lumps Shifted to Stock',True),
     ('CRUSHER PRODUCTION','LUMPS_TO_CRUSHER_FROM_STOCK','Lumps shifted to Crusher from Stock',False),
     ('CRUSHER PRODUCTION','LUMPS_FEED_TO_CRUSHER','Lumps feed to Crusher',False),
+    ('CRUSHER PRODUCTION','ROM_FEED_TO_CRUSHER','ROM / mine-face feed to Crusher',False),
+    ('CRUSHER PRODUCTION','ROM_STOCK_TO_CRUSHER','ROM stock feed to Crusher',False),
+    ('CRUSHER PRODUCTION','CRUSHER_FEED','Total physical Crusher feed',False),
     ('CRUSHER PRODUCTION','CRUSHER_FINES','Crusher Fines',False),
     ('CRUSHER PRODUCTION','CRUSHER_5_18','Crusher 5-18mm',False),
     ('RE-SCREENING OUT PUT SHIFTING','FIVE_40_FEED_TO_PLANT','5-40mm feed to Plant',True),
@@ -5266,6 +5275,9 @@ TIOM_SHIFT_MOVEMENTS = [
     ('LUMPS_FROM_SCREEN','Lumps from Screen','ROM_LUMPS'),
     ('LUMPS_TO_CRUSHER_FROM_STOCK','Lumps shifted to Crusher from Stock','ROM_LUMPS'),
     ('LUMPS_FEED_TO_CRUSHER','Lumps feed to Crusher',None),
+    ('ROM_FEED_TO_CRUSHER','ROM / Mine Face to Crusher',None),
+    ('ROM_STOCK_TO_CRUSHER','ROM Stock to Crusher',None),
+    ('CRUSHER_FEED','Crusher feed (all sources)',None),
     ('CRUSHER_FINES','Crusher Fines',None),
     ('CRUSHER_5_18','Crusher 5-18 mm',None),
     ('RE_SCREEN_FINES','Re Screen Fines',None),
@@ -5356,7 +5368,7 @@ def _tiom_shift_ftd_bundle(db, day, sh, include_draft=False):
             product=pmap.get(d.material_id)
             source=lmap.get(d.source_location_id)
             destination=lmap.get(d.destination_location_id)
-            codes=manual_lump_process_codes(product,source,destination)
+            codes=manual_process_codes(product,source,destination)
             if not codes:
                 codes=(_tiom_classify_mis_line(product,source,destination),)
             for code in codes:
