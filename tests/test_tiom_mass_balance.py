@@ -25,7 +25,7 @@ def test_22_nov_screen_observed_gap_does_not_become_verified_stock_or_lumps():
     assert result["crusher"]["verifiedVarianceMt"] is None
     assert result["stock"]["verifiedVarianceMt"] is None
     lumps = next(x for x in result["routes"] if x["code"] == "LUMPS_FROM_SCREEN")
-    assert lumps["measuredMt"] == 0
+    assert lumps["measuredMt"] is None
     assert lumps["estimatedMt"] == 990
 
 
