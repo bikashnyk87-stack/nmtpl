@@ -27,7 +27,8 @@ def test_hmr_grid_has_only_ten_visible_columns():
 
 def test_transfer_still_uses_saved_boundaries_and_audited_explicit_changeover():
     assert "fromTime:v('td_from_'+i),toTime:v('td_to_'+i)" in UI
-    assert "x.r.deploymentId&&x.r.machineId&&x.r.sourceLocationId&&!x.r.toTime" in UI
+    assert "getTiomTransferOptions({date,shift})" in UI
+    assert "(result.rows||[]).filter(r=>r.deploymentId&&r.machineId&&r.sourceLocationId)" in UI
     assert 'id="tm_transfer_end"' in UI
     assert 'id="tm_transfer_start"' in UI
     assert "transferTiomSourceDeployment({" in UI
