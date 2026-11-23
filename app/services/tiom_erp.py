@@ -260,6 +260,9 @@ def wb_report_contributions(wb: WbMovement):
         if 'CRUSH' in dst or 'OCP' in dst:
             return [('SPILLAGE_TO_CRUSHER', qty), ('CRUSHER_FEED', qty)]
         if any(x in dst for x in ('MSP', 'SCREEN')):
+            if stock_source:
+                return [('PRODUCT_REHANDLED', qty),
+                        ('SPILLAGE_FROM_STOCK', qty), ('MSP_FEED', qty)]
             return [('SPILLAGE_RECYCLE_MSP', qty)]
         return [('SPILLAGE_WIP', qty)]
 
