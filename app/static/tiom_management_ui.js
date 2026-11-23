@@ -112,11 +112,11 @@
       metric('MSP external feed',fmt(m.externalFeedMt,2,' t'),'Fresh ROM + approved stock feed','teal')+
       metric('MSP recycle throughput',fmt(m.internalRecycleMt,2,' t'),'Internal pass, not additional fresh ore','blue')+
       metric('Lumps recorded',fmt(m.recordedLumpsMt,2,' t'),'WB or declared MIS-factor route','blue')+
-      metric('Lumps balance candidate',fmt(m.candidateLumpsMt,2,' t'),'Provisional before stock/WIP/rejects','amber')+
+      metric('Calculated lumps (indicative)',fmt(m.candidateLumpsMt,2,' t'),'Input minus recorded fines/CLO; not approved output','amber')+
       metric('Crusher physical feed',fmt(c.totalFeedMt,2,' t'),'All origins, counted once','teal')+
       metric('Crusher output',fmt(c.recordedOutputMt,2,' t'),'Recorded products, not fresh allocation','blue')+
-      metric('MSP provisional variance',fmt(m.observedDifferenceMt,2,' t'),'Incomplete balance; not a stock receipt','amber')+
-      metric('Crusher provisional variance',fmt(c.observedDifferenceMt,2,' t'),'Excludes unknown WIP/rejects/loss','amber')+
+      metric('MSP unexplained difference',fmt(m.observedDifferenceMt,2,' t'),'Input minus recorded outputs; not assumed loss','amber')+
+      metric('Crusher unexplained difference',fmt(c.observedDifferenceMt,2,' t'),'Feed minus recorded output; not assumed loss','amber')+
       metric('Stock verified balance',fmt(stock.verifiedVarianceMt,2,' t'),stock.status==='CALCULATED'?'Source ledger supplied':'Opening and closing stock pending','amber')+
       '</div>';
     const rows=measured.map(r=>[
@@ -126,13 +126,13 @@
       fmt(r.qtyMt,2)
     ]);
     const flags='<div class="mc-flow-alert">'+
-      '<b>Balance status: '+E(b.status||'PENDING')+'</b>'+
-      ' · MSP missing: '+E(arr(m.missing).join(', ')||'none')+
-      ' · Crusher missing: '+E(arr(c.missing).join(', ')||'none')+
-      ' · Stock missing: '+E(arr(stock.missing).join(', ')||'none')+
+      '<b>Provisional movement reconciliation</b> · no WIP measurement or entry required'+
+      ' · MSP movements missing: '+E(arr(m.missing).join(', ')||'none')+
+      ' · Crusher movements missing: '+E(arr(c.missing).join(', ')||'none')+
+      ' · Stock balance: '+E(stock.status==='CALCULATED'?'recorded':'not independently measured')+
       '</div>';
     return top+flags+tbl(['Recorded movement / stage','WB t','Manual / factor t','Stage t'],rows)+
-      '<p class="mc-caveat">Stage quantities overlap physically: do not sum this table as total production. Recycled spillage is a second processing pass. Manual-factor quantities are estimates, and provisional variances are not approved recovery, stock or fresh output.</p>';
+      '<p class="mc-caveat">Stage quantities overlap physically: do not sum this table as total production. Recycled spillage is a second processing pass. Manual-factor quantities are estimates. Any unexplained difference is for MIS reconciliation only, not WIP, stock, loss, recovery or approved fresh output.</p>';
   }
   window.tiomEquipMode=function(mode){S.tiomEquipMode=mode; if(S.tiomOwnerData)ownerView(S.tiomOwnerData);};
   function setupOwner() {
