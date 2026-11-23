@@ -40,7 +40,29 @@
 .tiom-card-title{min-height:22px!important;margin:-4px -6px 4px!important;padding:4px 6px!important;background:#eef3f6;border-bottom:1px solid #d6e0e6}.tiom-card-title b{font-size:9px!important}.tiom-card-title span{font-size:8px!important}.tiom-card-title>div:last-child{display:flex;gap:3px;align-items:center}
 .tiom-driver-grid{grid-template-columns:minmax(170px,1.25fr) minmax(180px,1.3fr) minmax(100px,.7fr) 86px 86px 72px minmax(145px,1fr)!important;gap:3px!important}.tiom-driver-grid label{font-size:7.8px!important}.tiom-driver-grid input,.tiom-driver-grid select,.tiom-driver-grid .combo-text{height:23px!important;min-height:23px!important;font-size:9px!important;padding:2px 4px!important}
 .tiom-entry-table th{height:24px;padding:2px 4px!important;font-size:8px!important;background:#e9eff3!important;color:#29495d}.tiom-entry-table td{padding:2px 3px!important;font-size:8.5px!important}.tiom-entry-table input,.tiom-entry-table select,.tiom-entry-table .combo-text{height:22px!important;min-height:22px!important;padding:1px 4px!important;font-size:8.5px!important;border-radius:3px!important}
-.tiom-deploy-scroll{max-height:218px;overflow:auto}.tiom-deploy-scroll thead th{position:sticky;top:0;z-index:3}.tiom-deploy-table{min-width:1130px!important;table-layout:fixed}.tiom-deploy-table th:nth-child(1),.tiom-deploy-table td:nth-child(1){width:28px!important}.tiom-deploy-table th:nth-child(2),.tiom-deploy-table td:nth-child(2){width:175px!important}.tiom-deploy-table th:nth-child(3),.tiom-deploy-table td:nth-child(3){width:180px!important}.tiom-deploy-table th:nth-child(4),.tiom-deploy-table td:nth-child(4){width:98px!important}.tiom-deploy-table th:nth-child(5),.tiom-deploy-table td:nth-child(5),.tiom-deploy-table th:nth-child(6),.tiom-deploy-table td:nth-child(6){width:66px!important}.tiom-deploy-table th:nth-child(7),.tiom-deploy-table td:nth-child(7),.tiom-deploy-table th:nth-child(8),.tiom-deploy-table td:nth-child(8){width:72px!important}.tiom-deploy-table th:nth-child(9),.tiom-deploy-table td:nth-child(9){width:78px!important;text-align:right}.tiom-deploy-table th:nth-child(10),.tiom-deploy-table td:nth-child(10){width:55px!important;text-align:center}.tiom-deploy-table th:nth-child(11),.tiom-deploy-table td:nth-child(11){width:42px!important;text-align:center}.tiom-deploy-table th:nth-child(12),.tiom-deploy-table td:nth-child(12){width:155px!important}.tiom-deploy-table .hmr-input{min-width:0!important;width:100%!important}.tiom-deploy-table .hmr-reset input{width:14px!important;height:14px!important;min-height:14px!important}.hmr-run{font-weight:800;color:#234e65}.tiom-help.compact{padding:3px 1px 0!important;font-size:7.5px!important}
+/* HMR equipment setup: ten actual columns, with period times maintained
+   in hidden inputs and edited only via the audited Transfer Equipment form. */
+.tiom-deploy-scroll{max-height:280px;overflow:auto}
+.tiom-deploy-scroll thead th{position:sticky;top:0;z-index:3}
+.tiom-deploy-table{min-width:1120px!important;width:100%!important;table-layout:fixed}
+.tiom-deploy-table th:nth-child(1),.tiom-deploy-table td:nth-child(1){width:3%!important;text-align:center}
+.tiom-deploy-table th:nth-child(2),.tiom-deploy-table td:nth-child(2){width:17%!important}
+.tiom-deploy-table th:nth-child(3),.tiom-deploy-table td:nth-child(3){width:19%!important}
+.tiom-deploy-table th:nth-child(4),.tiom-deploy-table td:nth-child(4){width:12%!important}
+.tiom-deploy-table th:nth-child(5),.tiom-deploy-table td:nth-child(5){width:10%!important}
+.tiom-deploy-table th:nth-child(6),.tiom-deploy-table td:nth-child(6){width:8%!important}
+.tiom-deploy-table th:nth-child(7),.tiom-deploy-table td:nth-child(7){width:8%!important}
+.tiom-deploy-table th:nth-child(8),.tiom-deploy-table td:nth-child(8){width:5%!important;text-align:center}
+.tiom-deploy-table th:nth-child(9),.tiom-deploy-table td:nth-child(9){width:5%!important;text-align:center}
+.tiom-deploy-table th:nth-child(10),.tiom-deploy-table td:nth-child(10){width:13%!important}
+#tm_dep_panel .tiom-deploy-table tbody tr{height:30px!important}
+#tm_dep_panel .tiom-deploy-table th{padding:3px 4px!important;font-size:9px!important;white-space:nowrap!important}
+#tm_dep_panel .tiom-deploy-table tbody td{padding:2px 4px!important;font-size:10px!important;line-height:1.15!important;overflow:hidden}
+#tm_dep_panel .tiom-deploy-table td :is(input:not([type=checkbox]),select,.combo-text){display:block;width:100%!important;max-width:100%!important;min-width:0!important;height:24px!important;min-height:24px!important;padding:2px 5px!important;box-sizing:border-box!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#tm_dep_panel .tiom-deploy-table .tiom-combo{min-width:0;width:100%;max-width:100%}
+#tm_dep_panel .tiom-deploy-table td .combo-text{padding-right:23px!important}
+#tm_dep_panel .tiom-deploy-table .hmr-reset input{width:14px!important;height:14px!important;min-height:14px!important}
+.tiom-deploy-table .hmr-input{min-width:0!important;width:100%!important}.tiom-deploy-table .hmr-reset input{width:14px!important;height:14px!important;min-height:14px!important}.hmr-run{font-weight:800;color:#234e65}.tiom-help.compact{padding:3px 1px 0!important;font-size:7.5px!important}
 .erp-trip-table{min-width:1100px!important;table-layout:fixed}.erp-trip-table td:nth-child(3){width:145px!important}.erp-trip-table td:nth-child(4),.erp-trip-table td:nth-child(5),.erp-trip-table td:nth-child(7){width:165px!important}.erp-trip-table td:nth-child(6),.erp-trip-table td:nth-child(8){width:72px!important}.tiom-trip-scroll{max-height:245px!important}
 .tiom-actionbar{margin-bottom:4px!important;min-height:34px;padding:4px 6px!important;border-radius:4px!important}.tiom-actionbar .btn{min-height:25px!important;padding:4px 8px!important;font-size:8.5px!important}.btn.tiny{min-height:21px!important;padding:3px 6px!important;font-size:8px!important}
 .erp-kpi-row{grid-template-columns:repeat(4,minmax(0,1fr))!important;gap:3px!important;margin:3px 0!important}.erp-kpi-row>div{padding:4px 6px!important;border-radius:4px!important}.erp-kpi-row span{font-size:7px!important}.erp-kpi-row b{font-size:12px!important}
@@ -134,3 +156,19 @@
 #tm_trip_panel .erp-trip-table td:nth-child(8){width:64px!important;min-width:64px!important}
 #tm_trip_panel .erp-trip-table td.qty-preview{white-space:nowrap!important;font-size:8px!important;line-height:1.1!important}
 #tm_trip_panel .erp-trip-table input.combo-text,#tm_trip_panel .erp-trip-table input[type=time]{margin:0!important}
+
+/* The separate transfer form still captures real changeover timestamps.
+   Never allow its controls to overflow or cover neighboring fields. */
+#tm_transfer_panel{max-width:100%;box-sizing:border-box}
+#tm_transfer_panel .tm-transfer-fields{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+#tm_transfer_panel .tm-transfer-fields label{min-width:0;max-width:100%}
+#tm_transfer_panel .tm-transfer-fields label:last-child{grid-column:1 / -1}
+#tm_transfer_panel .tm-transfer-fields :is(input,select){width:100%!important;min-width:0!important;max-width:100%!important;box-sizing:border-box!important}
+#tm_transfer_panel .tm-transfer-picker{max-width:100%}
+#tm_transfer_panel .tm-transfer-picker select{min-width:0;max-width:100%;box-sizing:border-box}
+@media(max-width:900px){
+  #tm_transfer_panel .tm-transfer-fields{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:600px){
+  #tm_transfer_panel .tm-transfer-fields{grid-template-columns:minmax(0,1fr)}
+}
