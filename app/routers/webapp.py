@@ -848,7 +848,7 @@ def dashboard_desk(db, user, p):
             source=item['source']
             source_label=' '.join(str(getattr(source,key,'') or '')
                                   for key in ('location_id','location_name')).upper()
-            match=re.search(r'\\bMSP\\s*(?:PLANT\\s*)?-?\\s*(\\d+)\\b',source_label)
+            match=re.search(r'\bMSP\s*(?:PLANT\s*)?-?\s*(\d+)\b',source_label)
             plant=f"MSP-{match.group(1)}" if match else 'MSP / Unmapped'
             row=manual_msp_transfers.setdefault(plant,{'tonnes':Decimal('0'),'trips':0})
             row['tonnes']+=qty
