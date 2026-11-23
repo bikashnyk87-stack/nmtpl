@@ -5254,9 +5254,12 @@ TIOM_SHIFT_REPORT_LINES = [
     ('PRODUCTION (PROCESSED ORE)','SCREEN_FINES','Screen Fines',False),
     ('PRODUCTION (PROCESSED ORE)','SCREEN_5_18','Screen 5-18MM',False),
     ('PRODUCTION (PROCESSED ORE)','LUMPS_FROM_SCREEN','Lumps from Screen',False),
+    ('PRODUCTION (PROCESSED ORE)','SPILLAGE_RECYCLE_MSP','Internal Spillage Re-screening',False),
+    ('PRODUCTION (PROCESSED ORE)','SPILLAGE_FROM_STOCK','Spillage from Stock to MSP',False),
     ('PRODUCTION (PROCESSED ORE)','LUMPS_SHIFTED_TO_STOCK','Lumps Shifted to Stock',True),
     ('CRUSHER PRODUCTION','LUMPS_TO_CRUSHER_FROM_STOCK','Lumps shifted to Crusher from Stock',False),
     ('CRUSHER PRODUCTION','LUMPS_FEED_TO_CRUSHER','Lumps feed to Crusher',False),
+    ('CRUSHER PRODUCTION','SPILLAGE_TO_CRUSHER','Spillage feed to Crusher',False),
     ('CRUSHER PRODUCTION','ROM_FEED_TO_CRUSHER','ROM / mine-face feed to Crusher',False),
     ('CRUSHER PRODUCTION','ROM_STOCK_TO_CRUSHER','ROM stock feed to Crusher',False),
     ('CRUSHER PRODUCTION','CRUSHER_FEED','Total physical Crusher feed',False),
@@ -5270,6 +5273,7 @@ TIOM_SHIFT_REPORT_LINES = [
     ('STACKING','SC_5_18_SHIFTED','SC 5-18 mm',False),
     ('RE-HANDLING','UNSCREENED_5_18','UNSCREENED 5-18(58-60)',False),
     ('RE-HANDLING','PROJECT_AREA_FINES_TO_STACK','Project Area Fines to Stack',False),
+    ('RE-HANDLING','SPILLAGE_WIP','Spillage held in WIP',False),
     ('RE-HANDLING','SHIFT_5_40_TANKURA','5-40mm shifted (TANKURA)',False),
 ]
 
