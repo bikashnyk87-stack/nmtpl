@@ -5307,7 +5307,10 @@ def _tiom_shift_report_derive(values):
     out['TOTAL_EXCAVATION']=sum(out.get(k,Decimal('0')) for k in ['ROM','ROM_LUMPS','SUBGRADE_DUMP','SUBGRADE_FEED_PLANT','WASTE'])
     # Final saleable/stack production only. Screen lumps are intermediate crusher feed.
     out['TOTAL_PRODUCTION']=sum(out.get(k,Decimal('0')) for k in ['SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'])
-    out['LUMPS_SHIFTED_TO_STOCK']=max(Decimal('0'),out.get('LUMPS_FROM_SCREEN',Decimal('0'))-out.get('LUMPS_FEED_TO_CRUSHER',Decimal('0')))
+    # Lumps to stock is a real source→destination movement, NOT the
+    # residual of screen output minus crusher feed. Residual material may be
+    # WIP, another route or simply missing entry.
+    out['LUMPS_SHIFTED_TO_STOCK']=out.get('LUMPS_SHIFTED_TO_STOCK',Decimal('0'))
     out['FIVE_40_FEED_TO_PLANT']=out.get('RE_SCREEN_FINES',Decimal('0'))+out.get('RE_SCREEN_5_18',Decimal('0'))
     return out
 
