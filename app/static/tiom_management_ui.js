@@ -81,12 +81,14 @@
       Number(k.wbUnmatched||0)?attention('WB movements not linked to MIS','WB tonnes remain included; attribution needs review',k.wbUnmatched,'warn'):''
     ].filter(Boolean);
     const period=E(d.fromDate)+(d.toDate!==d.fromDate?' – '+E(d.toDate):'');
-    const drill=metric('ROM/OB HOLES',fmt(dr.romObHoles,0),'Separated hole entry')+
-      metric('BHJ/BHQ HOLES',fmt(dr.bhjBhqHoles,0),'Separated hole entry')+
-      metric('ROM/OB METERS',fmt(dr.romObMeterage,1,' m'),'Drill meterage')+
-      metric('BHJ/BHQ METERS',fmt(dr.bhjBhqMeterage,1,' m'),'Drill meterage')+
-      metric('UNCLASSIFIED HOLES',fmt(dr.unclassifiedHoles,0),'Historical combined counts')+
-      metric('DRILL RATE',fmt(k.drillMeterPerHour,1,' m/h'),'Valid HMR only');
+    const drillingRecorded=arr(d.drilling?.rows).length>0;
+    const showDrill=(value,precision,unit='')=>drillingRecorded?fmt(value,precision,unit):'Not entered';
+    const drill=metric('ROM/OB HOLES',showDrill(dr.romObHoles,0),'Separated hole entry')+
+      metric('BHJ/BHQ HOLES',showDrill(dr.bhjBhqHoles,0),'Separated hole entry')+
+      metric('ROM/OB METERS',showDrill(dr.romObMeterage,1,' m'),'Drill meterage')+
+      metric('BHJ/BHQ METERS',showDrill(dr.bhjBhqMeterage,1,' m'),'Drill meterage')+
+      metric('UNCLASSIFIED HOLES',showDrill(dr.unclassifiedHoles,0),'Historical combined counts')+
+      metric('DRILL RATE',showDrill(k.drillMeterPerHour,1,' m/h'),'Valid HMR only');
     const footer='<div class="mc-checks">'+status(Number(k.wbTrips)>0,'Confirmed WB: '+fmt(k.wbTrips,0)+' movements')+
       status(Number(k.misDrafts||0)===0,'MIS drafts: '+fmt(k.misDrafts,0))+
       status(Number(k.haulLeadMissingTrips||0)===0,'Lead unresolved: '+fmt(k.haulLeadMissingTrips,0))+'</div>';
