@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from app.services.tiom_manual_process import manual_lump_process_codes
+from app.services.tiom_manual_process import manual_lump_process_codes, manual_process_codes
 
 
 def obj(id, name=None):
@@ -37,6 +37,40 @@ class ManualLumpsFlowTests(unittest.TestCase):
                                           obj("Crusher feed"))
         self.assertIn("ROM_LUMPS", codes)
         self.assertIn("CRUSHER_FEED", codes)
+        self.assertNotIn("LUMPS_FROM_SCREEN", codes)
+
+    def test_face_rom_direct_to_crusher(self):
+        codes = manual_process_codes(obj("ROM", "ROM"),
+                                     obj("PIT-1", "ROM Face RL-710"),
+                                     obj("Crusher Feed"))
+        self.assertIn("ROM", codes)
+        self.assertIn("ROM_FEED_TO_CRUSHER", codes)
+        self.assertIn("CRUSHER_FEED", codes)
+        self.assertNotIn("ROM_REHANDLED", codes)
+
+    def test_stock_rom_to_crusher_not_new_rom_production(self):
+        codes = manual_process_codes(obj("ROM", "ROM"),
+                                     obj("ROM STOCK"),
+                                     obj("Crusher Feed"))
+        self.assertIn("ROM_REHANDLED", codes)
+        self.assertIn("ROM_STOCK_TO_CRUSHER", codes)
+        self.assertIn("CRUSHER_STOCK_FEED", codes)
+        self.assertNotIn("ROM", codes)
+
+    def test_face_rom_via_msp_and_stock(self):
+        screen = manual_process_codes(obj("ROM", "ROM"),
+                                      obj("PIT1", "ROM Face"), obj("MSP-3"))
+        stock = manual_process_codes(obj("ROM", "ROM"),
+                                     obj("PIT1", "ROM Face"), obj("STOCK S2"))
+        self.assertIn("MSP_FEED", screen)
+        self.assertNotIn("CRUSHER_FEED", screen)
+        self.assertIn("ROM_STOCK_YARD", stock)
+
+    def test_lumps_face_to_crusher_is_mine_lumps(self):
+        codes = manual_process_codes(obj("ROM-LUMPS", "Lumps"),
+                                     obj("PIT1", "Mine Face"), obj("Crusher"))
+        self.assertIn("ROM_LUMPS", codes)
+        self.assertIn("ROM_FEED_TO_CRUSHER", codes)
         self.assertNotIn("LUMPS_FROM_SCREEN", codes)
 
     def test_clo_5_18_is_not_aliased_to_manual_lumps(self):
