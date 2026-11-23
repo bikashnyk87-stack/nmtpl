@@ -34,7 +34,7 @@ OUTPUT=[
     ("SCREEN_FINES","Screened Fines"),("LUMPS_FROM_SCREEN","Screened Lumps"),
     ("SCREEN_5_18","Screened 5-18"),
     ("CRUSHER_FINES","Crusher Fines"),("CRUSHER_5_18","Crusher 5-18"),
-    ("TOTAL_PRODUCTION","Final production"),
+    ("TOTAL_PRODUCTION","Gross screen + crusher output (unallocated)"),
 ]
 STACK=[
     ("SCREEN_FINES_SHIFTED","Screen Fines shifted"),
@@ -310,7 +310,7 @@ def build_dpr_workbook(payload):
     _table(wb.create_sheet("Summary"),"TIOM | DAILY PRODUCTION SUMMARY",
         ["Date","Shift","Valid WB","WB Review","ROM Trips","ROM MT","OB MT",
          "Sub-grade MT","Screen Fines MT","Screen 5-18 MT","Crusher Fines MT",
-         "Crusher 5-18 MT","Final production MT","Excavation MT",
+         "Crusher 5-18 MT","Gross processed output MT (unallocated)","Excavation MT",
          "Drill Holes","Drill Metres","Drill HMR","Warnings"],summary,
         [14,9,11,11,12,13,13,16,19,17,20,20,22,18,14,18,15,12])
     for d in dates:
@@ -319,6 +319,8 @@ def build_dpr_workbook(payload):
     stacking=[]
     drilling=[]
     raw=[]
+    flow_rows=[]
+    balance_rows=[]
     warning_rows=[]
     for e in entries:
         dateval=e["date"];sh=e["shift"]
@@ -328,6 +330,35 @@ def build_dpr_workbook(payload):
             stacking.append([dateval,sh,code,label,_trips(e,code),_q(e,code),(_v(e,code) or {}).get("source")])
         for code,data in sorted(e["metrics"].items()):
             raw.append([dateval,sh,code,data.get("qty"),data.get("trips"),data.get("source")])
+        balance=e.get("materialBalance") or {}
+        for route in balance.get("routes") or []:
+            if not route.get("recorded"):
+                continue
+            flow_rows.append([
+                dateval,sh,route.get("code"),route.get("label"),
+                route.get("measuredMt"),route.get("estimatedMt"),
+                route.get("qtyMt"),", ".join(sorted((route.get("sources") or {}).keys())),
+                "Stage facts overlap; not additive as fresh production"
+            ])
+        for group,label in (("msp","MSP / Screen"),("crusher","Crusher"),("stock","Stock / Rehandling")):
+            part=balance.get(group) or {}
+            if group=="msp":
+                items=(("External feed", "externalFeedMt"),("Internal recycle","internalRecycleMt"),
+                       ("Recorded lumps","recordedLumpsMt"),("Calculated lumps (indicative)","candidateLumpsMt"),
+                       ("Unexplained difference","observedDifferenceMt"))
+            elif group=="crusher":
+                items=(("Physical feed","totalFeedMt"),("Recorded crusher output","recordedOutputMt"),
+                       ("Unexplained difference","observedDifferenceMt"))
+            else:
+                items=(("Recorded stock receipts","observedReceiptsMt"),
+                       ("Recorded stock withdrawals","observedIssuesMt"))
+            for metric,key in items:
+                balance_rows.append([dateval,sh,label,metric,part.get(key),part.get("status"),
+                    "; ".join(part.get("missing") or []),
+                    "Not approved WIP, loss, closing stock or final fresh production"])
+        if balance.get("wipCapture")=="NOT_AVAILABLE_NOT_REQUIRED":
+            warning_rows.append([dateval,sh,"METHOD",
+                                 "WIP measurement is not available or required; differences remain unexplained, not recorded as WIP or loss."])
         for row in e.get("drilling",[]):
             drilling.append([dateval,sh,row.get("label"),row.get("holes"),row.get("meterage"),
                 row.get("drillHours"),row.get("metersPerHour"),row.get("remarks")])
@@ -342,11 +373,20 @@ def build_dpr_workbook(payload):
     _table(wb.create_sheet("Drilling Detail"),"TIOM | SAVED DRILLING WORK / HOURS",
            ["Date","Shift","Drill Set","Holes","Meterage m","Drill HMR hrs","Metres / Hr","Remarks"],
            drilling,[14,11,30,14,17,18,17,65])
+    _table(wb.create_sheet("Material Flow"),"TIOM | SOURCE-BASED STAGE MOVEMENTS · WB VS MANUAL ESTIMATE",
+           ["Date","Shift","Code","Physical movement / stage","Measured WB MT","Estimated MIS MT",
+            "Stage quantity MT","Contributing sources","Interpretation"],
+           flow_rows,[14,9,37,41,19,20,19,28,58])
+    _table(wb.create_sheet("Mass Balance"),"TIOM | MSP / CRUSHER INPUT-OUTPUT RECONCILIATION · NO WIP REQUIRED",
+           ["Date","Shift","Area","Metric","Quantity MT","Status","Missing movement / stock information",
+            "Interpretation"],
+           balance_rows,[14,9,23,39,19,27,58,70])
     _table(wb.create_sheet("Source Data"),"TIOM | TRACEABLE CATEGORY TOTALS BY DATE / SHIFT",
            ["Date","Shift","Movement Code","Quantity MT","Trips (when verified)","Authoritative Source"],
            raw,[14,10,41,20,24,29])
     warning_rows.append(["—","ALL","PENDING","Dispatch, despatch destinations and closing stock require a trusted ledger; values intentionally blank."])
     warning_rows.append(["—","ALL","METHOD","WB weights are measured; manual factor quantities are estimated. Screen/Crusher output not added to excavation."])
+    warning_rows.append(["—","ALL","METHOD","Calculated lumps are indicative. Unexplained input/output differences must not be entered automatically as WIP, loss or stock."])
     _table(wb.create_sheet("Data Quality"),"TIOM | DPR GENERATION / MISSING SOURCE CONTROL",
            ["Date","Shift","Level","Finding / missing mapping"],warning_rows,[17,12,15,120])
     summary_sheet=wb["Summary"]
