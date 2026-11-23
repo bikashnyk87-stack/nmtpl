@@ -420,6 +420,34 @@ def _ingest_single_shift_xlsx(content, filename, cfg, message_id):
                 "archive": str(archive),
                 "message": "Exact WB file is already confirmed in SQL; no rows were inserted.",
             }
+        # Never let a subsequent email silently supersede a manually or
+        # previously confirmed WB shift. A different workbook needs explicit
+        # source review, even when every new row passes validation.
+        prior_confirmed = list(db.scalars(select(WbImportBatch).where(
+            WbImportBatch.operating_date == operating_date,
+            WbImportBatch.shift == shift,
+            WbImportBatch.status == "CONFIRMED",
+        )))
+        if prior_confirmed:
+            archive = archive_bytes(content, filename, operating_date, shift, digest)
+            audit(db, "WB_EMAIL_REVISION_HELD", "wb_import_batch",
+                  prior_confirmed[0].batch_id, {
+                      "gmail_message_id": message_id,
+                      "incoming_file": filename,
+                      "incoming_file_hash": digest,
+                      "operating_date": str(operating_date),
+                      "shift": shift,
+                      "existing_confirmed_batches": [b.batch_id for b in prior_confirmed],
+                  })
+            db.commit()
+            return {
+                "outcome": "REVIEW_REQUIRED",
+                "batch_id": prior_confirmed[0].batch_id,
+                "date": operating_date.isoformat(),
+                "shift": shift,
+                "archive": str(archive),
+                "message": "Different WB file for already confirmed shift; kept existing records unchanged. Manual source review required.",
+            }
         for old_preview in existing_same:
             if old_preview.status == "PREVIEW":
                 old_preview.status = "REPLACED"
