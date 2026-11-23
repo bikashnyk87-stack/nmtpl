@@ -54,3 +54,79 @@ def manual_lump_process_codes(product, source, destination):
         elif to_screen:
             codes.append("MSP_FEED")
     return tuple(codes)
+
+
+def unweighed_lump_trip_facts(db, first, last, shift="ALL", allowed_shifts=None):
+    """Submitted no-WB lumps only. Never re-count a saved WB-linked MIS trip.
+
+    Returns physical movements with explicit MIS trip-factor provenance.
+    No inference from similar weights, vehicles or nearby WB timestamps.
+    """
+    from decimal import Decimal
+    from sqlalchemy import select
+    from app.models import Location, Product
+    from app.site_models import (
+        TiomMisReport, TiomMisTripRow, TiomMisTripDetail, TiomMisReconciliation
+    )
+
+    stmt = select(TiomMisReport).where(
+        TiomMisReport.operating_date >= first,
+        TiomMisReport.operating_date <= last,
+        TiomMisReport.status == "SUBMITTED",
+    )
+    if shift != "ALL":
+        stmt = stmt.where(TiomMisReport.shift == shift)
+    elif allowed_shifts:
+        stmt = stmt.where(TiomMisReport.shift.in_(allowed_shifts))
+    reports = list(db.scalars(stmt))
+    if not reports:
+        return []
+    report_map = {report.report_id: report for report in reports}
+    rows = list(db.scalars(select(TiomMisTripRow).where(
+        TiomMisTripRow.report_id.in_(list(report_map))
+    )))
+    if not rows:
+        return []
+    row_ids = [row.row_id for row in rows]
+    details = {d.row_id: d for d in db.scalars(select(TiomMisTripDetail).where(
+        TiomMisTripDetail.row_id.in_(row_ids)
+    ))}
+    linked = {rec.row_id for rec in db.scalars(select(TiomMisReconciliation).where(
+        TiomMisReconciliation.row_id.in_(row_ids),
+        TiomMisReconciliation.wb_movement_key.is_not(None),
+    ))}
+    products = {p.product_id: p for p in db.scalars(select(Product))}
+    locations = {location.location_id: location for location in db.scalars(select(Location))}
+    result = []
+    for row in rows:
+        if row.row_id in linked:
+            continue
+        detail = details.get(row.row_id)
+        if detail is None or detail.calculated_qty_mt is None:
+            continue
+        product = products.get(detail.material_id)
+        source = locations.get(detail.source_location_id)
+        destination = locations.get(detail.destination_location_id)
+        if product is None or source is None or destination is None:
+            continue
+        codes = manual_lump_process_codes(product, source, destination)
+        if not codes:
+            continue
+        qty = Decimal(detail.calculated_qty_mt)
+        if qty <= 0:
+            continue
+        report = report_map[row.report_id]
+        result.append({
+            "date": report.operating_date,
+            "shift": report.shift,
+            "vehicleId": report.vehicle_id,
+            "reportId": report.report_id,
+            "rowId": row.row_id,
+            "source": source,
+            "destination": destination,
+            "qty": qty,
+            "codes": codes,
+            "loadingAt": row.loading_at,
+            "quantitySource": "MIS_TRIP_FACTOR",
+        })
+    return result
