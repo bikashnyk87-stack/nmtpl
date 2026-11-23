@@ -52,6 +52,7 @@ from app.services.tiom_erp import (
 from app.services.tiom_location_erp import canonicalize_wb_rows, location_options, ensure_location_master_roles
 from app.services.tiom_manual_material import canonical_manual_45_material
 from app.services.tiom_manual_process import manual_process_codes, unweighed_process_trip_facts
+from app.services.tiom_mass_balance import calculate_tiom_mass_balance
 from app.services.tiom_wb_truth import canonical_wb_product, repair_saved_wb_linked_mis
 from app.services.wb_quarantine import WbGmailQuarantine
 from app.site_models import (
@@ -747,6 +748,7 @@ def dashboard_desk(db, user, p):
     # Plant feed is a separate physical throughput measure. Rehandling / old stock
     # may feed a plant but must never increase fresh production or recovery.
     production_facts={}
+    mass_balance_source_facts={}
     production_fact_trips={}
     production_fact_rows={}
     excluded_movement_keys=set()
@@ -808,6 +810,8 @@ def dashboard_desk(db, user, p):
         for code,qty in facts:
             q=Decimal(qty or 0)
             production_facts[code]=production_facts.get(code,Decimal('0'))+q
+            wb_sources=mass_balance_source_facts.setdefault(code,{})
+            wb_sources['WB']=wb_sources.get('WB',Decimal('0'))+q
             production_fact_rows.setdefault(code,[]).append(row)
             if code not in seen_codes:
                 production_fact_trips[code]=production_fact_trips.get(code,0)+1
@@ -840,6 +844,8 @@ def dashboard_desk(db, user, p):
         qty=item['qty']; codes=set(item['codes'])
         for code in codes:
             production_facts[code]=production_facts.get(code,Decimal('0'))+qty
+            by_source=mass_balance_source_facts.setdefault(code,{})
+            by_source['MIS_FACTOR']=by_source.get('MIS_FACTOR',Decimal('0'))+qty
             production_fact_trips[code]=production_fact_trips.get(code,0)+1
         if 'PRODUCT_REHANDLED' in codes or 'ROM_REHANDLED' in codes:
             old_stock_excluded+=qty
@@ -858,6 +864,9 @@ def dashboard_desk(db, user, p):
             row=manual_msp_transfers.setdefault(plant,{'tonnes':Decimal('0'),'trips':0})
             row['tonnes']+=qty
             row['trips']+=1
+    # Stage movement reconciliation is read-only. Unknown stock, WIP and
+    # reject quantities must remain pending until explicit ledgers exist.
+    material_balance=calculate_tiom_mass_balance(mass_balance_source_facts)
     for hour,hfacts in hourly_process_facts.items():
         screen_hour=hfacts.get('SCREEN_FINES',Decimal('0'))+hfacts.get('SCREEN_5_18',Decimal('0'))
         crusher_gross_hour=hfacts.get('CRUSHER_FINES',Decimal('0'))+hfacts.get('CRUSHER_5_18',Decimal('0'))
@@ -1996,7 +2005,7 @@ def dashboard_desk(db, user, p):
         'breakdowns':{'rows':breakdown_rows[:200],
                       'totalEvents':len(breakdown_rows),'activeEvents':active_breakdowns,
                       'periodDowntimeHours':round(breakdown_hours,2)},
-        'production':production_summary,'drilling':drilling,
+        'production':production_summary,'materialBalance':material_balance,'drilling':drilling,
         'crusher':crusher_out[:30],'screens':screen_out[:30],'loaders':loader_rows[:20],'excavators':excavator_rows[:20],
         'vehicles':vehicle_rows[:30],'fuelByEquipment':fuel_rows[:30],'shiftComparison':shift_comp_rows,'sevenDay':seven_rows,'monthTrend':month_rows,'monthly':monthly,
         'equipmentStatus':[{'label':k,'value':v} for k,v in status_counts.items()],
@@ -5388,10 +5397,12 @@ def _tiom_shift_ftd_bundle(db, day, sh, include_draft=False):
             add(m.movement_code,q,'MANUAL')
 
     vals=_tiom_shift_report_derive(vals)
+    mass_balance=calculate_tiom_mass_balance(sources)
     for code in ['TOTAL_EXCAVATION','TOTAL_PRODUCTION','LUMPS_SHIFTED_TO_STOCK','FIVE_40_FEED_TO_PLANT']:
         if vals.get(code,Decimal('0')):
             sources[code]={'CALC':vals[code]}
-    return {'values':vals,'sources':sources,'warnings':warnings,'wbBatchId':batch.batch_id if batch else None,'wbRows':len(wb_rows)}
+    return {'values':vals,'sources':sources,'massBalance':mass_balance,
+            'warnings':warnings,'wbBatchId':batch.batch_id if batch else None,'wbRows':len(wb_rows)}
 
 
 def _tiom_shift_ftd(db, day, sh, include_draft=False):
@@ -5434,7 +5445,8 @@ def _tiom_shift_report_data(db, day, sh, include_draft=True):
     report=db.scalar(select(TiomShiftProductionReport).where(TiomShiftProductionReport.operating_date==day,TiomShiftProductionReport.shift==sh))
     return {'date':str(day),'shift':sh,'status':report.status if report else 'NEW','reportId':report.report_id if report else '',
             'remarks':report.remarks or '' if report else '','baselineDate':str(base_date),'lines':lines,
-            'warnings':bundle['warnings'],'wbBatchId':bundle['wbBatchId'],'wbRows':bundle['wbRows']}
+            'warnings':bundle['warnings'],'massBalance':bundle['massBalance'],
+            'wbBatchId':bundle['wbBatchId'],'wbRows':bundle['wbRows']}
 
 def _tiom_shift_range_report(db, from_day, to_day, report_shift='ALL'):
     if to_day < from_day:
