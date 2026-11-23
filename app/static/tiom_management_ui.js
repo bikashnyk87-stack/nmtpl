@@ -131,7 +131,22 @@
       ' · Crusher movements missing: '+E(arr(c.missing).join(', ')||'none')+
       ' · Stock balance: '+E(stock.status==='CALCULATED'?'recorded':'not independently measured')+
       '</div>';
-    return top+flags+tbl(['Recorded movement / stage','WB t','Manual / factor t','Stage t'],rows)+
+    const flows=c.sourceBreakdown||{};
+    const crusherSources=[
+      ['MSP screened lumps → Crusher',flows.fromMspLumpsMt],
+      ['Mine-face ROM / raw lumps → Crusher',flows.fromFaceRomMt],
+      ['ROM stock → Crusher',flows.fromRomStockMt],
+      ['Lumps stock → Crusher',flows.fromLumpsStockMt],
+      ['Spillage → Crusher',flows.fromSpillageMt],
+      ['Company old-stock blend → Crusher',flows.companyBlendMt],
+      ['Unattributed / mapping difference',c.sourceUnclassifiedMt]
+    ];
+    const knownSources=crusherSources.filter(x=>x[1]!=null);
+    const sourcePanel=knownSources.length?
+      '<b>Crusher feed by origin (not additional tonnes)</b>'+
+      tbl(['Physical source','Included in crusher feed (MT)'],
+          knownSources.map(x=>[E(x[0]),fmt(x[1],2)])):'';
+    return top+flags+sourcePanel+tbl(['Recorded movement / stage','WB t','Manual / factor t','Stage t'],rows)+
       '<p class="mc-caveat">Stage quantities overlap physically: do not sum this table as total production. Recycled spillage is a second processing pass. Manual-factor quantities are estimates. Any unexplained difference is for MIS reconciliation only, not WIP, stock, loss, recovery or approved fresh output.</p>';
   }
   window.tiomEquipMode=function(mode){S.tiomEquipMode=mode; if(S.tiomOwnerData)ownerView(S.tiomOwnerData);};
