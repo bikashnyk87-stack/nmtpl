@@ -108,6 +108,7 @@
         <div class="tiom-card-title"><div><b>TRIPS</b><span>Source already contains RL. Lead KM is automatic from Source + Destination + Route Master.</span></div><div><button class="btn secondary tiny" onclick="loadTiomWbSuggestions(true)">Load WB Rows</button><button class="btn secondary tiny" onclick="addMisRows(5)">+5</button><button class="btn secondary tiny" onclick="copyPreviousMisRow(1)">Copy Last</button><button class="btn secondary tiny" onclick="copyPreviousMisRow(5)">Copy ×5</button><button class="btn secondary tiny" onclick="copyPreviousMisRow(10)">Copy ×10</button></div></div>
         <div id="tm_wb_state" class="tiom-wb-state"></div>
         <div id="tm_wb_linked" class="tiom-wb-linked" aria-live="polite"></div>
+        <div id="tm_wb_available" class="tiom-wb-linked" aria-live="polite"></div>
         <div class="table-wrap tiom-trip-scroll"><table class="tiom-entry-table tiom-trip-table erp-trip-table"><thead><tr><th>#</th><th>WB</th><th>Material</th><th>Source / RL</th><th>Loader / Excavator</th><th>Load</th><th>Destination</th><th>Lead</th><th>Unload</th><th>Qty</th></tr></thead><tbody id="tm_trip_rows"></tbody></table></div>
       </div>
 
@@ -354,6 +355,25 @@
         :'<span title="The saved MIS link could not be verified for this vehicle/date/shift">Check linked report</span>'}</td></tr>`).join('')}</tbody>
       </table></div>`;
   }
+  function renderMisAvailableWb(rows){
+    const panel=q('tm_wb_available');if(!panel)return;
+    const available=(Array.isArray(rows)?rows:[]).filter(w=>!w.linkedToThisReport);
+    if(!available.length){panel.innerHTML='';return;}
+    const shown=available.slice(0,30);
+    const note=T.misReportStatus==='SUBMITTED'
+      ?'Read only — unlock Edit (Key), verify the trip and destination, then use Load WB Rows.'
+      :'Use Load WB Rows to add these confirmed movements. Do not duplicate an existing manual trip.';
+    panel.innerHTML='<div class="tiom-wb-linked-title"><b>'+available.length+
+      ' confirmed WB movement(s) not yet linked to this driver report</b><span>'+
+      safe(note)+'</span></div><div class="table-wrap"><table class="tiom-entry-table"><thead>'+
+      '<tr><th>WB No</th><th>Material</th><th>Source</th><th>Destination</th><th>Net MT</th><th>Mapping</th></tr></thead><tbody>'+
+      shown.map(w=>'<tr><td>'+safe(w.movementNo||'—')+'</td><td>'+safe(w.materialLabel||w.materialRaw||'—')+
+        '</td><td>'+safe(w.sourceRaw||'—')+'</td><td>'+safe(w.destinationRaw||'—')+
+        '</td><td>'+n(w.netMt??0,2)+'</td><td>'+(
+        w.materialId&&w.sourceLocationId&&w.destinationLocationId?'Mapped':'Master mapping required'
+        )+'</td></tr>').join('')+'</tbody></table></div>'+
+      (available.length>shown.length?'<small>Showing first '+shown.length+' of '+available.length+' movements.</small>':'');
+  }
   window.openLinkedWbReport=function(reportId){
     if(!reportId)return;
     if(!T.misReportId)draftSave();
@@ -375,6 +395,13 @@
       if(!isCurrent())return; // Prevent a slow response from another truck adding wrong WB rows.
       T.wbSuggestions=d.rows||[];
       renderMisLinkedWb(d.linkedRows||[]);
+      renderMisAvailableWb(T.wbSuggestions);
+      if(d.state==='AWAITING_WB_CONFIRMATION'){
+        if(q('tm_wb_state'))q('tm_wb_state').textContent=
+          (d.message||'WB confirmation pending.')+
+          ' Existing WB-linked and manual entries have not been cleared.';
+        return;
+      }
       for(const w of T.wbSuggestions){
         if(w.materialId&&!((T.mis?.products||[]).some(p=>p.id===w.materialId)))
           (T.mis.products||(T.mis.products=[])).push({
@@ -500,7 +527,7 @@
   window.newMisReport=function(){resetMisEditState();T.misReportId='';T.pendingMisReportId='';T.misReportStatus='';T.currentMisReport=null;T.depRows=Math.max(20,(T.mis?.deployments||[]).length);T.misRows=15;T.lastVehicleId='';setMisContextLocked(false);renderMisDesk()};
   window.loadMisReport=function(id,unlockAfter){
     resetMisEditState();
-    appRun(function(r){T.misReportId=id;T.misReportStatus=r.status||'';T.currentMisReport=r;fillMisForm(r,false);const b=q('mis_status_badge');if(b)b.textContent=r.status+(r.version?' · v'+r.version:'');if(unlockAfter&&r.status==='SUBMITTED')setTimeout(requestMisEdit,0)},function(e){toast(e.message,true)}).getTiomMisReport({reportId:id})
+    appRun(function(r){T.misReportId=id;T.misReportStatus=r.status||'';T.currentMisReport=r;fillMisForm(r,false);const b=q('mis_status_badge');if(b)b.textContent=r.status+(r.version?' · v'+r.version:'');loadTiomWbSuggestions(false);if(unlockAfter&&r.status==='SUBMITTED')setTimeout(requestMisEdit,0)},function(e){toast(e.message,true)}).getTiomMisReport({reportId:id})
   };
   function renderMisViewNav(r){
     var old=q('mis_view_nav');if(old)old.remove();
@@ -532,6 +559,7 @@
     if(q('tm_notes'))q('tm_notes').value=r.notes||'';
     T.misRows=Math.max(15,Math.min(80,(r.rows||[]).length||15));renderMisRows(r.rows||[]);wireKmrCalc();wireDriverMeterCalc();
     if(q('tm_wb_linked'))q('tm_wb_linked').innerHTML='';
+    if(q('tm_wb_available'))q('tm_wb_available').innerHTML='';
     setMisContextLocked(!local&&!!r.reportId);
     setMisLocked(r.status==='SUBMITTED'||r.status==='VOID');
     renderMisViewNav(local?null:r);
