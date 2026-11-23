@@ -1146,6 +1146,18 @@ def ingest_xlsx(content, filename, cfg, message_id):
         cfg,
         message_id,
     )
+    if result.get("outcome") == "REVIEW_REQUIRED" and "already confirmed shift" in str(result.get("message", "")):
+        # A mixed-shift source differing from a confirmed manual upload is
+        # held in full. Do not append its secondary rows into other confirmed
+        # shifts before the source revision is approved.
+        result["mixed_shift"] = {
+            "raw_counts": dict(raw_counts),
+            "resolved_counts": dict(resolved_counts),
+            "primary_shift": primary_shift,
+            "other_rows_held": len(other_rows),
+            "shift_code_corrections": corrections,
+        }
+        return result
     routed = _mixed_shift_append_missing_rows(
         other_rows, idx, filename, message_id, cfg
     )
