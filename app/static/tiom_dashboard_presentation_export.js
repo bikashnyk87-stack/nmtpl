@@ -198,12 +198,17 @@
         card('Equipment utilization', amount(k.equipmentUtilization, 1, '%'), 'Activity-based utilization')
       ].join('') + '</div>', 'kpi-section');
     var b = d.breakdowns || {}, monthly = d.monthly || {};
+    var drillHasData = rows((d.drilling || {}).rows).length>0 ||
+      Number(k.drillHoles||0)>0 || Number(k.drillMeterage||0)>0;
+    var drillValue = function(value, decimals, unit){
+      return drillHasData ? amount(value,decimals,unit) : 'Not entered';
+    };
     html += '<div class="two-col">' +
       section('Drilling performance', 'Drill and compressor HMR where recorded',
         '<div class="small-kpis">' + [
-          card('Drilled holes', amount(k.drillHoles, 0), 'Period total'),
-          card('Drill meterage', amount(k.drillMeterage, 2, ' m'), 'ROM / OB / BHJ / BHQ'),
-          card('Drill metres / hour', amount(k.drillMeterPerHour, 2, ' m/h'), 'HMR-based drilling rate'),
+          card('Drilled holes', drillValue(k.drillHoles, 0), 'Period total'),
+          card('Drill meterage', drillValue(k.drillMeterage, 2, ' m'), 'ROM / OB / BHJ / BHQ'),
+          card('Drill metres / hour', drillValue(k.drillMeterPerHour, 2, ' m/h'), 'HMR-based drilling rate'),
           card('Drill HSD issued', amount(k.drillHsdLitres, 1, ' L'), 'Drill + compressor'),
           card('Drill breakdown', amount(k.drillBreakdownHours, 1, ' h'), 'Recorded breakdown hours'),
           card('Drill HSD / metre', amount(k.drillMeterage > 0 && k.drillHsdLitres != null ? Number(k.drillHsdLitres) / Number(k.drillMeterage) : null, 3, ' L/m'), 'Issued HSD / measured meterage')
