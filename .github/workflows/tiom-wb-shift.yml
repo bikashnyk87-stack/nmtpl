@@ -1,0 +1,38 @@
+name: TIOM WB Gmail and shift regression
+
+on:
+  pull_request:
+    paths:
+      - "app/routers/automation.py"
+      - "app/services/tiom_shift_schedule.py"
+      - "app/services/time_context.py"
+      - "app/services/site_context.py"
+      - "app/services/tiom_shift_alignment.py"
+      - "app/services/attendance_automation.py"
+      - "scripts/wb_gmail_worker.py"
+      - "tests/test_tiom_shift_effective_oct2026.py"
+      - "tests/test_low_compute_schedule_and_volvo.py"
+      - "tests/test_wb_gmail_shift_parity.py"
+      - "tests/test_tiom_shift_c_five_reviews.py"
+      - "tests/test_wb_poll_sender_filter.py"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install pytest httpx fastapi "uvicorn[standard]" "SQLAlchemy>=2" "psycopg[binary]>=3.2" python-dotenv pydantic openpyxl xlrd python-multipart google-api-python-client google-auth
+      - name: Compile affected Python modules
+        run: |
+          python -m py_compile app/services/tiom_shift_schedule.py app/services/tiom_shift_alignment.py app/services/time_context.py app/services/site_context.py app/services/attendance_automation.py app/routers/automation.py scripts/wb_gmail_worker.py
+      - name: Run focused shift and importer regressions
+        run: |
+          python -m pytest -q tests/test_tiom_shift_effective_oct2026.py tests/test_low_compute_schedule_and_volvo.py tests/test_wb_gmail_shift_parity.py tests/test_tiom_shift_c_five_reviews.py tests/test_wb_poll_sender_filter.py
