@@ -29,7 +29,7 @@ ROUTES = (
     ("SPILLAGE_RECYCLE_MSP", "Internal MSP re-screen / recycle"),
     ("SPILLAGE_FROM_STOCK", "Stock spillage reintroduced to MSP"),
     ("SPILLAGE_TO_CRUSHER", "Spillage to crusher"),
-    ("SPILLAGE_WIP", "Spillage in WIP / holding"),
+    ("SPILLAGE_WIP", "Spillage awaiting routing (recorded)"),
     ("CRUSHER_BLEND_FEED", "Company old-stock crusher blend"),
     ("CRUSHER_STOCK_FEED", "Crusher feed withdrawn from stock"),
     ("CRUSHER_FEED", "Total physical crusher feed"),
