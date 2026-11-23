@@ -126,3 +126,10 @@
 .dpr-toolbar .dpr-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
 .dpr-toolbar .dpr-actions .btn{min-height:26px;white-space:nowrap}
 @media(max-width:760px){.dpr-toolbar .dpr-actions{width:100%;margin-left:0;justify-content:flex-start}}
+
+/* TIOM MIS: one-line lead states must never grow a whole trip entry row. */
+#tm_trip_panel .erp-trip-table tbody tr{height:27px}
+#tm_trip_panel .erp-trip-table tbody td{padding:1px 3px!important;line-height:1.1!important;vertical-align:middle}
+#tm_trip_panel .erp-trip-table td:nth-child(8){width:64px!important;min-width:64px!important}
+#tm_trip_panel .erp-trip-table td.qty-preview{white-space:nowrap!important;font-size:8px!important;line-height:1.1!important}
+#tm_trip_panel .erp-trip-table input.combo-text,#tm_trip_panel .erp-trip-table input[type=time]{margin:0!important}

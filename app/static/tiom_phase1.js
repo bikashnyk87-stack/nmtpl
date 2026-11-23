@@ -233,7 +233,20 @@
 };
 
   function leadPreview(i){const src=v('tm_src_'+i),dst=v('tm_dst_'+i),wb=!!v('tm_wb_'+i),source=(T.mis?.sourceLocations||[]).find(x=>x.id===src),rl=source&&source.benchRl!=null?Number(source.benchRl):NaN,mode=wb?'WITH_WB':'WITHOUT_WB';if(!src||!dst)return{leadKm:null,routeMode:mode,status:'Select destination'};if(!Number.isFinite(rl))return{leadKm:null,routeMode:mode,status:'RL missing in Source Master'};const exact=(T.mis?.leadRules||[]).filter(x=>x.sourceLocationId===src&&x.destinationLocationId===dst&&Number(x.benchRl)===rl&&x.routeMode===mode);if(exact.length===1)return{leadKm:Number(exact[0].leadKm),routeMode:mode,status:'OK',benchRl:rl};if(exact.length>1)return{leadKm:null,routeMode:mode,status:'Lead Master conflict'};const route=(T.mis?.routes||[]).find(x=>x.sourceLocationId===src&&x.destinationLocationId===dst&&x.routeMode===mode);return{leadKm:null,routeMode:mode,status:route?'Lead not configured':'Route not configured',benchRl:rl}}
-  window.updateLead=function(i){const out=leadPreview(i),el=q('tm_lead_'+i);if(el){el.dataset.lead=out.leadKm==null?'':String(out.leadKm);el.title=`${out.routeMode||''}${out.benchRl!=null?' · RL '+out.benchRl:''}`;el.textContent=out.leadKm==null?out.status:(n(out.leadKm,3)+' km')}return out};
+  // Keep the LEAD preview to a single compact line. The full diagnosis stays
+  // in the tooltip; its value (and all saved master/route logic) is unchanged.
+  const compactLeadStatus={
+    'Select destination':'—',
+    'RL missing in Source Master':'No RL',
+    'Lead Master conflict':'Conflict',
+    'Lead not configured':'No lead',
+    'Route not configured':'No route'
+  };
+  window.updateLead=function(i){const out=leadPreview(i),el=q('tm_lead_'+i);if(el){
+    el.dataset.lead=out.leadKm==null?'':String(out.leadKm);
+    el.title=[out.leadKm==null?out.status:'Lead calculated from Route Master',out.routeMode||'',out.benchRl!=null?'RL '+out.benchRl:''].filter(Boolean).join(' · ');
+    el.textContent=out.leadKm==null?(compactLeadStatus[out.status]||'—'):(n(out.leadKm,3)+' km');
+  }return out};
 
   window.tripSourceChanged=function(i){const selected=v('tm_mac_'+i),rows=machinesForSource(v('tm_src_'+i),selected,v('tm_lt_'+i));comboReplace('tm_mac_'+i,rows,selected);if(!selected&&rows.length===1)comboSet('tm_mac_'+i,rows[0].id);updateLead(i);draftSave()};
 
