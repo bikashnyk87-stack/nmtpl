@@ -104,7 +104,7 @@
       ['MSP external feed',ms.externalFeedMt,'Observed feed'],
       ['MSP recycle (internal pass)',ms.internalRecycleMt,'Not new ROM'],
       ['Calculated lumps (indicative)',ms.candidateLumpsMt,'Not measured output'],
-      ['Lumps recorded',ms.recordedLumpsMt,'WB / approved trip-factor'),
+      ['Lumps recorded',ms.recordedLumpsMt,'WB / approved trip-factor'],
       ['MSP unexplained difference',ms.observedDifferenceMt,'No WIP assumption'],
       ['Crusher physical feed',cb.totalFeedMt,'All sources once'],
       ['Crusher recorded output',cb.recordedOutputMt,'Gross output'],
