@@ -1250,8 +1250,21 @@ def poll_once(service, cfg, labels):
         cfg["review_required_label"],
     ]
     exclusions = " ".join(f"-label:{name}" for name in label_names)
-    query = (str(cfg.get("gmail_query", "has:attachment filename:xlsx")).strip() + " " + exclusions).strip()
-    response = service.users().messages().list(userId="me", q=query, maxResults=int(cfg.get("max_messages_per_poll", 25))).execute()
+    # Restrict Gmail search BEFORE applying the per-poll cap. Filtering only
+    # in process_message() lets unrelated, newer XLSX mails occupy all 25
+    # result slots indefinitely, starving genuine weighbridge reports.
+    senders = [str(s).strip().lower() for s in cfg.get("allowed_senders", []) if str(s).strip()]
+    if not senders:
+        raise RuntimeError("WB Gmail cannot poll without approved senders")
+    sender_query = "{" + " ".join("from:" + s for s in senders) + "}"
+    query = " ".join(part for part in (
+        str(cfg.get("gmail_query", "has:attachment filename:xlsx")).strip(),
+        sender_query,
+        exclusions,
+    ) if part)
+    response = service.users().messages().list(
+        userId="me", q=query, maxResults=int(cfg.get("max_messages_per_poll", 25))
+    ).execute()
     ids = [x["id"] for x in response.get("messages", [])]
     processed = []
     for message_id in reversed(ids):
