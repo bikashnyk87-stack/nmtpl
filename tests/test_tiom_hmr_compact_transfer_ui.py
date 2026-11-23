@@ -50,5 +50,5 @@ def test_ten_column_css_and_contained_form_controls():
 
 
 def test_live_asset_urls_refer_to_updated_scripts():
-    assert "/static/tiom_phase1.js?v=tiom-transfer-live-shiftend-20261123" in PAGE
+    assert "/static/tiom_phase1.js?v=tiom-mis-wb-vehicle-guard-20261123" in PAGE
     assert "/static/tiom_phase1.css?v=tiom-hmr-ten-cols-20261123" in PAGE
