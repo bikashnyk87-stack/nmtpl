@@ -3827,6 +3827,62 @@ def _tiom_deployment_overlap(a_from,a_to,b_from,b_to):
                 or (b_to is not None and a_from is not None and b_to<=a_from))
 
 
+def _tiom_transfer_shift_bounds(day, shift):
+    """Resolve the TIOM time window for the requested *operating date*.
+
+    Historical dates keep their effective shift definitions; a shift-end
+    entry is a scheduled boundary, not evidence of an actual transfer.
+    """
+    from app.services.tiom_shift_schedule import times_for_day
+    start_time, end_time = times_for_day(day, shift)
+    start = datetime.combine(day, start_time, TZ)
+    end = datetime.combine(day, end_time, TZ)
+    if end <= start:
+        end += timedelta(days=1)
+    return start, end
+
+
+def _tiom_transferable_end(to_at, shift_end):
+    """An open assignment OR one scheduled through shift-end is transferable."""
+    if to_at is None:
+        return True
+    local_end = to_at.replace(tzinfo=TZ) if to_at.tzinfo is None else to_at.astimezone(TZ)
+    return local_end == shift_end
+
+
+def get_tiom_transfer_options(db, user, p):
+    """Fresh, read-only choices from the saved DB, not unsaved HMR form rows."""
+    require(user, 'PRODUCTION')
+    day, sh, _ = _tiom_context(db, user, p)
+    _, shift_end = _tiom_transfer_shift_bounds(day, sh)
+    all_rows = _tiom_source_deployments(db, day, sh)
+    eligible_ids = {
+        r.deployment_id for r in db.scalars(select(TiomSourceDeployment).where(
+            TiomSourceDeployment.operating_date == day,
+            TiomSourceDeployment.shift == sh,
+            TiomSourceDeployment.active.is_(True),
+        )) if _tiom_transferable_end(r.to_at, shift_end)
+    }
+    eligible = [r for r in all_rows if r['deploymentId'] in eligible_ids]
+    locations = list(location_options(db, 'SOURCE'))
+    seen = {str(x['id']) for x in locations}
+    for loc in db.scalars(select(Location).where(Location.active.is_(True)).order_by(Location.location_name)):
+        label = (str(loc.location_name or '') + ' ' + str(loc.location_id)).upper()
+        if (loc.location_type in {'SCREEN', 'CRUSHER', 'PLANT'}
+                or re.search(r'\bMSP\s*-?\s*\d+\b', label)) and loc.location_id not in seen:
+            locations.append({'id': loc.location_id, 'label': loc.location_name})
+            seen.add(loc.location_id)
+    return {
+        'date': str(day), 'shift': sh,
+        'rows': eligible, 'savedCount': len(all_rows),
+        'closedCount': len(all_rows) - len(eligible),
+        'locations': [
+            {'id': loc['id'], 'label': _tiom_location_display(loc['label'], loc['id'])}
+            for loc in locations
+        ],
+    }
+
+
 def transfer_tiom_source_deployment(db,user,p):
     """Atomically close an allocation and start a different location."""
     require(user,'PRODUCTION'); p=p or {}
@@ -3838,8 +3894,9 @@ def transfer_tiom_source_deployment(db,user,p):
     origin=db.get(TiomSourceDeployment,deployment_id)
     if not origin or not origin.active or origin.operating_date!=day or origin.shift!=sh:
         raise HTTPException(409,'Assignment has changed. Reload Machine Setup before transferring.')
-    if origin.to_at is not None:
-        raise HTTPException(409,'This assignment is already closed. Transfer the latest active location instead.')
+    shift_start, shift_end = _tiom_transfer_shift_bounds(day, sh)
+    if not _tiom_transferable_end(origin.to_at, shift_end):
+        raise HTTPException(409,'This assignment ended before shift close. Transfer the latest open assignment instead.')
     destination=active_resource(db,Location,destination_id)
     if destination.location_id==origin.source_location_id:
         raise HTTPException(422,'Choose a different destination location.')
@@ -3847,10 +3904,6 @@ def transfer_tiom_source_deployment(db,user,p):
     start_at=_tiom_shift_date_time(db,day,sh,p.get('startTime'))
     if not end_at or not start_at:
         raise HTTPException(422,'Enter work finish time and start time at the new location.')
-    shift_start=datetime.combine(day,definition.start_time,TZ)
-    shift_end=datetime.combine(day,definition.end_time,TZ)
-    if shift_end<=shift_start:
-        shift_end+=timedelta(days=1)
     if not (shift_start<end_at<=start_at<shift_end):
         raise HTTPException(422,'Transfer must finish and restart within the selected operating shift.')
     if origin.from_at is not None and end_at<=origin.from_at:
@@ -6658,7 +6711,7 @@ def tiom_mis_entry_export(request:Request,fromDate:str='',toDate:str='',shift:st
 def rpc(p: RPC, request: Request, db: Session = Depends(get_db)):
     csrf(request)
     user = get_user(db, request)
-    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomMisReport', 'verifyTiomMisEditKey', 'getTiomMisReconciliation', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter', 'getTiomDprPreview'}
+    read_methods = {'getBootstrap', 'getLiveContext', 'getDashboard', 'getAttendanceDesk', 'getShiftControl', 'getShiftCloseStatus', 'getUserAdminData', 'getProductionDesk', 'getHsdDesk', 'getMastersDesk', 'getWbDesk', 'getWbMonitor', 'getWbHistoryQueue', 'getImportHistory', 'getTiomMisDesk', 'getTiomTransferOptions', 'getTiomMisReport', 'verifyTiomMisEditKey', 'getTiomMisReconciliation', 'getTiomWbSuggestions', 'getTiomWbHistory', 'getTiomShiftProductionDesk', 'getTiomDrillingDesk', 'getTiomHsdDesk', 'getTiomHsdPreviousMeter', 'getTiomDprPreview'}
     if p.method not in read_methods:
         lock(db)
     try:
@@ -6710,6 +6763,7 @@ def dispatch(db, user, method, args):
         return dashboard_desk(db, user, args[0] if args and isinstance(args[0], dict) else {})
     if method == 'getProductionDesk': return production_desk(db,user)
     if method == 'getTiomMisDesk': return tiom_mis_desk(db,user,args[0] if args and isinstance(args[0],dict) else {})
+    if method == 'getTiomTransferOptions': return get_tiom_transfer_options(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomMisReport': return get_tiom_mis_report(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'verifyTiomMisEditKey': return verify_tiom_mis_edit_key(db,user,args[0] if args and isinstance(args[0],dict) else {})
     if method == 'getTiomMisReconciliation': return get_tiom_mis_reconciliation(db,user,args[0] if args and isinstance(args[0],dict) else {})
