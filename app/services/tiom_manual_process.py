@@ -33,6 +33,7 @@ def manual_lump_process_codes(product, source, destination):
     from_stock = "STOCK" in src or "STACK" in src
     to_crusher = "CRUSH" in dst or bool(re.search(r"\bOCP\b", dst))
     to_screen = bool(re.search(r"\b(MSP[ -]?\d*|SCREEN|SCREENING)\b", dst))
+    to_stock = "STOCK" in dst or "STACK" in dst
 
     if from_stock:
         codes = ["PRODUCT_REHANDLED"]
@@ -44,6 +45,8 @@ def manual_lump_process_codes(product, source, destination):
         codes = ["LUMPS_FROM_SCREEN"]
         if to_crusher:
             codes += ["LUMPS_FEED_TO_CRUSHER", "CRUSHER_FEED"]
+        elif to_stock:
+            codes.append("LUMPS_SHIFTED_TO_STOCK")
         # A screen-to-stock movement remains screen output, not crusher feed;
         # LUMPS_SHIFTED_TO_STOCK is derived only from the report facts.
     else:
