@@ -63,7 +63,16 @@
   function tiomDraftUser(){return NMTPLNet.safeUser(S.boot?.user?.loginId||S.boot?.user?.name||'anonymous')}
   function misDraftKey(){return `NMTPL_TIOM_DRAFT:${tiomDraftUser()}:MIS:${v('tm_date')||S.boot.today}:${v('tm_shift')||S.boot.shift}`}
   function draftSave(){if(T.misEditMode||T.misReportStatus==='SUBMITTED'||T.misReportStatus==='VOID')return;try{localStorage.setItem(misDraftKey(),JSON.stringify(collectMis(false)));const x=q('tm_draft_state');if(x)x.textContent='Local draft saved';}catch(_){}}
-  function draftRestore(){try{const raw=localStorage.getItem(misDraftKey());if(!raw)return;fillMisForm(JSON.parse(raw),true)}catch(_){}}
+  function draftRestore(){
+    try{
+      const raw=localStorage.getItem(misDraftKey());if(!raw)return;
+      fillMisForm(JSON.parse(raw),true);
+      // A local driver draft is not evidence that its WB links still belong
+      // to the selected vehicle, or that they remain unclaimed by other MIS.
+      T.lastVehicleId=v('tm_vehicle');
+      if(collectTripRows().some(r=>r.wbMovementKey))loadTiomWbSuggestions(false);
+    }catch(e){console.warn('TIOM local MIS draft restore failed',e)}
+  }
   function renderMisEntry(){
     const d=T.mis;
     html('tiom_prod_body',`<div class="tiom-mis-toolbar"><b>MIS DRIVER SHIFT ENTRY</b><label>Date<input id="tm_date" type="date" value="${safe(d?.date||S.boot.today)}"></label><label>Shift<select id="tm_shift">${shiftOpts(d?.shift||S.boot.shift)}</select></label><button id="tm_load" class="btn primary small" onclick="loadTiomMis()">Load</button><span id="tm_draft_state" class="tiom-state"></span></div><div id="tiom_mis_body"><div class="loading">Loading MIS entry…</div></div>`);
@@ -274,9 +283,21 @@
   window.addMisRows=function(c){const old=collectTripRows();T.misRows=Math.min(80,T.misRows+c);renderMisRows(old)};
   window.misVehicleChanged=function(){
     const vehicleId=v('tm_vehicle'),x=(T.mis?.vehicles||[]).find(a=>a.id===vehicleId);
-    if(T.lastVehicleId && T.lastVehicleId!==vehicleId){
+    const switching=!!T.lastVehicleId&&T.lastVehicleId!==vehicleId;
+    if(switching){
       for(const id of ['tm_open_kmr','tm_open_hmr']){
         const el=q(id);if(el&&el.dataset.autofill==='1'){el.value='';el.dataset.autofill='0';}
+      }
+      // WB movements belong to a specific truck. Never leave previous truck
+      // WB chips visible after switching to a different truck. Preserve
+      // unsaved manual entries instead of silently deleting user work.
+      const rows=collectTripRows(),oldWb=rows.filter(r=>r.wbMovementKey);
+      if(oldWb.length){
+        const retained=rows.filter(r=>!r.wbMovementKey);
+        T.misRows=Math.max(15,retained.length);
+        renderMisRows(retained);
+        if(q('tm_wb_state'))q('tm_wb_state').textContent=
+          'Cleared '+oldWb.length+' WB row(s) from the previous truck. Checking confirmed WB movements for '+vehicleId+'…';
       }
     }
     T.lastVehicleId=vehicleId;
@@ -315,15 +336,59 @@
   function collectTripRows(){const rows=[];for(let i=0;i<T.misRows;i++){const qty=q('tm_qty_'+i)?.dataset?.qty||'',lead=q('tm_lead_'+i)?.dataset?.lead||'';rows.push({wbMovementKey:v('tm_wb_'+i),materialId:v('tm_mat_'+i),sourceLocationId:v('tm_src_'+i),leadKm:lead,machineId:v('tm_mac_'+i),loadingTime:v('tm_lt_'+i),destinationLocationId:v('tm_dst_'+i),unloadingTime:v('tm_ut_'+i),qtyMt:qty})}return rows}
   function collectMis(includeId=true){return {reportId:includeId?T.misReportId:'',date:v('tm_date'),shift:v('tm_shift'),vehicleId:v('tm_vehicle'),operatorId:v('tm_operator'),paperRef:v('tm_ref'),openingKmr:v('tm_open_kmr'),closingKmr:v('tm_close_kmr'),openingHmr:v('tm_open_hmr'),closingHmr:v('tm_close_hmr'),notes:v('tm_notes'),rows:collectTripRows()}}
   window.draftSave=draftSave;
-  window.loadTiomWbSuggestions=function(autoFill){const vehicleId=v('tm_vehicle');if(!vehicleId){T.wbSuggestions=[];if(q('tm_wb_state'))q('tm_wb_state').textContent='Select a tripper to load confirmed WB rows.';return}appRun(function(d){T.wbSuggestions=d.rows||[];
-        for(const w of T.wbSuggestions){if(w.materialId&&!((T.mis?.products||[]).some(p=>p.id===w.materialId)))(T.mis.products||(T.mis.products=[])).push({id:w.materialId,label:(w.materialLabel||w.materialRaw||w.materialId)+' · '+w.materialId});}
-        if(q('tm_wb_state'))q('tm_wb_state').textContent=(d.message||'')+' WB material, source, destination and weight are locked to the confirmed movement.';if(!autoFill)return;const current=collectTripRows();const used=new Set(current.map(x=>x.wbMovementKey).filter(Boolean));
-      const incoming=(d.rows||[]).filter(x=>!used.has(x.movementKey)).map(x=>({wbMovementKey:x.movementKey,wbMovementNo:x.movementNo,materialId:x.materialId||'',sourceLocationId:x.sourceLocationId||'',destinationLocationId:x.destinationLocationId||'',machineId:x.machineId||'',loadingTime:'',unloadingTime:'',qtyMt:x.netMt}));
-      if(!incoming.length)return;
-      const filled=current.filter(x=>x.wbMovementKey||x.materialId||x.sourceLocationId||x.destinationLocationId||x.machineId||x.loadingTime||x.unloadingTime);
+  window.loadTiomWbSuggestions=function(autoFill){
+    const vehicleId=v('tm_vehicle'),date=v('tm_date'),shift=v('tm_shift'),reportId=T.misReportId||'';
+    const requestNo=T.wbRequestNo=(T.wbRequestNo||0)+1;
+    if(!vehicleId){
+      T.wbSuggestions=[];
+      if(q('tm_wb_state'))q('tm_wb_state').textContent='Select a tripper to load confirmed WB rows.';
+      return;
+    }
+    const isCurrent=()=>requestNo===T.wbRequestNo &&
+      vehicleId===v('tm_vehicle')&&date===v('tm_date')&&shift===v('tm_shift')&&
+      reportId===(T.misReportId||'');
+    appRun(function(d){
+      if(!isCurrent())return; // Prevent a slow response from another truck adding wrong WB rows.
+      T.wbSuggestions=d.rows||[];
+      for(const w of T.wbSuggestions){
+        if(w.materialId&&!((T.mis?.products||[]).some(p=>p.id===w.materialId)))
+          (T.mis.products||(T.mis.products=[])).push({
+            id:w.materialId,label:(w.materialLabel||w.materialRaw||w.materialId)+' · '+w.materialId
+          });
+      }
+      // The server returns only WB keys eligible for this exact truck and
+      // MIS report. Recheck even a restored browser draft against those keys.
+      const allowed=new Map(T.wbSuggestions.map(w=>[w.movementKey,w]));
+      const current=collectTripRows();
+      const invalid=current.filter(r=>r.wbMovementKey&&!allowed.has(r.wbMovementKey));
+      const clean=current.filter(r=>!r.wbMovementKey||allowed.has(r.wbMovementKey));
+      const used=new Set(clean.map(r=>r.wbMovementKey).filter(Boolean));
+      const incoming=autoFill?T.wbSuggestions.filter(w=>!used.has(w.movementKey)).map(w=>({
+        wbMovementKey:w.movementKey,wbMovementNo:w.movementNo,
+        materialId:w.materialId||'',sourceLocationId:w.sourceLocationId||'',
+        destinationLocationId:w.destinationLocationId||'',
+        machineId:w.machineId||'',loadingTime:'',unloadingTime:'',qtyMt:w.netMt
+      })):[];
+      const message=(d.message||'')+(invalid.length?
+        ' Removed '+invalid.length+' stale or already-linked WB row(s) from this form.':'');
+      if(q('tm_wb_state'))q('tm_wb_state').textContent=
+        message+' WB material, source, destination and weight are locked to the confirmed movement.';
+      if(!invalid.length&&!incoming.length)return;
+      // Keep manual rows intact. Only remove invalid WB links and add eligible
+      // current-truck movements; NEVER change saved reports or the WB ledger.
+      const filled=clean.filter(r=>r.wbMovementKey||r.materialId||r.sourceLocationId||
+        r.destinationLocationId||r.machineId||r.loadingTime||r.unloadingTime);
       const merged=[...filled,...incoming.slice(0,Math.max(0,80-filled.length))];
-      if(incoming.length+filled.length>80 && q('tm_wb_state'))q('tm_wb_state').textContent='More WB movements exist than the 80-row limit. Use a second report for remaining rows.';
-      T.misRows=Math.max(15,merged.length);renderMisRows(merged);for(let i=0;i<merged.length;i++)if(merged[i].sourceLocationId)tripSourceChanged(i);draftSave()},function(e){if(q('tm_wb_state'))q('tm_wb_state').textContent=e.message}).getTiomWbSuggestions({date:v('tm_date'),shift:v('tm_shift'),vehicleId,reportId:T.misReportId||''})};
+      if(incoming.length+filled.length>80&&q('tm_wb_state'))
+        q('tm_wb_state').textContent='More eligible WB movements exist than the 80-row limit. Use another report for remaining rows.';
+      T.misRows=Math.max(15,merged.length);
+      renderMisRows(merged);
+      for(let i=0;i<merged.length;i++)if(merged[i].sourceLocationId)tripSourceChanged(i);
+      draftSave();
+    },function(e){
+      if(isCurrent()&&q('tm_wb_state'))q('tm_wb_state').textContent=e.message;
+    }).getTiomWbSuggestions({date,shift,vehicleId,reportId});
+  };
   window.copyPreviousMisRow=function(count=1){
     const rows=collectTripRows();let idx=-1;
     for(let i=rows.length-1;i>=0;i--)if(rows[i].materialId||rows[i].machineId){idx=i;break}
