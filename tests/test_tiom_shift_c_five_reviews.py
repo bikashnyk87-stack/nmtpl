@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
+import app.auth  # Register web_user before creating all FK-linked tables
 from app.db import Base
 from app.models import AuditLog, ShiftMaster, WbImportBatch, WbMovement
 from app.site_models import Site, SiteShift
