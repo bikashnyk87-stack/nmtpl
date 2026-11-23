@@ -4852,7 +4852,13 @@ def get_tiom_wb_suggestions(db,user,p):
     if report_id:
         own_row_ids=set(db.scalars(select(TiomMisTripRow.row_id).where(TiomMisTripRow.report_id==report_id)))
     batch,wb_rows=tiom_authoritative_wb(db,day,sh)
-    if not batch: return {'rows':[],'batch':None,'message':'No confirmed WB batch for this date / shift.'}
+    if not batch:
+        # A temporarily late Gmail/confirmation cycle is not evidence that a
+        # driver's saved WB rows are invalid. Never make the UI delete them.
+        return {'rows':[],'linkedRows':[],'batch':None,
+                'state':'AWAITING_WB_CONFIRMATION',
+                'diagnostics':{'available':0,'alreadyLinked':0,'otherVehicle':0},
+                'message':'No confirmed WB batch for this date / shift yet. Check WB import/confirmation; existing MIS entries are retained.'}
     reconciliations=list(db.scalars(select(TiomMisReconciliation).where(TiomMisReconciliation.wb_movement_key.is_not(None))))
     linked={r.wb_movement_key:r for r in reconciliations if r.wb_movement_key}
     deployments=list(db.scalars(select(TiomSourceDeployment).where(
