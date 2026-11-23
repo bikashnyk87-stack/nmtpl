@@ -3005,7 +3005,7 @@ def wb_desk_exact(db, user, operating_date_value=None, shift_value=None):
         wt = ''
         if w.weigh_at:
             try:
-                wt = w.weigh_at.strftime('%H:%M:%S')
+                wt = time_text(w.weigh_at)  # display actual IST, never stored UTC / fallback
             except Exception:
                 wt = str(w.weigh_at)
         rows.append({
