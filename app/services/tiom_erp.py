@@ -224,6 +224,8 @@ def wb_report_contributions(wb: WbMovement):
             return [('PRODUCT_REHANDLED', qty), ('LUMPS_STOCK_TRANSFER', qty)]
         if 'CRUSH' in dst or 'OCP' in dst:
             return [('LUMPS_FROM_SCREEN', qty), ('LUMPS_FEED_TO_CRUSHER', qty), ('CRUSHER_FEED', qty)]
+        if _is_stack(dst):
+            return [('LUMPS_FROM_SCREEN', qty), ('LUMPS_SHIFTED_TO_STOCK', qty)]
         return [('LUMPS_FROM_SCREEN', qty)]
 
     if 'SUBGRADE' in mat or re.search(r'(^| )SG( |$)', mat):
