@@ -47,7 +47,7 @@ def test_excel_report_is_styled_multi_sheet_and_has_48_kpi_cards():
     assert count == 48
     assert wb.sheetnames == [
         "KPI Dashboard", "Production Materials", "Plant Performance",
-        "Shift Comparison", "WB Material Audit", "Haulage Routes",
+        "Mass Balance", "Material Flow", "Shift Comparison", "WB Material Audit", "Haulage Routes",
         "Fuel & Equipment", "Drilling Details", "Data Quality",
     ]
     summary = wb["KPI Dashboard"]
