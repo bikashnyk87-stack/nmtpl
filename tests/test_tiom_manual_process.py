@@ -39,6 +39,25 @@ class ManualLumpsFlowTests(unittest.TestCase):
         self.assertIn("CRUSHER_FEED", codes)
         self.assertNotIn("LUMPS_FROM_SCREEN", codes)
 
+    def test_spillage_from_msp_to_msp_is_internal_recycle(self):
+        codes = manual_process_codes(obj("SPILLAGE", "Spillage"),
+                                     obj("MSP3", "MSP-3"), obj("MSP3", "MSP-3"))
+        self.assertEqual(codes, ("SPILLAGE_RECYCLE_MSP",))
+        self.assertNotIn("MSP_FEED", codes)
+
+    def test_recovered_spillage_from_stock_is_external_msp_feed(self):
+        codes = manual_process_codes(obj("SPILLAGE", "Spillage"),
+                                     obj("SPILL STOCK"), obj("MSP-3"))
+        self.assertIn("SPILLAGE_FROM_STOCK", codes)
+        self.assertIn("MSP_FEED", codes)
+        self.assertNotIn("SPILLAGE_RECYCLE_MSP", codes)
+
+    def test_spillage_to_crusher(self):
+        codes = manual_process_codes(obj("SPILLAGE", "Spillage"),
+                                     obj("MSP3", "MSP-3"), obj("Crusher"))
+        self.assertIn("SPILLAGE_TO_CRUSHER", codes)
+        self.assertIn("CRUSHER_FEED", codes)
+
     def test_face_rom_direct_to_crusher(self):
         codes = manual_process_codes(obj("ROM", "ROM"),
                                      obj("PIT-1", "ROM Face RL-710"),
