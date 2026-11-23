@@ -99,11 +99,38 @@ def manual_rom_process_codes(product, source, destination):
     return tuple(codes)
 
 
+def manual_spillage_process_codes(product, source, destination):
+    """Physical re-screen/recycle is not new mine ROM.
+
+    Same-cycle MSP recycle counts for gross throughput only. Material
+    withdrawn from a stockpile is an external pass, not new mine production.
+    """
+    if product is None:
+        return ()
+    label = re.sub(r"[^A-Z0-9]+", " ", " ".join(
+        str(getattr(product, name, "") or "") for name in ("product_id", "name")
+    ).upper()).strip()
+    if not re.search(r"\bSPILL(?:AGE)?\b", label):
+        return ()
+    src = _loc_text(source)
+    dst = _loc_text(destination)
+    from_stock = "STOCK" in src or "STACK" in src
+    to_crusher = "CRUSH" in dst or bool(re.search(r"\bOCP\b", dst))
+    to_screen = bool(re.search(r"\b(MSP[ -]?\d*|SCREEN|SCREENING)\b", dst))
+    if to_crusher:
+        return ("SPILLAGE_TO_CRUSHER", "CRUSHER_FEED")
+    if to_screen:
+        if from_stock:
+            return ("SPILLAGE_FROM_STOCK", "PRODUCT_REHANDLED", "MSP_FEED")
+        return ("SPILLAGE_RECYCLE_MSP",)
+    return ("SPILLAGE_WIP",)
+
+
 def manual_process_codes(product, source, destination):
     """Dispatch to one exclusive material classifier; facts may span stages."""
-    return manual_lump_process_codes(product, source, destination) or (
-        manual_rom_process_codes(product, source, destination)
-    )
+    return (manual_lump_process_codes(product, source, destination)
+            or manual_rom_process_codes(product, source, destination)
+            or manual_spillage_process_codes(product, source, destination))
 
 
 def unweighed_process_trip_facts(db, first, last, shift="ALL", allowed_shifts=None):
