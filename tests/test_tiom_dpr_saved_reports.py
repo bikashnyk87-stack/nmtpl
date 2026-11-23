@@ -71,6 +71,31 @@ def test_dpr_excel_dates_sections_formulas_and_mtd():
     assert ws.page_setup.orientation=="landscape"
 
 
+def test_material_balance_exports_measured_and_estimated_without_wip_requirement():
+    from app.services.tiom_mass_balance import calculate_tiom_mass_balance
+    payload=sample()
+    entry=payload["entries"][0]
+    entry["materialBalance"]=calculate_tiom_mass_balance({
+        "MSP_FEED":{"WB":Decimal("933.64")},
+        "SCREEN_FINES":{"WB":Decimal("299.32")},
+        "LUMPS_FROM_SCREEN":{"MIS_FACTOR":Decimal("990")},
+        "LUMPS_FEED_TO_CRUSHER":{"MIS_FACTOR":Decimal("990")},
+        "CRUSHER_FEED":{"MIS_FACTOR":Decimal("990")},
+        "CRUSHER_FINES":{"WB":Decimal("356.70")},
+    })
+    wb=load_workbook(build_dpr_workbook(payload))
+    flow=wb["Material Flow"]
+    balance=wb["Mass Balance"]
+    records=[[c.value for c in row] for row in flow.iter_rows(min_row=4)]
+    assert any(r[2]=="LUMPS_FROM_SCREEN" and r[5]==990 for r in records)
+    checks=[[c.value for c in row] for row in balance.iter_rows(min_row=4)]
+    assert any(r[2]=="MSP / Screen" and r[3]=="Unexplained difference"
+               and r[4]==pytest.approx(-355.68) for r in checks)
+    assert not any("Opening WIP" in str(r[6]) or "Closing WIP" in str(r[6])
+                   for r in checks)
+    assert wb["Summary"]["M4"].value==70.0  # gross processed, never approved fresh
+
+
 def test_missing_shift_data_remains_blank_not_zero():
     payload=sample()
     missing=rec("2026-10-11","B",0)
