@@ -109,12 +109,12 @@ def calculate_tiom_mass_balance(facts_by_source, inventory=None):
     # Source-of-feed entries can overlap CRUSHER_FEED: expose them as a
     # provenance breakdown, never add them on top of CRUSHER_FEED.
     crusher_sources = {
-        "fromMspLumpsMt": _n(amount("LUMPS_FEED_TO_CRUSHER")),
-        "fromFaceRomMt": _n(amount("ROM_FEED_TO_CRUSHER")),
-        "fromRomStockMt": _n(amount("ROM_STOCK_TO_CRUSHER")),
-        "fromLumpsStockMt": _n(amount("LUMPS_TO_CRUSHER_FROM_STOCK")),
-        "fromSpillageMt": _n(amount("SPILLAGE_TO_CRUSHER")),
-        "companyBlendMt": _n(amount("CRUSHER_BLEND_FEED")),
+        "fromMspLumpsMt": _n(amount("LUMPS_FEED_TO_CRUSHER")) if recorded("LUMPS_FEED_TO_CRUSHER") else None,
+        "fromFaceRomMt": _n(amount("ROM_FEED_TO_CRUSHER")) if recorded("ROM_FEED_TO_CRUSHER") else None,
+        "fromRomStockMt": _n(amount("ROM_STOCK_TO_CRUSHER")) if recorded("ROM_STOCK_TO_CRUSHER") else None,
+        "fromLumpsStockMt": _n(amount("LUMPS_TO_CRUSHER_FROM_STOCK")) if recorded("LUMPS_TO_CRUSHER_FROM_STOCK") else None,
+        "fromSpillageMt": _n(amount("SPILLAGE_TO_CRUSHER")) if recorded("SPILLAGE_TO_CRUSHER") else None,
+        "companyBlendMt": _n(amount("CRUSHER_BLEND_FEED")) if recorded("CRUSHER_BLEND_FEED") else None,
     }
     known_crusher_sources = (
         amount("LUMPS_FEED_TO_CRUSHER") + amount("ROM_FEED_TO_CRUSHER")
