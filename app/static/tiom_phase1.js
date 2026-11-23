@@ -178,47 +178,63 @@
   available.sort((a,b)=>(assignedHere.has(b.id)?1:0)-(assignedHere.has(a.id)?1:0)||String(a.label||a.id).localeCompare(String(b.label||b.id)));
   return available;
 }
+  // Transfer is intentionally loaded from the saved database, not the HMR
+  // grid's hidden IDs (or a restored local driver draft). A machine entered
+  // 06:00–14:00 is still eligible for an earlier audited changeover.
   window.openMachineTransfer=function(){
-    const panel=q('tm_transfer_panel');
-    const choices=deploymentRows().map((r,i)=>({r,i})).filter(x=>x.r.deploymentId&&x.r.machineId&&x.r.sourceLocationId&&!x.r.toTime);
-    if(!choices.length){toast('No active saved equipment assignments. Save Machine Setup first.',true);return}
+    const panel=q('tm_transfer_panel'),date=v('tm_date'),shift=v('tm_shift');
+    if(!panel)return;
     panel.hidden=false;
     panel.dataset.deploymentId='';
-    panel.innerHTML=`<div class="tiom-card-title"><b>Transfer equipment to another location</b><button type="button" class="btn secondary tiny" onclick="cancelMachineTransfer()">Cancel</button></div>
-      <label class="tm-transfer-picker">Choose equipment at its current location
-        <select id="tm_transfer_choice" onchange="chooseMachineTransfer()">
-          <option value="">-- Select equipment to transfer --</option>
-          ${choices.map(x=>`<option value="${x.i}">${safe(x.r.machineId+' — '+x.r.sourceLocationId)}</option>`).join('')}
-        </select>
-      </label><span class="note">Select a machine to enter its finish time and next location.</span>`;
-    panel.scrollIntoView({block:'nearest',behavior:'smooth'});
+    panel.innerHTML='<div class="tiom-card-title"><b>Transfer equipment</b><button type="button" class="btn secondary tiny" onclick="cancelMachineTransfer()">Cancel</button></div><p class="note">Loading saved machine assignments…</p>';
+    appRun(function(result){
+      // Ignore stale responses if date/shift was changed while loading.
+      if(v('tm_date')!==date||v('tm_shift')!==shift||panel.hidden)return;
+      T.transferRows=(result.rows||[]).filter(r=>r.deploymentId&&r.machineId&&r.sourceLocationId);
+      T.transferLocations=result.locations||[];
+      if(!T.transferRows.length){
+        const saved=Number(result.savedCount||0);
+        panel.innerHTML='<div class="tiom-card-title"><b>Transfer equipment</b><button type="button" class="btn secondary tiny" onclick="cancelMachineTransfer()">Close</button></div><p class="note">'+(saved
+          ? 'Found '+saved+' saved assignment(s), but all are finished before shift end. Select the latest unfinished machine assignment or check the operating date and shift.'
+          : 'No equipment assignments saved for this date and shift. Save Machine Setup first.')+'</p>';
+        return;
+      }
+      panel.innerHTML=`<div class="tiom-card-title"><b>Transfer equipment to another location</b><button type="button" class="btn secondary tiny" onclick="cancelMachineTransfer()">Cancel</button></div>
+        <label class="tm-transfer-picker">Choose saved equipment / current location
+          <select id="tm_transfer_choice" onchange="chooseMachineTransfer()">
+            <option value="">-- Select equipment to transfer --</option>
+            ${T.transferRows.map(r=>`<option value="${safe(r.deploymentId)}">${safe((r.machineLabel||r.machineId)+' — '+(r.sourceLabel||r.sourceLocationId))}</option>`).join('')}
+          </select>
+        </label><span class="note">Finish the work at the current location and select where the machine moves. Full-shift end times are allowed.</span>`;
+      panel.scrollIntoView({block:'nearest',behavior:'smooth'});
+    },function(e){
+      if(panel.hidden)return;
+      panel.innerHTML='<div class="tiom-card-title"><b>Transfer equipment</b><button type="button" class="btn secondary tiny" onclick="cancelMachineTransfer()">Close</button></div><p class="bad">'+safe(e.message||'Could not load saved assignments')+'</p>';
+    }).getTiomTransferOptions({date,shift});
   };
   window.chooseMachineTransfer=function(){
-    const choice=v('tm_transfer_choice');
-    if(choice==='')return;
-    const idx=Number(choice);
-    if(!Number.isInteger(idx)||idx<0||idx>=T.depRows){toast('Choose a valid machine.',true);return}
-    window.startMachineTransfer(idx);
+    const deploymentId=v('tm_transfer_choice');
+    if(deploymentId)window.startMachineTransfer(deploymentId);
   };
-  window.startMachineTransfer=function startMachineTransfer(i){
-  const r=deploymentRows()[i],panel=q('tm_transfer_panel');
-  if(!r?.deploymentId){toast('Save Machine Setup before transferring this equipment.',true);return}
-  if(r.toTime){toast('This location is already finished. Choose the latest open assignment.',true);return}
-  const destinations=(T.mis?.deploymentLocations||[]).filter(x=>x.id!==r.sourceLocationId);
-  if(!destinations.length){toast('No other active locations are configured.',true);return}
-  panel.hidden=false;
-  panel.dataset.deploymentId=r.deploymentId;
-  panel.innerHTML=`<div class="tiom-card-title"><b>Transfer ${safe(r.machineId)} from ${safe(r.sourceLocationId)}</b><button type="button" class="btn secondary tiny" onclick="cancelMachineTransfer()">Cancel</button></div>
-    <div class="tm-transfer-fields">
-      <label>Finish at current location<input type="time" id="tm_transfer_end" required></label>
-      <label>Start at new location<input type="time" id="tm_transfer_start" required></label>
-      <label>New source / location<select id="tm_transfer_destination">${opts(destinations)}</select></label>
-      <label>Remark (optional)<input id="tm_transfer_notes" maxlength="250" placeholder="Work completed, moving location"></label>
-    </div>
-    <button type="button" id="tm_transfer_confirm" class="btn primary small" onclick="confirmMachineTransfer()">Confirm Transfer</button>
-    <span class="note">Old location and trips remain saved. HMR stays one total per machine per shift.</span>`;
-  panel.scrollIntoView({block:'nearest',behavior:'smooth'});
-};
+  window.startMachineTransfer=function startMachineTransfer(deploymentId){
+    const r=(T.transferRows||[]).find(x=>x.deploymentId===deploymentId);
+    const panel=q('tm_transfer_panel');
+    if(!r||!panel){toast('Saved machine assignment is unavailable. Reload Transfer Equipment.',true);return}
+    const destinations=(T.transferLocations||[]).filter(x=>x.id!==r.sourceLocationId);
+    if(!destinations.length){toast('No other active locations are configured.',true);return}
+    panel.hidden=false;
+    panel.dataset.deploymentId=r.deploymentId;
+    panel.innerHTML=`<div class="tiom-card-title"><b>Transfer ${safe(r.machineLabel||r.machineId)} from ${safe(r.sourceLabel||r.sourceLocationId)}</b><button type="button" class="btn secondary tiny" onclick="cancelMachineTransfer()">Cancel</button></div>
+      <div class="tm-transfer-fields">
+        <label>Finish at current location<input type="time" id="tm_transfer_end" required></label>
+        <label>Start at new location<input type="time" id="tm_transfer_start" required></label>
+        <label>New source / location<select id="tm_transfer_destination">${opts(destinations)}</select></label>
+        <label>Remark (optional)<input id="tm_transfer_notes" maxlength="250" placeholder="Work completed, moving location"></label>
+      </div>
+      <button type="button" id="tm_transfer_confirm" class="btn primary small" onclick="confirmMachineTransfer()">Confirm Transfer</button>
+      <span class="note">Existing trips and HMR are preserved. The previous assignment ends at the verified transfer time.</span>`;
+    panel.scrollIntoView({block:'nearest',behavior:'smooth'});
+  };
   window.cancelMachineTransfer=function cancelMachineTransfer(){const el=q('tm_transfer_panel');if(el){el.hidden=true;el.innerHTML='';el.dataset.deploymentId=''}};
   window.confirmMachineTransfer=function confirmMachineTransfer(){
   const panel=q('tm_transfer_panel'),deploymentId=panel?.dataset.deploymentId||'';
