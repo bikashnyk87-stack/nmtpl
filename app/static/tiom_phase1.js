@@ -107,6 +107,7 @@
       <div class="panel tiom-sap-card" id="tm_trip_panel">
         <div class="tiom-card-title"><div><b>TRIPS</b><span>Source already contains RL. Lead KM is automatic from Source + Destination + Route Master.</span></div><div><button class="btn secondary tiny" onclick="loadTiomWbSuggestions(true)">Load WB Rows</button><button class="btn secondary tiny" onclick="addMisRows(5)">+5</button><button class="btn secondary tiny" onclick="copyPreviousMisRow(1)">Copy Last</button><button class="btn secondary tiny" onclick="copyPreviousMisRow(5)">Copy ×5</button><button class="btn secondary tiny" onclick="copyPreviousMisRow(10)">Copy ×10</button></div></div>
         <div id="tm_wb_state" class="tiom-wb-state"></div>
+        <div id="tm_wb_linked" class="tiom-wb-linked" aria-live="polite"></div>
         <div class="table-wrap tiom-trip-scroll"><table class="tiom-entry-table tiom-trip-table erp-trip-table"><thead><tr><th>#</th><th>WB</th><th>Material</th><th>Source / RL</th><th>Loader / Excavator</th><th>Load</th><th>Destination</th><th>Lead</th><th>Unload</th><th>Qty</th></tr></thead><tbody id="tm_trip_rows"></tbody></table></div>
       </div>
 
@@ -284,6 +285,7 @@
   window.misVehicleChanged=function(){
     const vehicleId=v('tm_vehicle'),x=(T.mis?.vehicles||[]).find(a=>a.id===vehicleId);
     const switching=!!T.lastVehicleId&&T.lastVehicleId!==vehicleId;
+    if(switching&&q('tm_wb_linked'))q('tm_wb_linked').innerHTML='';
     if(switching){
       for(const id of ['tm_open_kmr','tm_open_hmr']){
         const el=q(id);if(el&&el.dataset.autofill==='1'){el.value='';el.dataset.autofill='0';}
@@ -336,11 +338,33 @@
   function collectTripRows(){const rows=[];for(let i=0;i<T.misRows;i++){const qty=q('tm_qty_'+i)?.dataset?.qty||'',lead=q('tm_lead_'+i)?.dataset?.lead||'';rows.push({wbMovementKey:v('tm_wb_'+i),materialId:v('tm_mat_'+i),sourceLocationId:v('tm_src_'+i),leadKm:lead,machineId:v('tm_mac_'+i),loadingTime:v('tm_lt_'+i),destinationLocationId:v('tm_dst_'+i),unloadingTime:v('tm_ut_'+i),qtyMt:qty})}return rows}
   function collectMis(includeId=true){return {reportId:includeId?T.misReportId:'',date:v('tm_date'),shift:v('tm_shift'),vehicleId:v('tm_vehicle'),operatorId:v('tm_operator'),paperRef:v('tm_ref'),openingKmr:v('tm_open_kmr'),closingKmr:v('tm_close_kmr'),openingHmr:v('tm_open_hmr'),closingHmr:v('tm_close_hmr'),notes:v('tm_notes'),rows:collectTripRows()}}
   window.draftSave=draftSave;
+  // Already reconciled WB movements are shown for reference, never copied
+  // into a new trip report. This avoids duplicate links while keeping WB
+  // facts visible when all of a truck's movements are already allocated.
+  function renderMisLinkedWb(rows){
+    const panel=q('tm_wb_linked');if(!panel)return;
+    const links=Array.isArray(rows)?rows:[];
+    if(!links.length){panel.innerHTML='';return}
+    panel.innerHTML=`<div class="tiom-wb-linked-title"><b>${links.length} WB movement(s) already linked to MIS</b><span>View only — cannot add again</span></div>
+      <div class="table-wrap"><table class="tiom-wb-linked-table">
+      <thead><tr><th>WB No.</th><th>Material</th><th>Net MT</th><th>Existing MIS</th></tr></thead>
+      <tbody>${links.map(r=>`<tr><td>${safe(r.movementNo||'—')}</td><td>${safe(r.material||'—')}</td>
+      <td>${n(r.netMt??0,2)}</td><td>${r.linkState==='SAVED_REPORT'&&r.reportId
+        ?'<button type="button" class="btn secondary tiny" onclick="openLinkedWbReport(\''+safe(r.reportId)+'\')">Open report · '+safe(r.reportStatus||'Saved')+'</button>'
+        :'<span title="The saved MIS link could not be verified for this vehicle/date/shift">Check linked report</span>'}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+  }
+  window.openLinkedWbReport=function(reportId){
+    if(!reportId)return;
+    if(!T.misReportId)draftSave();
+    if(q('tm_wb_linked'))q('tm_wb_linked').innerHTML='';
+    loadMisReport(reportId,false);
+  };
   window.loadTiomWbSuggestions=function(autoFill){
     const vehicleId=v('tm_vehicle'),date=v('tm_date'),shift=v('tm_shift'),reportId=T.misReportId||'';
     const requestNo=T.wbRequestNo=(T.wbRequestNo||0)+1;
     if(!vehicleId){
-      T.wbSuggestions=[];
+      T.wbSuggestions=[];renderMisLinkedWb([]);
       if(q('tm_wb_state'))q('tm_wb_state').textContent='Select a tripper to load confirmed WB rows.';
       return;
     }
@@ -350,6 +374,7 @@
     appRun(function(d){
       if(!isCurrent())return; // Prevent a slow response from another truck adding wrong WB rows.
       T.wbSuggestions=d.rows||[];
+      renderMisLinkedWb(d.linkedRows||[]);
       for(const w of T.wbSuggestions){
         if(w.materialId&&!((T.mis?.products||[]).some(p=>p.id===w.materialId)))
           (T.mis.products||(T.mis.products=[])).push({
@@ -506,6 +531,7 @@
     if(q('tm_open_hmr'))q('tm_open_hmr').value=r.openingHmr??'';if(q('tm_close_hmr'))q('tm_close_hmr').value=r.closingHmr??'';
     if(q('tm_notes'))q('tm_notes').value=r.notes||'';
     T.misRows=Math.max(15,Math.min(80,(r.rows||[]).length||15));renderMisRows(r.rows||[]);wireKmrCalc();wireDriverMeterCalc();
+    if(q('tm_wb_linked'))q('tm_wb_linked').innerHTML='';
     setMisContextLocked(!local&&!!r.reportId);
     setMisLocked(r.status==='SUBMITTED'||r.status==='VOID');
     renderMisViewNav(local?null:r);
