@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+import app.auth  # Register web_user before creating all FK-linked tables
 from app.db import Base
 from app.routers import automation
 from app.services import volvo_control, volvo_store
@@ -19,17 +20,23 @@ ROOT = Path(__file__).resolve().parents[1]
 def test_wb_poll_slots_target_correct_operating_shift():
     tz=automation.IST
     at=lambda hour,minute:datetime(2026,10,31,hour,minute,tzinfo=tz)
-    assert automation.wb_search_window(at(5,0))==("2026-10-31:C",datetime(2026,10,30).date(),"C")
-    assert automation.wb_search_window(at(6,59))[2]=="C"
-    assert automation.wb_search_window(at(7,0)) is None
-    assert automation.wb_search_window(at(13,0))==("2026-10-31:A",datetime(2026,10,31).date(),"A")
-    assert automation.wb_search_window(at(14,59))[2]=="A"
-    assert automation.wb_search_window(at(15,0)) is None
-    assert automation.wb_search_window(at(21,0))==("2026-10-31:B",datetime(2026,10,31).date(),"B")
-    assert automation.wb_search_window(at(22,59))[2]=="B"
-    assert automation.wb_search_window(at(23,0)) is None
+    assert automation.wb_search_window(at(6,0))==("2026-10-31:C",datetime(2026,10,30).date(),"C")
+    assert automation.wb_search_window(at(7,59))[2]=="C"
+    assert automation.wb_search_window(at(8,0)) is None
+    assert automation.wb_search_window(at(14,0))==("2026-10-31:A",datetime(2026,10,31).date(),"A")
+    assert automation.wb_search_window(at(15,59))[2]=="A"
+    assert automation.wb_search_window(at(16,0)) is None
+    assert automation.wb_search_window(at(22,0))==("2026-10-31:B",datetime(2026,10,31).date(),"B")
+    assert automation.wb_search_window(at(23,59))[2]=="B"
+    assert automation.wb_search_window(at(0,0)) is None
     assert automation.WB_SEARCH_MINUTES == 120
-    assert automation.WB_RETRY_SECONDS >= 600
+    assert automation.WB_POLL_SECONDS == 180
+    # The actual Render scheduler must scan continuously, not only in these windows.
+    source=(ROOT/"app/routers/automation.py").read_text("utf-8")
+    assert "if monotonic >= wb_due:" in source
+    assert "wb_due = monotonic + WB_POLL_SECONDS" in source
+    assert "if window and" not in source
+    assert "wb_done.add(" not in source
 
 
 def test_pc_sync_runs_hourly_only_6am_through_10pm():
@@ -136,5 +143,5 @@ def test_startup_route_history_deduplicated_and_volvo_shifts_current():
     assert "TiomWbCanonical.destination_location_id" in src
     assert ").distinct()))" in src
     ui=(ROOT/"app/static/volvo.js").read_text("utf-8")
-    for shift in ("A · 05:00–13:00","B · 13:00–21:00","C · 21:00–05:00"):
+    for shift in ("A · 06:00–14:00","B · 14:00–22:00","C · 22:00–06:00"):
         assert shift in ui

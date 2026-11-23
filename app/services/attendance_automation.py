@@ -52,6 +52,10 @@ def load_config():
 
 
 def shift_bounds(day, definition):
+    # History-specific TIOM boundaries; old shift runs must not use the new
+    # ShiftMaster values merely because the master was updated in November.
+    from app.services.tiom_shift_schedule import definition_for_day
+    definition = definition_for_day(day, definition)
     start = datetime.combine(day, definition.start_time, TZ)
     end = datetime.combine(day, definition.end_time, TZ)
     if end <= start:

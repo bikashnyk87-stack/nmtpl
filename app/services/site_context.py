@@ -36,6 +36,14 @@ def resolve_site_context(db, site_id: str, at: datetime | None = None) -> SiteOp
     else:
         local = at.astimezone(zone)
 
+    if site.site_id == "TIOM":
+        from app.services.tiom_shift_schedule import context_at
+        resolved = context_at(local)
+        if resolved is None:
+            raise ValueError(f"No approved TIOM shift covers {local.isoformat()}")
+        operating_day, shift = resolved
+        return SiteOperatingContext(site.site_id, operating_day, shift, local)
+
     shifts = list(db.scalars(
         select(SiteShift)
         .where(SiteShift.site_id == site.site_id, SiteShift.active.is_(True))
@@ -64,9 +72,9 @@ def seed_default_sites_and_shifts(db) -> None:
 
     shift_defaults = {
         "TIOM": {
-            "A": (time(5, 0), time(13, 0), 1),
-            "B": (time(13, 0), time(21, 0), 2),
-            "C": (time(21, 0), time(5, 0), 3),
+            "A": (time(6, 0), time(14, 0), 1),
+            "B": (time(14, 0), time(22, 0), 2),
+            "C": (time(22, 0), time(6, 0), 3),
         },
         "SOCP": {
             "A": (time(6, 0), time(14, 0), 1),

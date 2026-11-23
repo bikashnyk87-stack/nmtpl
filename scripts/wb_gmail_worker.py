@@ -33,6 +33,7 @@ from app.models import (
 )
 from app.services.reconcile import auto_reconcile
 from app.services.time_context import TZ, now_local
+from app.services.tiom_shift_schedule import definition_for_day, context_at
 from app.services.wb_mapping import (
     find_wb_sheet, row_value, build_location_resolver, ensure_wb_header_mapping,
     expected_movement_date, operating_date_from_movement,
@@ -301,7 +302,13 @@ def infer_file_context(ws, header_row, idx, db):
         clock = clock_value(row_value(row, idx, "time"))
         if movement_day is not None:
             raw_dates.add(movement_day)
-        op_day = operating_date_from_movement(movement_day, clock, definition)
+        # The operating date controls the applicable shift schedule.
+        # Early-morning C movement dates belong to the previous shift date.
+        candidate = movement_day
+        if candidate and shift == "C" and clock is not None and clock < dtime(6, 0):
+            candidate = candidate - timedelta(days=1)
+        dated_definition = definition_for_day(candidate, definition) if candidate else definition
+        op_day = operating_date_from_movement(movement_day, clock, dated_definition)
         if op_day:
             operating_dates.add(op_day)
             operating_date_counts[op_day] = operating_date_counts.get(op_day, 0) + 1
@@ -389,6 +396,7 @@ def _ingest_single_shift_xlsx(content, filename, cfg, message_id):
         definition = db.get(ShiftMaster, shift)
         if not definition or not definition.active:
             raise ValueError(f"Shift {shift} is not active in Shift Master.")
+        definition = definition_for_day(operating_date, definition)
 
         existing_same = list(db.scalars(select(WbImportBatch).where(
             WbImportBatch.operating_date == operating_date,
@@ -411,6 +419,34 @@ def _ingest_single_shift_xlsx(content, filename, cfg, message_id):
                 "review": confirmed_same.review_rows,
                 "archive": str(archive),
                 "message": "Exact WB file is already confirmed in SQL; no rows were inserted.",
+            }
+        # Never let a subsequent email silently supersede a manually or
+        # previously confirmed WB shift. A different workbook needs explicit
+        # source review, even when every new row passes validation.
+        prior_confirmed = list(db.scalars(select(WbImportBatch).where(
+            WbImportBatch.operating_date == operating_date,
+            WbImportBatch.shift == shift,
+            WbImportBatch.status == "CONFIRMED",
+        )))
+        if prior_confirmed:
+            archive = archive_bytes(content, filename, operating_date, shift, digest)
+            audit(db, "WB_EMAIL_REVISION_HELD", "wb_import_batch",
+                  prior_confirmed[0].batch_id, {
+                      "gmail_message_id": message_id,
+                      "incoming_file": filename,
+                      "incoming_file_hash": digest,
+                      "operating_date": str(operating_date),
+                      "shift": shift,
+                      "existing_confirmed_batches": [b.batch_id for b in prior_confirmed],
+                  })
+            db.commit()
+            return {
+                "outcome": "REVIEW_REQUIRED",
+                "batch_id": prior_confirmed[0].batch_id,
+                "date": operating_date.isoformat(),
+                "shift": shift,
+                "archive": str(archive),
+                "message": "Different WB file for already confirmed shift; kept existing records unchanged. Manual source review required.",
             }
         for old_preview in existing_same:
             if old_preview.status == "PREVIEW":
@@ -1003,20 +1039,14 @@ def ingest_xlsx(content, filename, cfg, message_id):
     if not definitions:
         raise ValueError("No active A/B/C shifts are configured in Shift Master.")
 
-    def clock_belongs(definition, clock):
-        if clock is None or definition is None:
-            return False
-        start, end = definition.start_time, definition.end_time
-        if end > start:
-            return start <= clock < end
-        return clock >= start or clock < end
-
-    def shift_from_clock(clock):
-        matches = [
-            code for code, definition in definitions.items()
-            if clock_belongs(definition, clock)
-        ]
-        return matches[0] if len(matches) == 1 else ""
+    def shift_from_clock(clock, movement_day):
+        # Physical date + time determines the shift on the operating-date
+        # schedule (before October: 05/13/21; since October: 06/14/22).
+        # Never guess the shift when the physical date is missing.
+        if clock is None or movement_day is None:
+            return ""
+        resolved = context_at(datetime.combine(movement_day, clock, TZ))
+        return resolved[1] if resolved else ""
 
     rows = []
     raw_counts = Counter()
@@ -1035,7 +1065,8 @@ def ingest_xlsx(content, filename, cfg, message_id):
         if raw_code:
             raw_counts[raw_code] += 1
         clock = clock_value(_mixed_shift_row_value(row, idx, "time"))
-        time_code = shift_from_clock(clock)
+        movement_day = date_value(_mixed_shift_row_value(row, idx, "date"))
+        time_code = shift_from_clock(clock, movement_day)
         effective_code = time_code or raw_code
 
         row_list = list(row)
@@ -1115,6 +1146,18 @@ def ingest_xlsx(content, filename, cfg, message_id):
         cfg,
         message_id,
     )
+    if result.get("outcome") == "REVIEW_REQUIRED" and "already confirmed shift" in str(result.get("message", "")):
+        # A mixed-shift source differing from a confirmed manual upload is
+        # held in full. Do not append its secondary rows into other confirmed
+        # shifts before the source revision is approved.
+        result["mixed_shift"] = {
+            "raw_counts": dict(raw_counts),
+            "resolved_counts": dict(resolved_counts),
+            "primary_shift": primary_shift,
+            "other_rows_held": len(other_rows),
+            "shift_code_corrections": corrections,
+        }
+        return result
     routed = _mixed_shift_append_missing_rows(
         other_rows, idx, filename, message_id, cfg
     )
@@ -1250,8 +1293,21 @@ def poll_once(service, cfg, labels):
         cfg["review_required_label"],
     ]
     exclusions = " ".join(f"-label:{name}" for name in label_names)
-    query = (str(cfg.get("gmail_query", "has:attachment filename:xlsx")).strip() + " " + exclusions).strip()
-    response = service.users().messages().list(userId="me", q=query, maxResults=int(cfg.get("max_messages_per_poll", 25))).execute()
+    # Restrict Gmail search BEFORE applying the per-poll cap. Filtering only
+    # in process_message() lets unrelated, newer XLSX mails occupy all 25
+    # result slots indefinitely, starving genuine weighbridge reports.
+    senders = [str(s).strip().lower() for s in cfg.get("allowed_senders", []) if str(s).strip()]
+    if not senders:
+        raise RuntimeError("WB Gmail cannot poll without approved senders")
+    sender_query = "{" + " ".join("from:" + s for s in senders) + "}"
+    query = " ".join(part for part in (
+        str(cfg.get("gmail_query", "has:attachment filename:xlsx")).strip(),
+        sender_query,
+        exclusions,
+    ) if part)
+    response = service.users().messages().list(
+        userId="me", q=query, maxResults=int(cfg.get("max_messages_per_poll", 25))
+    ).execute()
     ids = [x["id"] for x in response.get("messages", [])]
     processed = []
     for message_id in reversed(ids):
