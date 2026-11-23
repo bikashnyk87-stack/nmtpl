@@ -28,7 +28,7 @@ function run(data){
  };
  vm.runInNewContext(runCode,context,{timeout:1000});
  context.window.loadTiomWbSuggestions(true);
- return {elements,rows,T,loaded,requested,saved,context};
+ return {elements,rows,T,loaded,requested,get saved(){return saved},context};
 }
 const d={rows:[],linkedRows,diagnostics:{available:0,alreadyLinked:5,otherVehicle:220},
  message:'0 available; 5 already linked to another MIS report; 220 WB movements belong to other vehicles.'};
