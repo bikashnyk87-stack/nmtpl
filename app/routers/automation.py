@@ -426,9 +426,14 @@ async def automation_loop():
 
         if monotonic >= volvo_due:
             volvo_due = monotonic + volvo_interval
-            # Cached flag avoids a Neon read every 30min while paused.
-            with SessionLocal() as db:
-                enabled = collection_enabled(db)
+            # A Volvo DB/control failure must not terminate the shared cloud
+            # integrations loop and silently stop WB/Despatch Gmail polling.
+            try:
+                with SessionLocal() as db:
+                    enabled = collection_enabled(db)
+            except Exception:
+                logger.exception("Volvo enablement check failed; retaining WB/Despatch scheduler")
+                enabled = False
             if enabled:
                 username, password = _volvo_credentials()
                 if username and password:
