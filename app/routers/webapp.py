@@ -6340,14 +6340,20 @@ def _tiom_dpr_data(db, from_day, to_day, shifts, requested):
                             if match:pname='MSP-'+match.group(1)
                         if pname:
                             prodplant[pname]=prodplant.get(pname,0)+float(quantity)
+            wb_has_waste=any(x[0]=='WASTE' for w in wb_rows
+                             for x in tiom_wb_report_contributions(w))
             for row,detail in manual_rows.get((day,sh),[]):
-                if not detail:continue
-                code=_tiom_classify_mis_line(pmap.get(detail.material_id),
-                    lmap.get(detail.source_location_id),
-                    lmap.get(detail.destination_location_id))
-                if code in active_codes and not (code=='WASTE' and any(
-                    x[0]=='WASTE' for w in wb_rows for x in tiom_wb_report_contributions(w))):
-                    counts[code]=counts.get(code,0)+1
+                if not detail or Decimal(detail.calculated_qty_mt or 0)<=0:
+                    continue
+                product=pmap.get(detail.material_id)
+                src=lmap.get(detail.source_location_id)
+                dst=lmap.get(detail.destination_location_id)
+                codes=manual_process_codes(product,src,dst)
+                if not codes:
+                    codes=(_tiom_classify_mis_line(product,src,dst),)
+                for code in set(codes):
+                    if code in active_codes and not (code=='WASTE' and wb_has_waste):
+                        counts[code]=counts.get(code,0)+1
             pstatus=shift_reports.get((day,sh))
             evidence=bool(wb_rows or manual_rows.get((day,sh)) or (
                 pstatus and pstatus.status=='SUBMITTED'))
@@ -6375,6 +6381,7 @@ def _tiom_dpr_data(db, from_day, to_day, shifts, requested):
                 'drillMetres':sum(x['meterage'] for x in dr) if dr else None,
                 'drillHours':sum(x['drillHours'] for x in dr if x['drillHours'] is not None) if dr else None,
                 'plantHours':meters_by.get((day,sh),{}),'plantProduction':prodplant,
+                'materialBalance':bundle.get('massBalance') or {},
                 'warnings':bundle.get('warnings') or [],'quality':warnings})
         day+=timedelta(days=1)
     dates=[]
