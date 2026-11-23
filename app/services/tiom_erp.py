@@ -211,9 +211,13 @@ def wb_report_contributions(wb: WbMovement):
         # Keep raw ROM lumps from mine/excavation separate from screen output.
         mine_source = any(x in src for x in ('HA','RL','QUARRY','PIT','MINE')) and not any(x in src for x in ('MSP','SCREEN','PLANT','STOCK'))
         if 'ROM' in mat and mine_source:
+            if 'CRUSH' in dst or 'OCP' in dst:
+                return [('ROM_LUMPS', qty), ('ROM_FEED_TO_CRUSHER', qty),
+                        ('CRUSHER_FEED', qty)]
             return [('ROM_LUMPS', qty)]
         if stock_source and ('CRUSH' in dst or 'OCP' in dst):
-            return [('PRODUCT_REHANDLED', qty), ('LUMPS_TO_CRUSHER_FROM_STOCK', qty), ('CRUSHER_FEED', qty)]
+            return [('PRODUCT_REHANDLED', qty), ('LUMPS_TO_CRUSHER_FROM_STOCK', qty),
+                    ('CRUSHER_STOCK_FEED', qty), ('CRUSHER_FEED', qty)]
         if 'CRUSH' in dst or 'OCP' in dst:
             return [('LUMPS_FROM_SCREEN', qty), ('LUMPS_FEED_TO_CRUSHER', qty), ('CRUSHER_FEED', qty)]
         return [('LUMPS_FROM_SCREEN', qty)]
@@ -228,13 +232,18 @@ def wb_report_contributions(wb: WbMovement):
         # must never increase the fresh-ROM production base.
         if stock_source:
             out.append(('ROM_REHANDLED', qty))
-            if any(x in dst for x in ('PLANT','FEED','MSP','SCREEN')):
+            if 'CRUSH' in dst or 'OCP' in dst:
+                out.extend([('ROM_STOCK_TO_CRUSHER', qty),
+                            ('CRUSHER_STOCK_FEED', qty), ('CRUSHER_FEED', qty)])
+            elif any(x in dst for x in ('PLANT','FEED','MSP','SCREEN')):
                 out.extend([('ROM_STOCK_TO_PLANT_FEED', qty), ('MSP_FEED', qty)])
             elif _is_stack(dst):
                 out.append(('ROM_STOCK_TO_STOCK', qty))
             return out
         out.append(('ROM', qty))
-        if any(x in dst for x in ('PLANT','FEED','MSP','SCREEN')):
+        if 'CRUSH' in dst or 'OCP' in dst:
+            out.extend([('ROM_FEED_TO_CRUSHER', qty), ('CRUSHER_FEED', qty)])
+        elif any(x in dst for x in ('PLANT','FEED','MSP','SCREEN')):
             out.append(('MSP_FEED', qty))
         if _is_stack(dst):
             out.append(('ROM_STOCK_YARD', qty))
