@@ -1,0 +1,27 @@
+name: TIOM MIS compact trip-table regression
+
+on:
+  pull_request:
+    paths:
+      - "app/static/tiom_phase1.js"
+      - "app/static/tiom_phase1.css"
+      - "app/static/index.html"
+      - "tests/test_tiom_mis_compact_lead.py"
+      - ".github/workflows/tiom-mis-compact.yml"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: JavaScript syntax check
+        run: node --check app/static/tiom_phase1.js
+      - name: MIS compact table regression
+        run: |
+          python -m pip install pytest
+          python -m pytest -q tests/test_tiom_mis_compact_lead.py
