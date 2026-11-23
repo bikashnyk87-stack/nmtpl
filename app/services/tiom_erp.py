@@ -210,14 +210,18 @@ def wb_report_contributions(wb: WbMovement):
     if 'LUMP' in mat:
         # Keep raw ROM lumps from mine/excavation separate from screen output.
         mine_source = any(x in src for x in ('HA','RL','QUARRY','PIT','MINE')) and not any(x in src for x in ('MSP','SCREEN','PLANT','STOCK'))
-        if 'ROM' in mat and mine_source:
+        if mine_source:
+            # Named LUMPS can be hauled from the face even without ROM in
+            # the source material label. They are not MSP screened output.
             if 'CRUSH' in dst or 'OCP' in dst:
                 return [('ROM_LUMPS', qty), ('ROM_FEED_TO_CRUSHER', qty),
                         ('CRUSHER_FEED', qty)]
             return [('ROM_LUMPS', qty)]
-        if stock_source and ('CRUSH' in dst or 'OCP' in dst):
-            return [('PRODUCT_REHANDLED', qty), ('LUMPS_TO_CRUSHER_FROM_STOCK', qty),
-                    ('CRUSHER_STOCK_FEED', qty), ('CRUSHER_FEED', qty)]
+        if stock_source:
+            if 'CRUSH' in dst or 'OCP' in dst:
+                return [('PRODUCT_REHANDLED', qty), ('LUMPS_TO_CRUSHER_FROM_STOCK', qty),
+                        ('CRUSHER_STOCK_FEED', qty), ('CRUSHER_FEED', qty)]
+            return [('PRODUCT_REHANDLED', qty), ('LUMPS_STOCK_TRANSFER', qty)]
         if 'CRUSH' in dst or 'OCP' in dst:
             return [('LUMPS_FROM_SCREEN', qty), ('LUMPS_FEED_TO_CRUSHER', qty), ('CRUSHER_FEED', qty)]
         return [('LUMPS_FROM_SCREEN', qty)]
