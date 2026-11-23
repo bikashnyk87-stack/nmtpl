@@ -819,7 +819,7 @@ def dashboard_desk(db, user, p):
             if stamp:
                 hour_store=hourly_process_facts[stamp.hour]
                 hour_store[code]=hour_store.get(code,Decimal('0'))+q
-            if stamp and code=='ROM':
+            if stamp and code in {'ROM','ROM_LUMPS'}:
                 production_hourly[stamp.hour]['rom']+=float(q)
     old_stock_trips=len(excluded_movement_keys)
     # MIS no-WB lumps use the approved trip factor, not a fabricated WB
@@ -876,7 +876,10 @@ def dashboard_desk(db, user, p):
     # Fresh mine ROM is the 100% production base. MSP feed is deliberately
     # separate because it can contain ROM drawn from prior stock.
     msp_feed=production_facts.get('MSP_FEED',Decimal('0'))
-    fresh_rom=production_facts.get('ROM',Decimal('0'))
+    # Face-origin lumps are mined ROM, but screened MSP lumps are a separate
+    # intermediate stage and must never add to the fresh mine-production base.
+    fresh_rom=(production_facts.get('ROM',Decimal('0'))+
+               production_facts.get('ROM_LUMPS',Decimal('0')))
     rom_input=fresh_rom if fresh_rom>0 else msp_feed
     rom_basis='FRESH_ROM' if fresh_rom>0 else 'MSP_FEED_FALLBACK'
 
@@ -1366,7 +1369,7 @@ def dashboard_desk(db, user, p):
         for code,qty in tiom_wb_report_contributions(w):
             q=Decimal(qty or 0)
             facts=r['processFacts'];facts[code]=facts.get(code,Decimal('0'))+q
-            if code == 'ROM':
+            if code in {'ROM','ROM_LUMPS'}:
                 r['romInput']+=float(q)
     for item in manual_process_history:
         day_row=seven.get(str(item['date']))
@@ -1374,6 +1377,8 @@ def dashboard_desk(db, user, p):
             for code in set(item['codes']):
                 facts=day_row['processFacts']
                 facts[code]=facts.get(code,Decimal('0'))+item['qty']
+                if code in {'ROM','ROM_LUMPS'}:
+                    day_row['romInput']+=float(item['qty'])
     for r in seven.values():
         facts=r['processFacts']
         screen_day=facts.get('SCREEN_FINES',Decimal('0'))+facts.get('SCREEN_5_18',Decimal('0'))
@@ -1551,7 +1556,8 @@ def dashboard_desk(db, user, p):
         mat_rows.append({'label':row['label'],'trips':row['trips'],'tonnes':round(row['tonnes'],2),'monthTonnes':round(row.get('monthTonnes',0),2),
                          'avgPayload':round(row['tonnes']/row['trips'],2) if row['trips'] else 0,
                          'pct':round(row['tonnes']/wb_tonnes*100,1) if wb_tonnes else 0})
-    month_rom_input=month_process_facts.get('ROM',Decimal('0'))
+    month_rom_input=(month_process_facts.get('ROM',Decimal('0'))+
+                     month_process_facts.get('ROM_LUMPS',Decimal('0')))
     if month_rom_input<=0:
         month_rom_input=month_process_facts.get('MSP_FEED',Decimal('0'))
     month_screen_direct=month_process_facts.get('SCREEN_FINES',Decimal('0'))+month_process_facts.get('SCREEN_5_18',Decimal('0'))
@@ -1566,10 +1572,12 @@ def dashboard_desk(db, user, p):
     month_old_stock_blend_10_40=month_process_facts.get('OLD_STOCK_BLEND_10_40',Decimal('0'))
     other_old_stock_excluded=max(Decimal('0'),old_stock_excluded-old_stock_blend_10_40)
     month_other_old_stock_excluded=max(Decimal('0'),month_old_stock_excluded-month_old_stock_blend_10_40)
-    period_rom_trips=production_fact_trips.get('ROM',0)
+    period_rom_trips=(production_fact_trips.get('ROM',0)+
+                      production_fact_trips.get('ROM_LUMPS',0))
     if not period_rom_trips and rom_basis=='MSP_FEED_FALLBACK':
         period_rom_trips=production_fact_trips.get('MSP_FEED',0)
-    month_rom_trips=month_process_trips.get('ROM',0)
+    month_rom_trips=(month_process_trips.get('ROM',0)+
+                     month_process_trips.get('ROM_LUMPS',0))
     if not month_rom_trips and month_rom_input>0:
         month_rom_trips=month_process_trips.get('MSP_FEED',0)
 
