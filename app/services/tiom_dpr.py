@@ -356,6 +356,17 @@ def build_dpr_workbook(payload):
                 balance_rows.append([dateval,sh,label,metric,part.get(key),part.get("status"),
                     "; ".join(part.get("missing") or []),
                     "Not approved WIP, loss, closing stock or final fresh production"])
+        crusher_sources=(balance.get("crusher") or {}).get("sourceBreakdown") or {}
+        for key,label in (("fromMspLumpsMt","MSP lumps feed to crusher"),
+                          ("fromFaceRomMt","Face ROM feed to crusher"),
+                          ("fromRomStockMt","ROM stock feed to crusher"),
+                          ("fromLumpsStockMt","Lumps stock feed to crusher"),
+                          ("fromSpillageMt","Spillage feed to crusher"),
+                          ("companyBlendMt","Company stock blend to crusher")):
+            if crusher_sources.get(key) is not None:
+                balance_rows.append([dateval,sh,"Crusher feed source",label,
+                    crusher_sources[key],"PROVISIONAL","WB or MIS factor movement",
+                    "Component of total feed, not additional crusher feed"])
         if balance.get("wipCapture")=="NOT_AVAILABLE_NOT_REQUIRED":
             warning_rows.append([dateval,sh,"METHOD",
                                  "WIP measurement is not available or required; differences remain unexplained, not recorded as WIP or loss."])
