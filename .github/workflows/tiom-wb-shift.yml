@@ -22,6 +22,9 @@ on:
       - "app/services/tiom_manual_process.py"
       - "tests/test_tiom_manual_process.py"
       - "app/services/tiom_erp.py"
+      - "app/services/tiom_mass_balance.py"
+      - "tests/test_tiom_mass_balance.py"
+      - "app/static/tiom_management_ui.js"
       - "tests/test_tiom_production_classification.py"
       - "tests/test_tiom_wb_gmail_pagination.py"
   workflow_dispatch:
@@ -41,7 +44,7 @@ jobs:
           python -m pip install pytest httpx fastapi "uvicorn[standard]" "SQLAlchemy>=2" "psycopg[binary]>=3.2" python-dotenv pydantic openpyxl xlrd python-multipart google-api-python-client google-auth
       - name: Compile affected Python modules
         run: |
-          python -m py_compile app/services/tiom_shift_schedule.py app/services/tiom_shift_alignment.py app/services/time_context.py app/services/site_context.py app/services/attendance_automation.py app/routers/automation.py scripts/wb_gmail_worker.py app/services/tiom_wb_confirmed_revalidation.py app/routers/webapp.py app/services/tiom_manual_process.py app/main.py
+          python -m py_compile app/services/tiom_shift_schedule.py app/services/tiom_shift_alignment.py app/services/time_context.py app/services/site_context.py app/services/attendance_automation.py app/routers/automation.py scripts/wb_gmail_worker.py app/services/tiom_wb_confirmed_revalidation.py app/routers/webapp.py app/services/tiom_manual_process.py app/services/tiom_mass_balance.py app/main.py
       - name: Run focused shift and importer regressions
         run: |
-          python -m pytest -q tests/test_tiom_shift_effective_oct2026.py tests/test_low_compute_schedule_and_volvo.py tests/test_wb_gmail_shift_parity.py tests/test_tiom_shift_c_five_reviews.py tests/test_wb_poll_sender_filter.py tests/test_tiom_wb_confirmed_revalidation.py tests/test_tiom_manual_process.py tests/test_tiom_wb_gmail_pagination.py tests/test_tiom_production_classification.py
+          python -m pytest -q tests/test_tiom_shift_effective_oct2026.py tests/test_low_compute_schedule_and_volvo.py tests/test_wb_gmail_shift_parity.py tests/test_tiom_shift_c_five_reviews.py tests/test_wb_poll_sender_filter.py tests/test_tiom_wb_confirmed_revalidation.py tests/test_tiom_manual_process.py tests/test_tiom_wb_gmail_pagination.py tests/test_tiom_production_classification.py tests/test_tiom_mass_balance.py
