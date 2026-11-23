@@ -5273,7 +5273,7 @@ TIOM_SHIFT_REPORT_LINES = [
     ('STACKING','SC_5_18_SHIFTED','SC 5-18 mm',False),
     ('RE-HANDLING','UNSCREENED_5_18','UNSCREENED 5-18(58-60)',False),
     ('RE-HANDLING','PROJECT_AREA_FINES_TO_STACK','Project Area Fines to Stack',False),
-    ('RE-HANDLING','SPILLAGE_WIP','Spillage held in WIP',False),
+    ('RE-HANDLING','SPILLAGE_WIP','Spillage held for later processing',False),
     ('RE-HANDLING','SHIFT_5_40_TANKURA','5-40mm shifted (TANKURA)',False),
 ]
 
