@@ -29,6 +29,17 @@ def test_22_nov_screen_observed_gap_does_not_become_verified_stock_or_lumps():
     assert lumps["estimatedMt"] == 990
 
 
+def test_stock_recovered_spillage_is_external_feed_and_stock_issue():
+    result = calculate_tiom_mass_balance(facts(
+        MSP_FEED=200, SPILLAGE_FROM_STOCK=30,
+        SPILLAGE_RECYCLE_MSP=15, SCREEN_FINES=90, LUMPS_FROM_SCREEN=110
+    ))
+    assert result["msp"]["externalFeedMt"] == 200
+    assert result["msp"]["grossPassThroughMt"] == 215
+    assert result["stock"]["observedIssuesMt"] == 30
+    assert result["msp"]["observedDifferenceMt"] == 0
+
+
 def test_internal_rescreen_changes_throughput_not_external_feed():
     baseline = calculate_tiom_mass_balance(facts(
         MSP_FEED=1000, SCREEN_FINES=300, SCREEN_5_18=100, LUMPS_FROM_SCREEN=600
