@@ -57,7 +57,7 @@
 .tiom-deploy-table th:nth-child(10),.tiom-deploy-table td:nth-child(10){width:13%!important}
 #tm_dep_panel .tiom-deploy-table tbody tr{height:30px!important}
 #tm_dep_panel .tiom-deploy-table th{padding:3px 4px!important;font-size:9px!important;white-space:nowrap!important}
-#tm_dep_panel .tiom-deploy-table td{padding:2px 4px!important;font-size:10px!important;line-height:1.15!important;overflow:hidden}
+#tm_dep_panel .tiom-deploy-table tbody td{padding:2px 4px!important;font-size:10px!important;line-height:1.15!important;overflow:hidden}
 #tm_dep_panel .tiom-deploy-table td :is(input:not([type=checkbox]),select,.combo-text){display:block;width:100%!important;max-width:100%!important;min-width:0!important;height:24px!important;min-height:24px!important;padding:2px 5px!important;box-sizing:border-box!important;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 #tm_dep_panel .tiom-deploy-table .tiom-combo{min-width:0;width:100%;max-width:100%}
 #tm_dep_panel .tiom-deploy-table td .combo-text{padding-right:23px!important}
