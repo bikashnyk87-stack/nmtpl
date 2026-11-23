@@ -21,7 +21,7 @@ class ManualLumpsFlowTests(unittest.TestCase):
         codes = manual_lump_process_codes(obj("P-LMP", "Lumps"),
                                           obj("MSP3", "MSP-3"),
                                           obj("S3", "Stock S3"))
-        self.assertEqual(codes, ("LUMPS_FROM_SCREEN",))
+        self.assertEqual(codes, ("LUMPS_FROM_SCREEN", "LUMPS_SHIFTED_TO_STOCK"))
 
     def test_stock_to_crusher_is_rehandling_and_not_new_screen_production(self):
         codes = manual_lump_process_codes(obj("P-LMP", "Lumps"),
