@@ -6,27 +6,24 @@ from app.config import settings
 
 TZ = ZoneInfo(settings.timezone)
 
+# Current TIOM master timings; date-effective history is resolved by
+# app.services.tiom_shift_schedule.context_at, not this compatibility mapping.
 SHIFT_DEF = {
-    "A": (time(5,0), time(13,0)),
-    "B": (time(13,0), time(21,0)),
-    "C": (time(21,0), time(5,0)),
+    "A": (time(6,0), time(14,0)),
+    "B": (time(14,0), time(22,0)),
+    "C": (time(22,0), time(6,0)),
 }
 
 def now_local() -> datetime:
     return datetime.now(TZ)
 
 def operating_context(at: datetime | None = None) -> tuple[datetime.date, str, datetime]:
-    at = at.astimezone(TZ) if at else now_local()
-    t = at.timetz().replace(tzinfo=None)
-    if time(5,0) <= t < time(13,0):
-        shift = "A"
-        day = at.date()
-    elif time(13,0) <= t < time(21,0):
-        shift = "B"
-        day = at.date()
-    else:
-        shift = "C"
-        day = at.date() if t >= time(21,0) else (at - timedelta(days=1)).date()
+    from app.services.tiom_shift_schedule import context_at
+    at = at.astimezone(TZ) if at and at.tzinfo else (at.replace(tzinfo=TZ) if at else now_local())
+    context = context_at(at)
+    if context is None:
+        raise ValueError(f"No approved TIOM shift covers {at.isoformat()}")
+    day, shift = context
     return day, shift, at
 
 def week_monday(day):
