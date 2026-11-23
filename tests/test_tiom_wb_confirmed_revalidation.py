@@ -78,7 +78,9 @@ def test_confirmed_review_corrected_using_exact_original(monkeypatch):
         assert result["valid"]==2 and result["review"]==0
         movement=db.get(WbMovement,"batch-a:WB001:2")
         assert movement.row_status=="VALID"
-        assert movement.weigh_at.astimezone(TZ).time()==time(13,20,3)
+        # SQLite drops timezone info; PostgreSQL preserves an aware UTC instant.
+        assert (movement.weigh_at.astimezone(TZ).time()
+                if movement.weigh_at.tzinfo else movement.weigh_at.time()) == time(13,20,3)
         assert movement.issue is None
         assert len(calls)==1
         assert db.query(WbMovement).count()==2
