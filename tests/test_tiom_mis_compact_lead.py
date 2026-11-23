@@ -25,5 +25,5 @@ def test_compact_trip_table_only_and_cache_refresh():
     assert "#tm_trip_panel .erp-trip-table tbody td{padding:1px 3px!important" in css
     assert "font-size:9.5px!important;line-height:1.15!important" in css
     assert "#tm_trip_panel .erp-trip-table thead th{padding:3px 4px!important;font-size:9px!important" in css
-    assert "/static/tiom_phase1.js?v=tiom-mis-wb-vehicle-guard-20261123" in html
-    assert "/static/tiom_phase1.css?v=tiom-hmr-ten-cols-20261123" in html
+    assert "/static/tiom_phase1.js?v=tiom-linked-wb-preview-20261123" in html
+    assert "/static/tiom_phase1.css?v=tiom-linked-wb-preview-20261123" in html

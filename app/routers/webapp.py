@@ -4796,7 +4796,7 @@ def get_tiom_wb_suggestions(db,user,p):
     )))
     aliases={norm_vehicle(x.alias) for x in db.scalars(select(VehicleAlias).where(
         VehicleAlias.machine_id==vehicle.machine_id,VehicleAlias.active.is_(True)))}
-    out=[];other_linked=0;other_vehicle=0
+    out=[];linked_rows=[];other_linked=0;other_vehicle=0
     for wb in wb_rows:
         matched=tiom_wb_vehicle_matches(wb,vehicle) or bool(
             aliases.intersection({norm_vehicle(wb.vehicle_raw),norm_vehicle(wb.vehicle_id)}))
@@ -4804,7 +4804,25 @@ def get_tiom_wb_suggestions(db,user,p):
             other_vehicle+=1;continue
         rec=linked.get(wb.movement_key)
         if rec and rec.row_id not in own_row_ids:
-            other_linked+=1;continue
+            other_linked+=1
+            # Already-linked WB records must still be visible, strictly read-only.
+            # The new-entry list remains limited to unlinked/own WB records.
+            # Only reveal a direct report link when the saved report belongs
+            # to this exact vehicle, operating date and shift.
+            owner_row=db.get(TiomMisTripRow,rec.row_id)
+            owner_report=db.get(TiomMisReport,owner_row.report_id) if owner_row else None
+            belongs_here=bool(owner_report and
+                owner_report.vehicle_id==vehicle.machine_id and
+                owner_report.operating_date==day and owner_report.shift==sh)
+            linked_rows.append({
+                'movementNo':str(wb.movement_no or ''),
+                'material':str(wb.material_name or wb.material_code or ''),
+                'netMt':float(Decimal(wb.net_kg or 0)/Decimal('1000')),
+                'reportId':str(owner_report.report_id) if belongs_here else '',
+                'reportStatus':str(owner_report.status or '') if belongs_here else '',
+                'linkState':'SAVED_REPORT' if belongs_here else 'CHECK_LINK',
+            })
+            continue
         item=tiom_wb_payload(db,wb)
         # An exact WB material is never replaced by a generic/fuzzy MIS alias.
         product=canonical_wb_product(db,wb)
@@ -4816,7 +4834,7 @@ def get_tiom_wb_suggestions(db,user,p):
         item['machineChoices']=machines
         item['linkedToThisReport']=bool(rec and rec.row_id in own_row_ids)
         out.append(item)
-    return {'rows':out,'batch':{'batchId':batch.batch_id,'fileName':batch.file_name,'confirmedAt':batch.confirmed_at.isoformat() if batch.confirmed_at else ''},
+    return {'rows':out,'linkedRows':linked_rows,'batch':{'batchId':batch.batch_id,'fileName':batch.file_name,'confirmedAt':batch.confirmed_at.isoformat() if batch.confirmed_at else ''},
             'diagnostics':{'batchValid':len(wb_rows),'otherVehicle':other_vehicle,'alreadyLinked':other_linked,
                            'available':len(out),'unmappedRows':sum(not (x.get('materialId') and x.get('sourceLocationId') and x.get('destinationLocationId')) for x in out)},
             'message':f'{len(out)} available; {other_linked} already linked to another MIS report; {other_vehicle} WB movements belong to other vehicles. Latest confirmed batch: {batch.file_name}.'}

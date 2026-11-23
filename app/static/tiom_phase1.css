@@ -172,3 +172,14 @@
 @media(max-width:600px){
   #tm_transfer_panel .tm-transfer-fields{grid-template-columns:minmax(0,1fr)}
 }
+
+/* Linked WB movements remain visible for reference when no new trips exist. */
+#tm_trip_panel #tm_wb_linked:empty{display:none}
+#tm_trip_panel #tm_wb_linked{margin:3px 4px 6px;border:1px solid var(--line,#d5e1e9);border-radius:5px;overflow:hidden}
+#tm_trip_panel .tiom-wb-linked-title{display:flex;justify-content:space-between;align-items:center;gap:8px;background:#eef6f9;padding:5px 8px;font-size:11px}
+#tm_trip_panel .tiom-wb-linked-title span{color:#536877;font-size:10px}
+#tm_trip_panel .tiom-wb-linked-table{width:100%;border-collapse:collapse;font-size:10px}
+#tm_trip_panel .tiom-wb-linked-table th,#tm_trip_panel .tiom-wb-linked-table td{padding:3px 7px!important;border-bottom:1px solid #e0e8ed;text-align:left;white-space:nowrap;font-size:10px!important}
+#tm_trip_panel .tiom-wb-linked-table th{background:#f4f8fa;font-weight:650}
+#tm_trip_panel .tiom-wb-linked-table tbody tr:last-child td{border-bottom:none}
+#tm_trip_panel .tiom-wb-linked-table .btn{min-height:23px;font-size:10px}
