@@ -16,6 +16,13 @@ def _loc_text(location):
                     for field in ("location_id", "location_name", "location_type")).upper()
 
 
+def _is_stock_location(location):
+    """Recognise configured stock roles and short numbered stockpiles (S3)."""
+    raw=_loc_text(location)
+    return (("STOCK" in raw or "STACK" in raw) or
+            bool(re.search(r"(?<![A-Z0-9])S[- ]?[0-9]+(?![A-Z0-9])", raw)))
+
+
 def manual_lump_process_codes(product, source, destination):
     """Return movement facts for an explicitly named manual Lumps material.
 
@@ -30,10 +37,10 @@ def manual_lump_process_codes(product, source, destination):
     src = _loc_text(source)
     dst = _loc_text(destination)
     from_screen = bool(re.search(r"\b(MSP[ -]?\d*|SCREEN|SCREENING)\b", src))
-    from_stock = "STOCK" in src or "STACK" in src
+    from_stock = _is_stock_location(source)
     to_crusher = "CRUSH" in dst or bool(re.search(r"\bOCP\b", dst))
     to_screen = bool(re.search(r"\b(MSP[ -]?\d*|SCREEN|SCREENING)\b", dst))
-    to_stock = "STOCK" in dst or "STACK" in dst
+    to_stock = _is_stock_location(destination)
 
     if from_stock:
         codes = ["PRODUCT_REHANDLED"]
@@ -76,10 +83,10 @@ def manual_rom_process_codes(product, source, destination):
         return ()
     src = _loc_text(source)
     dst = _loc_text(destination)
-    from_stock = "STOCK" in src or "STACK" in src
+    from_stock = _is_stock_location(source)
     to_crusher = "CRUSH" in dst or bool(re.search(r"\bOCP\b", dst))
     to_screen = bool(re.search(r"\b(MSP[ -]?\d*|SCREEN|SCREENING)\b", dst))
-    to_stock = "STOCK" in dst or "STACK" in dst
+    to_stock = _is_stock_location(destination)
     if from_stock:
         codes = ["ROM_REHANDLED"]
         if to_crusher:
@@ -114,7 +121,7 @@ def manual_spillage_process_codes(product, source, destination):
         return ()
     src = _loc_text(source)
     dst = _loc_text(destination)
-    from_stock = "STOCK" in src or "STACK" in src
+    from_stock = _is_stock_location(source)
     to_crusher = "CRUSH" in dst or bool(re.search(r"\bOCP\b", dst))
     to_screen = bool(re.search(r"\b(MSP[ -]?\d*|SCREEN|SCREENING)\b", dst))
     if to_crusher:
