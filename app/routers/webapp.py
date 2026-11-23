@@ -825,8 +825,13 @@ def dashboard_desk(db, user, p):
     manual_lumps_history=unweighed_lump_trip_facts(
         db,manual_history_start,end_day,selected_shift,allowed_shifts)
     manual_lumps_period=[item for item in manual_lumps_history
-                         if start_day<=item['date']<=end_day and
-                         (not vehicle_filter or item['vehicleId']==vehicle_filter)]
+                         if start_day<=item['date']<=end_day
+                         and (not vehicle_filter or item['vehicleId']==vehicle_filter)
+                         and (not source_filter or item['source'].location_id==source_filter)
+                         and (not destination_filter or item['destination'].location_id==destination_filter)
+                         # An explicit WB-material filter must not silently
+                         # include no-WB factor quantities of another material.
+                         and not material_filter]
     manual_crusher_feed=Decimal('0')
     manual_crusher_feed_trips=0
     manual_stock_crusher_feed=Decimal('0')
