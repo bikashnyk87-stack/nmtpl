@@ -92,9 +92,10 @@ def calculate_tiom_mass_balance(facts_by_source, inventory=None):
             "code": code, "label": label,
             "recorded": bool(values),
             "qtyMt": _n(sum(values.values(), Decimal("0"))) if values else None,
-            "measuredMt": _n(values.get("WB", Decimal("0"))) if values else None,
-            "estimatedMt": _n(sum((value for key, value in values.items()
-                                  if key != "WB"), Decimal("0"))) if values else None,
+            "measuredMt": _n(values["WB"]) if "WB" in values else None,
+            "estimatedMt": (_n(sum((value for key, value in values.items()
+                                    if key != "WB"), Decimal("0")))
+                             if any(key != "WB" for key in values) else None),
             "sources": {key: _n(value) for key, value in values.items()},
         })
 
