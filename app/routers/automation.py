@@ -278,11 +278,12 @@ def run_volvo(
 
 
 IST = ZoneInfo("Asia/Kolkata")
-# Shift C ends at 05:00 the next calendar day; A ends 13:00, B ends 21:00.
-# Times below are cloud Gmail *search* windows, not operating shift starts.
-WB_WINDOWS = ((5, "C", -1), (13, "A", 0), (21, "B", 0))
+# Informational post-shift windows. The actual cloud WB polling runs
+# continuously every three minutes and does not stop after confirmation.
+WB_WINDOWS = ((6, "C", -1), (14, "A", 0), (22, "B", 0))
 WB_SEARCH_MINUTES = 120
-WB_RETRY_SECONDS = 900
+WB_POLL_SECONDS = 180
+WB_RETRY_SECONDS = WB_POLL_SECONDS  # compatibility for external checks
 DESPATCH_RETRY_SECONDS = 900
 # Late approved files can enrich missing WB Time / Permit Qty even after an
 # earlier Date Wise file has created the first E-Pass records. Run at most two
@@ -334,17 +335,13 @@ def confirmed_despatch_day(operating_date) -> bool:
 
 
 async def automation_loop():
-    """IST-window cloud polling; outside the windows makes NO Gmail DB calls.
+    """Cloud background tasks. WB Gmail scans every 180 seconds, all day.
 
-    WB 05:00-07:00 for prior C, 13:00-15:00 for current A, 21:00-23:00
-    for current B. Every 15 min until that shift is confirmed, max two hours.
-    Despatch 06:00 onward for previous day's report, every 15 min until
-    that date has E-Pass trips. Recheck for later-approved detail reports
-    once after 12:00 and 18:00 IST, including source corrections for earlier
-    dates, with bounded polling instead of endless checks.
+    The WB worker uses approved senders and Gmail labels to avoid duplicate
+    imports; confirmed shifts never disable future checks. Despatch retains
+    its existing reduced-frequency schedule.
     """
-    wb_checked: dict[str, float] = {}
-    wb_done: set[str] = set()
+    wb_due = 0.0
     dispatch_checked: dict[str, float] = {}
     dispatch_done: set[str] = set()
     dispatch_late_done: set[str] = set()
@@ -353,37 +350,29 @@ async def automation_loop():
     gmail_missing_logged = False
     volvo_missing_logged = False
     await asyncio.sleep(5)
-    logger.info("Cloud low-compute schedule started: WB 05/13/21 IST (2h cap), Despatch from 06 IST, Volvo %ds (pauseable)", volvo_interval)
+    logger.info("Cloud integrations started: WB Gmail continuous %ds; Despatch 06 IST; Volvo %ds",
+                WB_POLL_SECONDS, volvo_interval)
     while True:
         local = datetime.now(IST)
         monotonic = time.monotonic()
         today_key = local.date().isoformat()
-        # Retain only today's completion flags; restart rechecks confirmed data.
-        wb_done = {x for x in wb_done if x.startswith(today_key + ":")}
-        wb_checked = {k:v for k,v in wb_checked.items() if k.startswith(today_key + ":")}
         dispatch_done = {x for x in dispatch_done if x == today_key}
         dispatch_checked = {k:v for k,v in dispatch_checked.items() if k == today_key}
         dispatch_late_done = {x for x in dispatch_late_done
                               if x.startswith(today_key + ":")}
-        window = wb_search_window(local)
-        if window and os.getenv("WB_GMAIL_ENABLED", "true").strip().lower() not in {"0","no","off","false"}:
-            key, operating_date, shift = window
-            if key not in wb_done and monotonic >= wb_checked.get(key, -1) + WB_RETRY_SECONDS:
-                wb_checked[key] = monotonic
+        if monotonic >= wb_due:
+            wb_due = monotonic + WB_POLL_SECONDS
+            if os.getenv("WB_GMAIL_ENABLED", "true").strip().lower() not in {"0", "no", "off", "false"}:
                 if _gmail_token_raw():
                     try:
-                        if await asyncio.to_thread(confirmed_wb_shift, operating_date, shift):
-                            wb_done.add(key)
-                        else:
-                            await asyncio.to_thread(gmail_once)
-                            if await asyncio.to_thread(confirmed_wb_shift, operating_date, shift):
-                                wb_done.add(key)
-                                logger.info("WB %s %s confirmed; stopping this shift's Gmail polls", operating_date, shift)
+                        result = await asyncio.to_thread(gmail_once)
+                        logger.info("WB Gmail 3-minute cycle complete: messages=%s counts=%s",
+                                    result.get("messages_seen", 0), result.get("counts", {}))
                     except Exception:
-                        logger.exception("Scheduled WB Gmail scan failed for %s shift %s", operating_date, shift)
+                        logger.exception("WB Gmail 3-minute cycle failed; will retry")
                     gmail_missing_logged = False
                 elif not gmail_missing_logged:
-                    logger.warning("WB Gmail scheduled scan waiting for Gmail token")
+                    logger.warning("WB Gmail 3-minute polling blocked: Gmail token missing")
                     gmail_missing_logged = True
 
         if local.hour >= 6 and today_key not in dispatch_done and monotonic >= dispatch_checked.get(today_key,-1) + DESPATCH_RETRY_SECONDS:
