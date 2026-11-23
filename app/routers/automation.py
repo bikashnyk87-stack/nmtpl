@@ -149,6 +149,7 @@ def gmail_once():
         cfg["error_label"],
         cfg["review_required_label"],
         cfg["review_rows_label"],
+        cfg.get("skipped_label", "NMTPL_WB_SKIPPED"),
     ]
     labels = worker.ensure_labels(service, label_names)
     results = []
