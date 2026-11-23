@@ -1,6 +1,8 @@
 """TIOM operational shifts and carefully scoped WB review correction.
 
-TIOM uses 05-13, 13-21 and 21-05 Asia/Kolkata. SOCP/KOCP are untouched.
+From 1-Oct-2026, TIOM uses 06-14, 14-22 and 22-06 Asia/Kolkata.
+Older operating dates keep the earlier 05-13, 13-21, 21-05 rules.
+SOCP/KOCP are untouched.
 The five 11-Oct-2026 entries were independently verified against the raw WB
 export. Only exact WB movement IDs in the active confirmed C batch can change.
 """
@@ -15,9 +17,9 @@ from app.models import ShiftMaster, WbImportBatch, WbMovement, AuditLog
 from app.site_models import SiteShift
 from app.services.time_context import TZ, now_local
 
-TIMES = {"A": (time(5,0),time(13,0),1),
-         "B": (time(13,0),time(21,0),2),
-         "C": (time(21,0),time(5,0),3)}
+TIMES = {"A": (time(6,0),time(14,0),1),
+         "B": (time(14,0),time(22,0),2),
+         "C": (time(22,0),time(6,0),3)}
 DAY=date(2026,10,11)
 # (WB movement number, vehicle, local physical weigh timestamp, net MT, source material)
 EXCEPTIONS={
@@ -62,14 +64,19 @@ def align_tiom_shifts(db):
             site.sequence_no=seq
             site.active=True
         if before != {"start":str(start),"end":str(end)}:
-            _audit(db,"TIOM_SHIFT_MASTER_ALIGNED_0500_1300_2100",shift,
+            _audit(db,"TIOM_SHIFT_MASTER_ALIGNED_0600_1400_2200",shift,
                    {"before":before,"after":{"start":str(start),"end":str(end)},
-                    "reason":"Confirmed by mine: A 05-13, B 13-21, C 21-05."})
+                    "reason":"Effective 2026-10-01: A 06-14, B 14-22, C 22-06."})
             changes.append(shift)
     db.flush()
-    return {"aligned":changes,"effective":{"A":"05:00–13:00","B":"13:00–21:00","C":"21:00–05:00"}}
+    return {"aligned":changes,"effectiveFrom":"2026-10-01","effective":{"A":"06:00–14:00","B":"14:00–22:00","C":"22:00–06:00"}}
 
 def resolve_oct11_five_wb_reviews(db):
+    # Former one-off C-shift correction relied on the obsolete 21:00 start.
+    # Do not auto-promote those movements under the 1-Oct 22:00 C shift.
+    # Existing confirmed rows require separate audited reconciliation.
+    return {"corrected":0,"alreadyValid":0,"skipped":{"policy":"Oct-11 old C timing invalid after 1-Oct revision; audit required"},"confirmedBatch":None}
+
     """Correct only five exact VALID-weight WB movements in current confirmed C.
 
     Never blindly reassign movement IDs or create duplicate trips/MIS rows.
