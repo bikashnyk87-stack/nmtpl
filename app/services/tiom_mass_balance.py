@@ -25,6 +25,7 @@ ROUTES = (
     ("LUMPS_SHIFTED_TO_STOCK", "MSP lumps to stock"),
     ("LUMPS_TO_CRUSHER_FROM_STOCK", "Lumps stock to crusher"),
     ("SPILLAGE_RECYCLE_MSP", "Internal MSP re-screen / recycle"),
+    ("SPILLAGE_FROM_STOCK", "Stock spillage reintroduced to MSP"),
     ("SPILLAGE_TO_CRUSHER", "Spillage to crusher"),
     ("SPILLAGE_WIP", "Spillage in WIP / holding"),
     ("CRUSHER_BLEND_FEED", "Company old-stock crusher blend"),
@@ -168,8 +169,8 @@ def calculate_tiom_mass_balance(facts_by_source, inventory=None):
         stock_open, stock_close, stock_other_in, stock_other_out
     ))
     stock_receipts = add("ROM_STOCK_YARD", "LUMPS_SHIFTED_TO_STOCK")
-    stock_issues = add("ROM_STOCK_TO_PLANT_FEED",
-                       "ROM_STOCK_TO_CRUSHER", "LUMPS_TO_CRUSHER_FROM_STOCK")
+    stock_issues = add("ROM_STOCK_TO_PLANT_FEED", "ROM_STOCK_TO_CRUSHER",
+                       "LUMPS_TO_CRUSHER_FROM_STOCK", "SPILLAGE_FROM_STOCK")
     stock_variance = (
         stock_open + stock_receipts + stock_other_in
         - stock_issues - stock_other_out - stock_close
