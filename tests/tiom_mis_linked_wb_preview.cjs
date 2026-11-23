@@ -38,7 +38,7 @@ assert.equal(x.rows.length,0,'existing linked WB may not be auto-inserted');
 assert.match(x.elements.tm_wb_linked.innerHTML,/5 WB movement\(s\) already linked/);
 assert.equal((x.elements.tm_wb_linked.innerHTML.match(/<tr>/g)||[]).length,6);
 assert.equal((x.elements.tm_wb_linked.innerHTML.match(/Open report/g)||[]).length,5);
-assert.match(x.elements.tm_wb_linked.innerHTML,/188/,'the source weights should be shown separately, not hidden');
+assert.match(x.elements.tm_wb_linked.innerHTML,/35\\.22/);\nassert.match(x.elements.tm_wb_linked.innerHTML,/40\\.58/);\nassert.equal(linkedRows.reduce((s,r)=>s+r.netMt,0).toFixed(2),'188.46');
 assert.match(x.elements.tm_wb_state.textContent,/0 available; 5 already linked/);
 x.context.window.openLinkedWbReport(linkedRows[0].reportId);
 assert.equal(x.loaded[0],linkedRows[0].reportId);
