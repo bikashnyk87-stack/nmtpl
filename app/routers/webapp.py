@@ -51,6 +51,8 @@ from app.services.tiom_erp import (
 )
 from app.services.tiom_location_erp import canonicalize_wb_rows, location_options, ensure_location_master_roles
 from app.services.tiom_manual_material import canonical_manual_45_material
+from app.services.tiom_manual_process import manual_process_codes, unweighed_process_trip_facts
+from app.services.tiom_mass_balance import calculate_tiom_mass_balance
 from app.services.tiom_wb_truth import canonical_wb_product, repair_saved_wb_linked_mis
 from app.services.wb_quarantine import WbGmailQuarantine
 from app.site_models import (
@@ -746,6 +748,7 @@ def dashboard_desk(db, user, p):
     # Plant feed is a separate physical throughput measure. Rehandling / old stock
     # may feed a plant but must never increase fresh production or recovery.
     production_facts={}
+    mass_balance_source_facts={}
     production_fact_trips={}
     production_fact_rows={}
     excluded_movement_keys=set()
@@ -807,6 +810,8 @@ def dashboard_desk(db, user, p):
         for code,qty in facts:
             q=Decimal(qty or 0)
             production_facts[code]=production_facts.get(code,Decimal('0'))+q
+            wb_sources=mass_balance_source_facts.setdefault(code,{})
+            wb_sources['WB']=wb_sources.get('WB',Decimal('0'))+q
             production_fact_rows.setdefault(code,[]).append(row)
             if code not in seen_codes:
                 production_fact_trips[code]=production_fact_trips.get(code,0)+1
@@ -814,9 +819,52 @@ def dashboard_desk(db, user, p):
             if stamp:
                 hour_store=hourly_process_facts[stamp.hour]
                 hour_store[code]=hour_store.get(code,Decimal('0'))+q
-            if stamp and code=='ROM':
+            if stamp and code in {'ROM','ROM_LUMPS'}:
                 production_hourly[stamp.hour]['rom']+=float(q)
     old_stock_trips=len(excluded_movement_keys)
+    # MIS no-WB lumps use the approved trip factor, not a fabricated WB
+    # movement. Keep them out of WB movement totals and WB-only vehicle metrics.
+    # One source row may produce separate SCREEN_OUTPUT and CRUSHER_FEED facts.
+    manual_history_start=min(start_day,end_day.replace(day=1),end_day-timedelta(days=6))
+    manual_process_history=unweighed_process_trip_facts(
+        db,manual_history_start,end_day,selected_shift,allowed_shifts)
+    # Production totals are whole-period facts. Exploratory WB vehicle/material
+    # filters must not remove manual factors while WB totals remain unfiltered.
+    # Future scoped material-balance filters need to filter BOTH sources.
+    manual_process_period=[item for item in manual_process_history
+                           if start_day<=item['date']<=end_day]
+    manual_crusher_feed=Decimal('0')
+    manual_crusher_feed_trips=0
+    manual_stock_crusher_feed=Decimal('0')
+    manual_msp_transfers={}
+    for item in manual_process_period:
+        qty=item['qty']; codes=set(item['codes'])
+        for code in codes:
+            production_facts[code]=production_facts.get(code,Decimal('0'))+qty
+            by_source=mass_balance_source_facts.setdefault(code,{})
+            by_source['MIS_FACTOR']=by_source.get('MIS_FACTOR',Decimal('0'))+qty
+            production_fact_trips[code]=production_fact_trips.get(code,0)+1
+        if 'PRODUCT_REHANDLED' in codes or 'ROM_REHANDLED' in codes:
+            old_stock_excluded+=qty
+            old_stock_trips+=1
+        if 'CRUSHER_FEED' in codes:
+            manual_crusher_feed+=qty
+            manual_crusher_feed_trips+=1
+            if 'CRUSHER_STOCK_FEED' in codes:
+                manual_stock_crusher_feed+=qty
+        if 'LUMPS_FEED_TO_CRUSHER' in codes:
+            source=item['source']
+            source_label=' '.join(str(getattr(source,key,'') or '')
+                                  for key in ('location_id','location_name')).upper()
+            match=re.search(r'\bMSP\s*(?:PLANT\s*)?-?\s*(\d+)\b',source_label)
+            plant=f"MSP-{match.group(1)}" if match else 'MSP / Unmapped'
+            row=manual_msp_transfers.setdefault(plant,{'tonnes':Decimal('0'),'trips':0})
+            row['tonnes']+=qty
+            row['trips']+=1
+    # Stage movement reconciliation is read-only. Unknown stock, WIP and
+    # reject quantities must remain pending until explicit ledgers exist.
+    material_balance=calculate_tiom_mass_balance(mass_balance_source_facts)
+    material_balance['scope']='WHOLE_OPERATING_PERIOD'
     for hour,hfacts in hourly_process_facts.items():
         screen_hour=hfacts.get('SCREEN_FINES',Decimal('0'))+hfacts.get('SCREEN_5_18',Decimal('0'))
         crusher_gross_hour=hfacts.get('CRUSHER_FINES',Decimal('0'))+hfacts.get('CRUSHER_5_18',Decimal('0'))
@@ -828,7 +876,10 @@ def dashboard_desk(db, user, p):
     # Fresh mine ROM is the 100% production base. MSP feed is deliberately
     # separate because it can contain ROM drawn from prior stock.
     msp_feed=production_facts.get('MSP_FEED',Decimal('0'))
-    fresh_rom=production_facts.get('ROM',Decimal('0'))
+    # Face-origin lumps are mined ROM, but screened MSP lumps are a separate
+    # intermediate stage and must never add to the fresh mine-production base.
+    fresh_rom=(production_facts.get('ROM',Decimal('0'))+
+               production_facts.get('ROM_LUMPS',Decimal('0')))
     rom_input=fresh_rom if fresh_rom>0 else msp_feed
     rom_basis='FRESH_ROM' if fresh_rom>0 else 'MSP_FEED_FALLBACK'
 
@@ -843,6 +894,7 @@ def dashboard_desk(db, user, p):
     screen_intermediate=screen_lumps+spillage_to_crusher
     crusher_feed_fact=production_facts.get('CRUSHER_FEED',Decimal('0'))
     crusher_blend_feed=production_facts.get('CRUSHER_BLEND_FEED',Decimal('0'))
+    crusher_stock_feed=production_facts.get('CRUSHER_STOCK_FEED',Decimal('0'))
 
     screen_direct=screen_fines+screen_518
     screen_accounted=screen_direct+screen_intermediate+spillage_wip
@@ -853,8 +905,11 @@ def dashboard_desk(db, user, p):
     final_production=screen_direct+crusher_fresh_final
     # Keep physical gross-output evidence distinct from an unverified fresh share.
     # A missing crusher-feed quantity must never silently prove 100% fresh output.
-    allocation_pending=(crusher_final>0 and (crusher_feed_fact<=0 or crusher_blend_feed>crusher_feed_fact))
-    allocation_status=('CRUSHER_FEED_TONNAGE_MISSING' if crusher_final>0 and crusher_feed_fact<=0
+    allocation_pending=(crusher_final>0 and (
+        crusher_feed_fact<=0 or crusher_blend_feed>crusher_feed_fact
+        or crusher_stock_feed>0))
+    allocation_status=('STOCK_FEED_ALLOCATION_REQUIRED' if crusher_stock_feed>0
+                       else 'CRUSHER_FEED_TONNAGE_MISSING' if crusher_final>0 and crusher_feed_fact<=0
                        else 'BLEND_FEED_EXCEEDS_TOTAL' if crusher_blend_feed>crusher_feed_fact
                        else 'PROPORTIONAL_ALLOCATION' if crusher_blend_feed>0
                        else 'NO_RECORDED_BLEND')
@@ -1005,7 +1060,7 @@ def dashboard_desk(db, user, p):
     transfer_by_msp=_group_by_msp(msp_transfer_rows,'SOURCE')
     recycle_by_msp=_group_by_msp(msp_recycle_rows,'DESTINATION')
     wip_by_msp=_group_by_msp(msp_wip_rows,'SOURCE')
-    msp_labels=sorted(set(feed_by_msp)|set(final_by_msp)|set(transfer_by_msp)|set(recycle_by_msp)|set(wip_by_msp),
+    msp_labels=sorted(set(feed_by_msp)|set(final_by_msp)|set(transfer_by_msp)|set(recycle_by_msp)|set(wip_by_msp)|set(manual_msp_transfers),
                       key=lambda x:(x=='MSP / Unmapped',x))
     plant_performance=[]
     for label in msp_labels:
@@ -1019,7 +1074,8 @@ def dashboard_desk(db, user, p):
         recycle_mt=sum(tonnes(r) for r in recycle_rows)
         gross_throughput=feed_mt+recycle_mt
         final_mt=sum(tonnes(r) for r in final_rows)
-        transfer_mt=sum(tonnes(r) for r in transfer_rows)
+        manual_transfer=manual_msp_transfers.get(label,{'tonnes':Decimal('0'),'trips':0})
+        transfer_mt=sum(tonnes(r) for r in transfer_rows)+float(manual_transfer['tonnes'])
         wip_mt=sum(tonnes(r) for r in wip_rows)
         accounted_mt=final_mt+transfer_mt+wip_mt
         run_hours=_plant_run_hours(label)
@@ -1031,7 +1087,8 @@ def dashboard_desk(db, user, p):
             'recycleMt':round(recycle_mt,2),'blendFeedMt':0.0,
             'grossThroughputMt':round(gross_throughput,2),
             'directFinalMt':round(final_mt,2),'outputMt':round(final_mt,2),'grossOutputMt':round(accounted_mt,2),
-            'transferToCrusherMt':round(transfer_mt,2),'wipMt':round(wip_mt,2),'outputTrips':len(output_rows),
+            'transferToCrusherMt':round(transfer_mt,2),'wipMt':round(wip_mt,2),'outputTrips':len(output_rows)+manual_transfer['trips'],
+            'manualFactorTrips':manual_transfer['trips'],
             'varianceMt':round(feed_mt-accounted_mt,2),
             'recoveryPct':recovery,'outputVsFeedPct':round(accounted_mt/feed_mt*100,2) if feed_mt>0 else None,
             'finalYieldPct':recovery,
@@ -1042,15 +1099,18 @@ def dashboard_desk(db, user, p):
         })
 
     crusher_feed=crusher_feed_fact
-    crusher_fresh_feed=max(Decimal('0'),crusher_feed-crusher_blend_feed)
+    crusher_fresh_feed=max(Decimal('0'),crusher_feed-crusher_blend_feed-crusher_stock_feed)
     crusher_recovery=(float(crusher_final/crusher_feed*Decimal('100'))) if crusher_feed>0 else None
     crusher_run_hours=_plant_run_hours('Crusher')
     crusher_feed_tph=round(float(crusher_feed)/crusher_run_hours,2) if crusher_run_hours and crusher_run_hours>0 else None
     crusher_recovery_value=round(crusher_recovery,2) if crusher_recovery is not None else None
     plant_performance.append({
         'plant':'Crusher','plantType':'CRUSHER',
-        'feedMt':round(float(crusher_fresh_feed),2),'freshFeedMt':round(float(crusher_fresh_feed),2),'feedTrips':len(crusher_feed_rows),
-        'recycleMt':0.0,'blendFeedMt':round(float(crusher_blend_feed),2),'blendTrips':len(crusher_blend_rows),
+        'feedMt':round(float(crusher_fresh_feed),2),'freshFeedMt':round(float(crusher_fresh_feed),2),'feedTrips':len(crusher_feed_rows)+manual_crusher_feed_trips,
+        'manualFactorTrips':manual_crusher_feed_trips,
+        'recycleMt':0.0,'blendFeedMt':round(float(crusher_blend_feed),2),
+        'stockFeedMt':round(float(crusher_stock_feed),2),
+        'blendTrips':len(crusher_blend_rows),
         'grossThroughputMt':round(float(crusher_feed),2),
         'directFinalMt':round(float(crusher_fresh_final),2),'outputMt':round(float(crusher_fresh_final),2),
         'grossOutputMt':round(float(crusher_final),2),'blendOutputMt':round(float(crusher_blend_output),2),
@@ -1155,6 +1215,19 @@ def dashboard_desk(db, user, p):
             day_store[code]=day_store.get(code,Decimal('0'))+q
             if code not in seen_month:
                 month_process_trips[code]=month_process_trips.get(code,0)+1;seen_month.add(code)
+    month_manual_stock_trips=0
+    for item in manual_process_history:
+        if not (month_start<=item['date']<=end_day):
+            continue
+        day_store=month_day_facts.setdefault(str(item['date']),{})
+        for code in set(item['codes']):
+            qty=item['qty']
+            month_process_facts[code]=month_process_facts.get(code,Decimal('0'))+qty
+            month_process_trips[code]=month_process_trips.get(code,0)+1
+            day_store[code]=day_store.get(code,Decimal('0'))+qty
+        if 'PRODUCT_REHANDLED' in item['codes'] or 'ROM_REHANDLED' in item['codes']:
+            month_old_stock_excluded+=item['qty']
+            month_manual_stock_trips+=1
     for key,facts in month_day_facts.items():
         screen_day=facts.get('SCREEN_FINES',Decimal('0'))+facts.get('SCREEN_5_18',Decimal('0'))
         crusher_gross_day=facts.get('CRUSHER_FINES',Decimal('0'))+facts.get('CRUSHER_5_18',Decimal('0'))
@@ -1296,8 +1369,16 @@ def dashboard_desk(db, user, p):
         for code,qty in tiom_wb_report_contributions(w):
             q=Decimal(qty or 0)
             facts=r['processFacts'];facts[code]=facts.get(code,Decimal('0'))+q
-            if code == 'ROM':
+            if code in {'ROM','ROM_LUMPS'}:
                 r['romInput']+=float(q)
+    for item in manual_process_history:
+        day_row=seven.get(str(item['date']))
+        if day_row:
+            for code in set(item['codes']):
+                facts=day_row['processFacts']
+                facts[code]=facts.get(code,Decimal('0'))+item['qty']
+                if code in {'ROM','ROM_LUMPS'}:
+                    day_row['romInput']+=float(item['qty'])
     for r in seven.values():
         facts=r['processFacts']
         screen_day=facts.get('SCREEN_FINES',Decimal('0'))+facts.get('SCREEN_5_18',Decimal('0'))
@@ -1351,6 +1432,12 @@ def dashboard_desk(db, user, p):
         'finalRecoveryPct':None if allocation_pending else prod_pct(final_production),
         'provisionalOutputMt':round(float(final_production),2) if allocation_pending else None,
         'crusherFeedMt':round(float(crusher_feed),2),'crusherFeedPct':prod_pct(crusher_feed),
+        'crusherFeedManualFactorMt':round(float(manual_crusher_feed),2),
+        'crusherFeedManualFactorTrips':manual_crusher_feed_trips,
+        'crusherStockFeedMt':round(float(crusher_stock_feed),2),
+        'romDirectCrusherMt':round(float(production_facts.get('ROM_FEED_TO_CRUSHER',0)),2),
+        'romStockCrusherMt':round(float(production_facts.get('ROM_STOCK_TO_CRUSHER',0)),2),
+        'crusherFeedBasis':'WB_AND_MIS_FACTOR' if manual_crusher_feed>0 else 'WB',
         'crusherFreshFeedMt':round(float(crusher_fresh_feed),2),'crusherFreshFeedPct':prod_pct(crusher_fresh_feed),
         'crusherBlendFeedMt':round(float(crusher_blend_feed),2),'crusherBlendFeedPct':prod_pct(crusher_blend_feed),
         'crusherRecoveryPct':round(crusher_recovery,2) if crusher_recovery is not None else None,
@@ -1469,7 +1556,8 @@ def dashboard_desk(db, user, p):
         mat_rows.append({'label':row['label'],'trips':row['trips'],'tonnes':round(row['tonnes'],2),'monthTonnes':round(row.get('monthTonnes',0),2),
                          'avgPayload':round(row['tonnes']/row['trips'],2) if row['trips'] else 0,
                          'pct':round(row['tonnes']/wb_tonnes*100,1) if wb_tonnes else 0})
-    month_rom_input=month_process_facts.get('ROM',Decimal('0'))
+    month_rom_input=(month_process_facts.get('ROM',Decimal('0'))+
+                     month_process_facts.get('ROM_LUMPS',Decimal('0')))
     if month_rom_input<=0:
         month_rom_input=month_process_facts.get('MSP_FEED',Decimal('0'))
     month_screen_direct=month_process_facts.get('SCREEN_FINES',Decimal('0'))+month_process_facts.get('SCREEN_5_18',Decimal('0'))
@@ -1484,10 +1572,12 @@ def dashboard_desk(db, user, p):
     month_old_stock_blend_10_40=month_process_facts.get('OLD_STOCK_BLEND_10_40',Decimal('0'))
     other_old_stock_excluded=max(Decimal('0'),old_stock_excluded-old_stock_blend_10_40)
     month_other_old_stock_excluded=max(Decimal('0'),month_old_stock_excluded-month_old_stock_blend_10_40)
-    period_rom_trips=production_fact_trips.get('ROM',0)
+    period_rom_trips=(production_fact_trips.get('ROM',0)+
+                      production_fact_trips.get('ROM_LUMPS',0))
     if not period_rom_trips and rom_basis=='MSP_FEED_FALLBACK':
         period_rom_trips=production_fact_trips.get('MSP_FEED',0)
-    month_rom_trips=month_process_trips.get('ROM',0)
+    month_rom_trips=(month_process_trips.get('ROM',0)+
+                     month_process_trips.get('ROM_LUMPS',0))
     if not month_rom_trips and month_rom_input>0:
         month_rom_trips=month_process_trips.get('MSP_FEED',0)
 
@@ -1523,7 +1613,7 @@ def dashboard_desk(db, user, p):
             month_process_trips.get('SCREEN_FINES',0)+month_process_trips.get('SCREEN_5_18',0)+month_process_trips.get('CRUSHER_FINES',0)+month_process_trips.get('CRUSHER_5_18',0),
             prod_pct(final_production),'TOTAL'),
         _prod_material_row('Other RH / Old Stock Movement (Excluded)',other_old_stock_excluded,max(0,old_stock_trips-production_fact_trips.get('OLD_STOCK_BLEND_10_40',0)),
-            month_other_old_stock_excluded,max(0,len(month_excluded_keys)-month_process_trips.get('OLD_STOCK_BLEND_10_40',0)),
+            month_other_old_stock_excluded,max(0,len(month_excluded_keys)+month_manual_stock_trips-month_process_trips.get('OLD_STOCK_BLEND_10_40',0)),
             prod_pct(other_old_stock_excluded),'EXCLUDED')
     ]
     if allocation_pending:
@@ -1921,7 +2011,7 @@ def dashboard_desk(db, user, p):
         'breakdowns':{'rows':breakdown_rows[:200],
                       'totalEvents':len(breakdown_rows),'activeEvents':active_breakdowns,
                       'periodDowntimeHours':round(breakdown_hours,2)},
-        'production':production_summary,'drilling':drilling,
+        'production':production_summary,'materialBalance':material_balance,'drilling':drilling,
         'crusher':crusher_out[:30],'screens':screen_out[:30],'loaders':loader_rows[:20],'excavators':excavator_rows[:20],
         'vehicles':vehicle_rows[:30],'fuelByEquipment':fuel_rows[:30],'shiftComparison':shift_comp_rows,'sevenDay':seven_rows,'monthTrend':month_rows,'monthly':monthly,
         'equipmentStatus':[{'label':k,'value':v} for k,v in status_counts.items()],
@@ -4788,7 +4878,13 @@ def get_tiom_wb_suggestions(db,user,p):
     if report_id:
         own_row_ids=set(db.scalars(select(TiomMisTripRow.row_id).where(TiomMisTripRow.report_id==report_id)))
     batch,wb_rows=tiom_authoritative_wb(db,day,sh)
-    if not batch: return {'rows':[],'batch':None,'message':'No confirmed WB batch for this date / shift.'}
+    if not batch:
+        # A temporarily late Gmail/confirmation cycle is not evidence that a
+        # driver's saved WB rows are invalid. Never make the UI delete them.
+        return {'rows':[],'linkedRows':[],'batch':None,
+                'state':'AWAITING_WB_CONFIRMATION',
+                'diagnostics':{'available':0,'alreadyLinked':0,'otherVehicle':0},
+                'message':'No confirmed WB batch for this date / shift yet. Check WB import/confirmation; existing MIS entries are retained.'}
     reconciliations=list(db.scalars(select(TiomMisReconciliation).where(TiomMisReconciliation.wb_movement_key.is_not(None))))
     linked={r.wb_movement_key:r for r in reconciliations if r.wb_movement_key}
     deployments=list(db.scalars(select(TiomSourceDeployment).where(
@@ -5161,14 +5257,26 @@ TIOM_SHIFT_REPORT_LINES = [
     ('EXCAVATION','WASTE','WASTE',False),
     ('EXCAVATION','ROM_STOCK_YARD','ROM STOCK YARD',False),
     ('EXCAVATION','ROM_STOCK_TO_PLANT_FEED','ROM STOCK TO PLANT FEED',False),
+    ('EXCAVATION','ROM_REHANDLED','ROM STOCK / REHANDLED (not fresh ROM)',False),
+    ('EXCAVATION','PRODUCT_REHANDLED','Other physical rehandling (not new production)',False),
     ('EXCAVATION','SPILLAGE','Spillage',False),
-    ('PRODUCTION (PROCESSED ORE)','TOTAL_PRODUCTION','Total Production',True),
+    ('PRODUCTION (PROCESSED ORE)','TOTAL_PRODUCTION','Gross Screen + Crusher Outputs (before fresh allocation)',True),
+    ('PRODUCTION (PROCESSED ORE)','MSP_FEED','Physical feed to MSP (fresh + stock)',False),
     ('PRODUCTION (PROCESSED ORE)','SCREEN_FINES','Screen Fines',False),
     ('PRODUCTION (PROCESSED ORE)','SCREEN_5_18','Screen 5-18MM',False),
     ('PRODUCTION (PROCESSED ORE)','LUMPS_FROM_SCREEN','Lumps from Screen',False),
+    ('PRODUCTION (PROCESSED ORE)','SPILLAGE_RECYCLE_MSP','Internal Spillage Re-screening',False),
+    ('PRODUCTION (PROCESSED ORE)','SPILLAGE_FROM_STOCK','Spillage from Stock to MSP',False),
     ('PRODUCTION (PROCESSED ORE)','LUMPS_SHIFTED_TO_STOCK','Lumps Shifted to Stock',True),
     ('CRUSHER PRODUCTION','LUMPS_TO_CRUSHER_FROM_STOCK','Lumps shifted to Crusher from Stock',False),
     ('CRUSHER PRODUCTION','LUMPS_FEED_TO_CRUSHER','Lumps feed to Crusher',False),
+    ('CRUSHER PRODUCTION','SPILLAGE_TO_CRUSHER','Spillage feed to Crusher',False),
+    ('CRUSHER PRODUCTION','ROM_FEED_TO_CRUSHER','ROM / mine-face feed to Crusher',False),
+    ('CRUSHER PRODUCTION','ROM_STOCK_TO_CRUSHER','ROM stock feed to Crusher',False),
+    ('CRUSHER PRODUCTION','CRUSHER_FEED','Total physical Crusher feed',False),
+    ('CRUSHER PRODUCTION','CRUSHER_STOCK_FEED','Stock-sourced Crusher feed (component)',False),
+    ('CRUSHER PRODUCTION','CRUSHER_BLEND_FEED','Company old-stock Crusher blend feed',False),
+    ('CRUSHER PRODUCTION','OLD_STOCK_BLEND_10_40','CLO 10-40 company stock blend',False),
     ('CRUSHER PRODUCTION','CRUSHER_FINES','Crusher Fines',False),
     ('CRUSHER PRODUCTION','CRUSHER_5_18','Crusher 5-18mm',False),
     ('RE-SCREENING OUT PUT SHIFTING','FIVE_40_FEED_TO_PLANT','5-40mm feed to Plant',True),
@@ -5179,6 +5287,7 @@ TIOM_SHIFT_REPORT_LINES = [
     ('STACKING','SC_5_18_SHIFTED','SC 5-18 mm',False),
     ('RE-HANDLING','UNSCREENED_5_18','UNSCREENED 5-18(58-60)',False),
     ('RE-HANDLING','PROJECT_AREA_FINES_TO_STACK','Project Area Fines to Stack',False),
+    ('RE-HANDLING','SPILLAGE_WIP','Spillage held for later processing',False),
     ('RE-HANDLING','SHIFT_5_40_TANKURA','5-40mm shifted (TANKURA)',False),
 ]
 
@@ -5191,6 +5300,9 @@ TIOM_SHIFT_MOVEMENTS = [
     ('LUMPS_FROM_SCREEN','Lumps from Screen','ROM_LUMPS'),
     ('LUMPS_TO_CRUSHER_FROM_STOCK','Lumps shifted to Crusher from Stock','ROM_LUMPS'),
     ('LUMPS_FEED_TO_CRUSHER','Lumps feed to Crusher',None),
+    ('ROM_FEED_TO_CRUSHER','ROM / Mine Face to Crusher',None),
+    ('ROM_STOCK_TO_CRUSHER','ROM Stock to Crusher',None),
+    ('CRUSHER_FEED','Crusher feed (all sources)',None),
     ('CRUSHER_FINES','Crusher Fines',None),
     ('CRUSHER_5_18','Crusher 5-18 mm',None),
     ('RE_SCREEN_FINES','Re Screen Fines',None),
@@ -5211,7 +5323,10 @@ def _tiom_shift_report_derive(values):
     out['TOTAL_EXCAVATION']=sum(out.get(k,Decimal('0')) for k in ['ROM','ROM_LUMPS','SUBGRADE_DUMP','SUBGRADE_FEED_PLANT','WASTE'])
     # Final saleable/stack production only. Screen lumps are intermediate crusher feed.
     out['TOTAL_PRODUCTION']=sum(out.get(k,Decimal('0')) for k in ['SCREEN_FINES','SCREEN_5_18','CRUSHER_FINES','CRUSHER_5_18'])
-    out['LUMPS_SHIFTED_TO_STOCK']=max(Decimal('0'),out.get('LUMPS_FROM_SCREEN',Decimal('0'))-out.get('LUMPS_FEED_TO_CRUSHER',Decimal('0')))
+    # Lumps to stock is a real source→destination movement, NOT the
+    # residual of screen output minus crusher feed. Residual material may be
+    # WIP, another route or simply missing entry.
+    out['LUMPS_SHIFTED_TO_STOCK']=out.get('LUMPS_SHIFTED_TO_STOCK',Decimal('0'))
     out['FIVE_40_FEED_TO_PLANT']=out.get('RE_SCREEN_FINES',Decimal('0'))+out.get('RE_SCREEN_5_18',Decimal('0'))
     return out
 
@@ -5278,10 +5393,16 @@ def _tiom_shift_ftd_bundle(db, day, sh, include_draft=False):
             if recs.get(r.row_id) and recs[r.row_id].wb_movement_key: continue
             d=details.get(r.row_id)
             if not d: continue
-            code=_tiom_classify_mis_line(pmap.get(d.material_id),lmap.get(d.source_location_id),lmap.get(d.destination_location_id))
-            if code=='WASTE' and wb_has_waste:
-                continue
-            if code: add(code,Decimal(d.calculated_qty_mt or 0),'MIS')
+            product=pmap.get(d.material_id)
+            source=lmap.get(d.source_location_id)
+            destination=lmap.get(d.destination_location_id)
+            codes=manual_process_codes(product,source,destination)
+            if not codes:
+                codes=(_tiom_classify_mis_line(product,source,destination),)
+            for code in codes:
+                if code=='WASTE' and wb_has_waste:
+                    continue
+                if code: add(code,Decimal(d.calculated_qty_mt or 0),'MIS')
 
     # 3) Manual Plant Output / Exception entry is only a fallback. If WB or MIS already
     # supplies the same line, ignore the old/manual duplicate and surface a warning.
@@ -5295,10 +5416,12 @@ def _tiom_shift_ftd_bundle(db, day, sh, include_draft=False):
             add(m.movement_code,q,'MANUAL')
 
     vals=_tiom_shift_report_derive(vals)
+    mass_balance=calculate_tiom_mass_balance(sources)
     for code in ['TOTAL_EXCAVATION','TOTAL_PRODUCTION','LUMPS_SHIFTED_TO_STOCK','FIVE_40_FEED_TO_PLANT']:
         if vals.get(code,Decimal('0')):
             sources[code]={'CALC':vals[code]}
-    return {'values':vals,'sources':sources,'warnings':warnings,'wbBatchId':batch.batch_id if batch else None,'wbRows':len(wb_rows)}
+    return {'values':vals,'sources':sources,'massBalance':mass_balance,
+            'warnings':warnings,'wbBatchId':batch.batch_id if batch else None,'wbRows':len(wb_rows)}
 
 
 def _tiom_shift_ftd(db, day, sh, include_draft=False):
@@ -5341,7 +5464,8 @@ def _tiom_shift_report_data(db, day, sh, include_draft=True):
     report=db.scalar(select(TiomShiftProductionReport).where(TiomShiftProductionReport.operating_date==day,TiomShiftProductionReport.shift==sh))
     return {'date':str(day),'shift':sh,'status':report.status if report else 'NEW','reportId':report.report_id if report else '',
             'remarks':report.remarks or '' if report else '','baselineDate':str(base_date),'lines':lines,
-            'warnings':bundle['warnings'],'wbBatchId':bundle['wbBatchId'],'wbRows':bundle['wbRows']}
+            'warnings':bundle['warnings'],'massBalance':bundle['massBalance'],
+            'wbBatchId':bundle['wbBatchId'],'wbRows':bundle['wbRows']}
 
 def _tiom_shift_range_report(db, from_day, to_day, report_shift='ALL'):
     if to_day < from_day:
@@ -6230,14 +6354,20 @@ def _tiom_dpr_data(db, from_day, to_day, shifts, requested):
                             if match:pname='MSP-'+match.group(1)
                         if pname:
                             prodplant[pname]=prodplant.get(pname,0)+float(quantity)
+            wb_has_waste=any(x[0]=='WASTE' for w in wb_rows
+                             for x in tiom_wb_report_contributions(w))
             for row,detail in manual_rows.get((day,sh),[]):
-                if not detail:continue
-                code=_tiom_classify_mis_line(pmap.get(detail.material_id),
-                    lmap.get(detail.source_location_id),
-                    lmap.get(detail.destination_location_id))
-                if code in active_codes and not (code=='WASTE' and any(
-                    x[0]=='WASTE' for w in wb_rows for x in tiom_wb_report_contributions(w))):
-                    counts[code]=counts.get(code,0)+1
+                if not detail or Decimal(detail.calculated_qty_mt or 0)<=0:
+                    continue
+                product=pmap.get(detail.material_id)
+                src=lmap.get(detail.source_location_id)
+                dst=lmap.get(detail.destination_location_id)
+                codes=manual_process_codes(product,src,dst)
+                if not codes:
+                    codes=(_tiom_classify_mis_line(product,src,dst),)
+                for code in set(codes):
+                    if code in active_codes and not (code=='WASTE' and wb_has_waste):
+                        counts[code]=counts.get(code,0)+1
             pstatus=shift_reports.get((day,sh))
             evidence=bool(wb_rows or manual_rows.get((day,sh)) or (
                 pstatus and pstatus.status=='SUBMITTED'))
@@ -6265,6 +6395,7 @@ def _tiom_dpr_data(db, from_day, to_day, shifts, requested):
                 'drillMetres':sum(x['meterage'] for x in dr) if dr else None,
                 'drillHours':sum(x['drillHours'] for x in dr if x['drillHours'] is not None) if dr else None,
                 'plantHours':meters_by.get((day,sh),{}),'plantProduction':prodplant,
+                'materialBalance':bundle.get('massBalance') or {},
                 'warnings':bundle.get('warnings') or [],'quality':warnings})
         day+=timedelta(days=1)
     dates=[]

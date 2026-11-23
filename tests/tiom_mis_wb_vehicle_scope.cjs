@@ -20,7 +20,7 @@ function setup({vehicle='DT-10',rows=[],misReportId='',date='2026-11-22',shift='
     renderMisRows:r=>{renders++;currentRows=r.map(x=>({...x}));},
     tripSourceChanged:()=>{},
     // Linked preview is tested end-to-end in tiom_mis_linked_wb_preview.cjs.
-    renderMisLinkedWb:()=>{},
+    renderMisLinkedWb:()=>{},renderMisAvailableWb:()=>{},
     draftSave:()=>{saves++;},
   };
   vm.runInNewContext(loader,ctx,{timeout:1000});
@@ -72,6 +72,16 @@ four.run(false);
 four.req[0].ok({rows:[],message:'0 available'});
 assert.equal(four.rows.filter(x=>x.wbMovementKey).length,0);
 assert.equal(four.saves,1);
+
+// Missing confirmed WB is a sync state, not a reason to delete previously
+// entered WB references from the current browser form.
+const pending=setup({rows:[wb('PREVIOUSLY-CONFIRMED'),manual]});
+pending.run(true);
+pending.req[0].ok({rows:[],linkedRows:[],batch:null,
+  state:'AWAITING_WB_CONFIRMATION',message:'WB confirmation pending'});
+assert.equal(pending.rows.filter(x=>x.wbMovementKey).length,1);
+assert.equal(pending.saves,0);
+assert.match(pending.state.textContent,/not been cleared/);
 
 // Vehicle switch immediately removes old truck's WB badges (manual entries
 // are retained), without waiting for the network.

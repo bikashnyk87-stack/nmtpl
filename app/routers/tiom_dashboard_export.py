@@ -307,6 +307,51 @@ def make_workbook(d):
           x.get("grossThroughputMt", x.get("feedMt")), x.get("outputMt") if x.get("outputMt") is not None else "Allocation pending",
           x.get("transferToCrusherMt"), x.get("varianceMt"), x.get("recoveryPct"), x.get("runningHours"), x.get("tph")] for x in plants],
         [25,17,17,17,22,23,23,18,15,18,15])
+    balance = d.get("materialBalance") or {}
+    groups = (
+        ("MSP", "MSP / Screening", (("External feed","externalFeedMt"),
+          ("Internal recycle / re-screen","internalRecycleMt"),
+          ("Lumps recorded","recordedLumpsMt"),
+          ("Calculated lumps (indicative)","candidateLumpsMt"),
+          ("Unexplained difference","observedDifferenceMt"))),
+        ("crusher", "Crusher", (("All physical feed","totalFeedMt"),
+          ("Recorded crusher output","recordedOutputMt"),
+          ("Unexplained difference","observedDifferenceMt"))),
+        ("stock", "Stock movements", (("Recorded receipts","observedReceiptsMt"),
+          ("Recorded withdrawals","observedIssuesMt"))),
+    )
+    balance_rows=[]
+    for key,label,metrics in groups:
+        part=balance.get(key.lower()) or {}
+        for display,field in metrics:
+            balance_rows.append([label,display,part.get(field),part.get("status"),
+                 "; ".join(part.get("missing") or []),
+                 "Provisional only. Never book difference as WIP, loss or stock."])
+    if isinstance((balance.get("crusher") or {}).get("sourceBreakdown"),dict):
+        origin=(balance["crusher"]["sourceBreakdown"])
+        for key,label in (
+            ("fromMspLumpsMt","MSP screened lumps → Crusher"),
+            ("fromFaceRomMt","Mine-face ROM → Crusher"),
+            ("fromRomStockMt","ROM stock → Crusher"),
+            ("fromLumpsStockMt","Lumps stock → Crusher"),
+            ("fromSpillageMt","Spillage → Crusher"),
+            ("companyBlendMt","Company blend → Crusher"),
+        ):
+            balance_rows.append(["Crusher feed origin",label,origin.get(key),"PROVISIONAL",
+                "Refer to confirmed WB or estimated MIS factor",
+                "Part of total crusher feed; do not add again to total"])
+    detail_sheet(wb, "Mass Balance", "MSP / CRUSHER / STOCK • OBSERVED INPUT-OUTPUT BALANCE", d,
+        ["Area","Metric","MT","Status","Missing movement / stock source","Interpretation"],
+        balance_rows,[27,44,20,29,61,68])
+    detail_sheet(wb, "Material Flow", "TRACEABLE STAGE MOVEMENTS • NOT ADDITIVE PRODUCTION", d,
+        ["Movement stage","Code","WB measured MT","MIS/factor estimated MT",
+         "Stage quantity MT","Source provenance","Interpretation"],
+        [[x.get("label"),x.get("code"),x.get("measuredMt"),
+          x.get("estimatedMt"),x.get("qtyMt"),
+          ", ".join(sorted((x.get("sources") or {}).keys())),
+          "One movement can contribute to input and output stage facts"]
+         for x in (balance.get("routes") or []) if x.get("recorded")],
+        [42,39,22,25,21,33,62])
     detail_sheet(wb, "Shift Comparison", "SHIFT A / B / C PERFORMANCE", d,
         ["Shift", "WB movements", "Movement tonnes", "HSD issued L", "Average payload t"],
         [row(x,["shift","trips","tonnes","fuel","avgPayload"]) for x in arr("shiftComparison")],

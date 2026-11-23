@@ -42,6 +42,40 @@ class TiomProductionClassificationTests(unittest.TestCase):
         self.assertIn("CRUSHER_FEED", codes)
         self.assertNotIn("OLD_STOCK_BLEND_10_40", codes)
 
+    def test_rom_face_to_crusher_is_fresh_rom_and_feed(self):
+        codes = contribution_codes(wb("ROM Thakurani", "BGA/RL-790", "Crusher", "45"))
+        self.assertIn("ROM", codes)
+        self.assertIn("ROM_FEED_TO_CRUSHER", codes)
+        self.assertIn("CRUSHER_FEED", codes)
+        self.assertNotIn("MSP_FEED", codes)
+        self.assertNotIn("ROM_REHANDLED", codes)
+
+    def test_rom_stock_to_crusher_is_rehandling_not_fresh_rom(self):
+        codes = contribution_codes(wb("ROM Thakurani", "ROM STOCK", "Crusher", "45"))
+        self.assertIn("ROM_REHANDLED", codes)
+        self.assertIn("ROM_STOCK_TO_CRUSHER", codes)
+        self.assertIn("CRUSHER_STOCK_FEED", codes)
+        self.assertIn("CRUSHER_FEED", codes)
+        self.assertNotIn("ROM", codes)
+
+    def test_face_named_lumps_are_not_screened_output(self):
+        codes = contribution_codes(wb("LUMPS", "PIT2/RL-750", "Crusher", "45"))
+        self.assertIn("ROM_LUMPS", codes)
+        self.assertIn("ROM_FEED_TO_CRUSHER", codes)
+        self.assertNotIn("LUMPS_FROM_SCREEN", codes)
+
+    def test_stock_lumps_without_crusher_do_not_create_screen_output(self):
+        codes = contribution_codes(wb("LUMPS", "STOCK S4", "STOCK S5", "45"))
+        self.assertIn("PRODUCT_REHANDLED", codes)
+        self.assertNotIn("LUMPS_FROM_SCREEN", codes)
+        self.assertNotIn("CRUSHER_FEED", codes)
+
+    def test_stock_spillage_to_msp_is_external_feed_not_internal_recycle(self):
+        codes = contribution_codes(wb("Spillage", "Spillage stock", "MSP-3", "45"))
+        self.assertIn("SPILLAGE_FROM_STOCK", codes)
+        self.assertIn("MSP_FEED", codes)
+        self.assertNotIn("SPILLAGE_RECYCLE_MSP", codes)
+
     def test_spillage_to_same_msp_is_recycle(self):
         codes = contribution_codes(wb("SPILLAGE", "MSP-4", "MSP-4", "25"))
         self.assertIn("SPILLAGE_RECYCLE_MSP", codes)

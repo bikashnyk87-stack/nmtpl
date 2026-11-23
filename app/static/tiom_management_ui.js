@@ -81,12 +81,14 @@
       Number(k.wbUnmatched||0)?attention('WB movements not linked to MIS','WB tonnes remain included; attribution needs review',k.wbUnmatched,'warn'):''
     ].filter(Boolean);
     const period=E(d.fromDate)+(d.toDate!==d.fromDate?' – '+E(d.toDate):'');
-    const drill=metric('ROM/OB HOLES',fmt(dr.romObHoles,0),'Separated hole entry')+
-      metric('BHJ/BHQ HOLES',fmt(dr.bhjBhqHoles,0),'Separated hole entry')+
-      metric('ROM/OB METERS',fmt(dr.romObMeterage,1,' m'),'Drill meterage')+
-      metric('BHJ/BHQ METERS',fmt(dr.bhjBhqMeterage,1,' m'),'Drill meterage')+
-      metric('UNCLASSIFIED HOLES',fmt(dr.unclassifiedHoles,0),'Historical combined counts')+
-      metric('DRILL RATE',fmt(k.drillMeterPerHour,1,' m/h'),'Valid HMR only');
+    const drillingRecorded=arr(d.drilling?.rows).length>0;
+    const showDrill=(value,precision,unit='')=>drillingRecorded?fmt(value,precision,unit):'Not entered';
+    const drill=metric('ROM/OB HOLES',showDrill(dr.romObHoles,0),'Separated hole entry')+
+      metric('BHJ/BHQ HOLES',showDrill(dr.bhjBhqHoles,0),'Separated hole entry')+
+      metric('ROM/OB METERS',showDrill(dr.romObMeterage,1,' m'),'Drill meterage')+
+      metric('BHJ/BHQ METERS',showDrill(dr.bhjBhqMeterage,1,' m'),'Drill meterage')+
+      metric('UNCLASSIFIED HOLES',showDrill(dr.unclassifiedHoles,0),'Historical combined counts')+
+      metric('DRILL RATE',showDrill(k.drillMeterPerHour,1,' m/h'),'Valid HMR only');
     const footer='<div class="mc-checks">'+status(Number(k.wbTrips)>0,'Confirmed WB: '+fmt(k.wbTrips,0)+' movements')+
       status(Number(k.misDrafts||0)===0,'MIS drafts: '+fmt(k.misDrafts,0))+
       status(Number(k.haulLeadMissingTrips||0)===0,'Lead unresolved: '+fmt(k.haulLeadMissingTrips,0))+'</div>';
@@ -103,6 +105,51 @@
       box('Plant performance',plantTable(d,true),'Gross plant movement and run-hour evidence')+
       box('Drilling & entry completeness','<div class="mc-three">'+drill+'</div>'+footer,'Blank/missing meter readings are not zero')+
       '</div><p class="mc-caveat">Owner Overview summarizes the live TIOM records. Quantities shown as pending are not treated as confirmed. Source-based entries are not counted twice.</p>');
+  }
+  function massBalancePanel(d) {
+    const b=d.materialBalance||{},m=b.msp||{},c=b.crusher||{},stock=b.stock||{};
+    if(!b.routes)return '<p class="mc-empty">Material balance not available from the selected report.</p>';
+    const measured=arr(b.routes).filter(r=>r.recorded);
+    const top='<div class="mc-recon-kpis">'+
+      metric('MSP external feed',fmt(m.externalFeedMt,2,' t'),'Fresh ROM + approved stock feed','teal')+
+      metric('MSP recycle throughput',fmt(m.internalRecycleMt,2,' t'),'Internal pass, not additional fresh ore','blue')+
+      metric('Lumps recorded',fmt(m.recordedLumpsMt,2,' t'),'WB or declared MIS-factor route','blue')+
+      metric('Calculated lumps (indicative)',fmt(m.candidateLumpsMt,2,' t'),'Input minus recorded fines/CLO; not approved output','amber')+
+      metric('Crusher physical feed',fmt(c.totalFeedMt,2,' t'),'All origins, counted once','teal')+
+      metric('Crusher output',fmt(c.recordedOutputMt,2,' t'),'Recorded products, not fresh allocation','blue')+
+      metric('MSP unexplained difference',fmt(m.observedDifferenceMt,2,' t'),'Input minus recorded outputs; not assumed loss','amber')+
+      metric('Crusher unexplained difference',fmt(c.observedDifferenceMt,2,' t'),'Feed minus recorded output; not assumed loss','amber')+
+      metric('Stock verified balance',fmt(stock.verifiedVarianceMt,2,' t'),stock.status==='CALCULATED'?'Source ledger supplied':'Opening and closing stock pending','amber')+
+      '</div>';
+    const rows=measured.map(r=>[
+      '<b>'+E(r.label||r.code)+'</b>',
+      fmt(r.measuredMt,2),
+      fmt(r.estimatedMt,2),
+      fmt(r.qtyMt,2)
+    ]);
+    const flags='<div class="mc-flow-alert">'+
+      '<b>Provisional movement reconciliation</b> · no WIP measurement or entry required'+
+      ' · MSP movements missing: '+E(arr(m.missing).join(', ')||'none')+
+      ' · Crusher movements missing: '+E(arr(c.missing).join(', ')||'none')+
+      ' · Stock balance: '+E(stock.status==='CALCULATED'?'recorded':'not independently measured')+
+      '</div>';
+    const flows=c.sourceBreakdown||{};
+    const crusherSources=[
+      ['MSP screened lumps → Crusher',flows.fromMspLumpsMt],
+      ['Mine-face ROM / raw lumps → Crusher',flows.fromFaceRomMt],
+      ['ROM stock → Crusher',flows.fromRomStockMt],
+      ['Lumps stock → Crusher',flows.fromLumpsStockMt],
+      ['Spillage → Crusher',flows.fromSpillageMt],
+      ['Company old-stock blend → Crusher',flows.companyBlendMt],
+      ['Unattributed / mapping difference',c.sourceUnclassifiedMt]
+    ];
+    const knownSources=crusherSources.filter(x=>x[1]!=null);
+    const sourcePanel=knownSources.length?
+      '<b>Crusher feed by origin (not additional tonnes)</b>'+
+      tbl(['Physical source','Included in crusher feed (MT)'],
+          knownSources.map(x=>[E(x[0]),fmt(x[1],2)])):'';
+    return top+flags+sourcePanel+tbl(['Recorded movement / stage','WB t','Manual / factor t','Stage t'],rows)+
+      '<p class="mc-caveat">Stage quantities overlap physically: do not sum this table as total production. Recycled spillage is a second processing pass. Manual-factor quantities are estimates. Any unexplained difference is for MIS reconciliation only, not WIP, stock, loss, recovery or approved fresh output.</p>';
   }
   window.tiomEquipMode=function(mode){S.tiomEquipMode=mode; if(S.tiomOwnerData)ownerView(S.tiomOwnerData);};
   function setupOwner() {
@@ -190,6 +237,7 @@
       '<b>'+E(x.shift)+'</b>',fmt(x.trips,0),fmt(x.tonnes,1),fmt(x.fuel,1)]));
     return '<div class="mc-dashboard-presentation">'+sourceNotice+'<div class="mc-dash-metrics">'+metrics+'</div>'+
       box('Production flow & allocation',flow,'Fresh output is shown only where allocation evidence is complete')+
+      box('Material flow & mass balance',massBalancePanel(d),'MSP, Crusher and Stock · WB measured versus MIS estimated')+
       '<div class="mc-dash-main">'+box('Plant feed vs output',plantTable(d,false),'Plant-level physical movement and actual HMR')+
       box('Movement reconciliation',recon,'Confirmed WB is authoritative for weighed movements')+
       box('Equipment & vehicle performance',equip,'Submitted MIS equipment attribution; further drilldowns below')+

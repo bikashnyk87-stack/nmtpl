@@ -18,5 +18,7 @@
   "max_review_percent": 0,
   "weight_tolerance_kg": 5,
   "max_file_mb": 15,
-  "start_after_utc": "2026-09-22T12:13:09Z"
+  "start_after_utc": "2026-09-22T12:13:09Z",
+  "skipped_label": "NMTPL_WB_SKIPPED",
+  "max_pages_per_poll": 10
 }

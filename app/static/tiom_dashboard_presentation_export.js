@@ -99,6 +99,48 @@
           escapeText(x[1] == null ? 'Pending' : amount(x[1], 1, ' t')) + '</b></div>';
       }).join('') + '</div>' +
       (allocationPending ? '<p class="notice">Fresh crusher-output allocation is pending supporting feed / blend evidence. Final fresh production is not estimated.</p>' : ''));
+    var mb=d.materialBalance||{}, ms=mb.msp||{}, cb=mb.crusher||{}, sb=mb.stock||{};
+    var balanceSummary=[
+      ['MSP external feed',ms.externalFeedMt,'Observed feed'],
+      ['MSP recycle (internal pass)',ms.internalRecycleMt,'Not new ROM'],
+      ['Calculated lumps (indicative)',ms.candidateLumpsMt,'Not measured output'],
+      ['Lumps recorded',ms.recordedLumpsMt,'WB / approved trip-factor'],
+      ['MSP unexplained difference',ms.observedDifferenceMt,'No WIP assumption'],
+      ['Crusher physical feed',cb.totalFeedMt,'All sources once'],
+      ['Crusher recorded output',cb.recordedOutputMt,'Gross output'],
+      ['Crusher unexplained difference',cb.observedDifferenceMt,'Not assumed loss'],
+      ['Stock observed receipts',sb.observedReceiptsMt,'Confirmed destination transfers'],
+      ['Stock observed withdrawals',sb.observedIssuesMt,'Confirmed stock-source transfers']
+    ];
+    html+=section('Material flow and mass balance',
+      'Provisional input-output reconciliation • WIP measurement is not available or required',
+      table(['Process / measure','Recorded / indicative MT','Meaning'],
+        balanceSummary.map(function(x){return [x[0],amount(x[1],2,' t'),x[2]];}))+
+      '<p class="notice">Unexplained difference is NOT WIP, waste, stock or approved loss. '+
+      'WB weights are measured; MIS-factor quantities are estimates. Stage totals overlap.</p>');
+    var crusherBreakdown=cb.sourceBreakdown||{};
+    var crusherSources=[
+      ['MSP screened lumps → Crusher',crusherBreakdown.fromMspLumpsMt],
+      ['ROM / lumps from face → Crusher',crusherBreakdown.fromFaceRomMt],
+      ['ROM from stock → Crusher',crusherBreakdown.fromRomStockMt],
+      ['Lumps from stock → Crusher',crusherBreakdown.fromLumpsStockMt],
+      ['Spillage → Crusher',crusherBreakdown.fromSpillageMt],
+      ['Company old-stock blend → Crusher',crusherBreakdown.companyBlendMt],
+      ['Unattributed crusher feed',cb.sourceUnclassifiedMt]
+    ].filter(function(x){return x[1]!=null;});
+    if(crusherSources.length){
+      html+=section('Crusher feed by physical source',
+        'These are components of total crusher feed, not additional production',
+        table(['Origin / route','Included feed MT'],
+          crusherSources.map(function(x){return [x[0],amount(x[1],2,' t')];})));
+    }
+    var stageFacts=rows(mb.routes).filter(function(x){return x.recorded;});
+    if(stageFacts.length){
+      html+=section('Measured vs manual movement evidence','Movement stage totals are not additive as fresh production',
+      table(['Movement stage','WB measured t','MIS/factor estimated t','Stage total t'],
+        stageFacts.map(function(x){return [x.label||x.code,
+          amount(x.measuredMt,2),amount(x.estimatedMt,2),amount(x.qtyMt,2)];})));
+    }
     var prodData = production.map(function (x) {
       return [x.label || '—', amount(x.trips, 0), amount(x.tonnes, 2, ' t'),
         amount(x.monthTonnes, 2, ' t'), x.excluded ? 'EXCLUDED' : amount(x.pct, 1, '%')];
@@ -156,12 +198,17 @@
         card('Equipment utilization', amount(k.equipmentUtilization, 1, '%'), 'Activity-based utilization')
       ].join('') + '</div>', 'kpi-section');
     var b = d.breakdowns || {}, monthly = d.monthly || {};
+    var drillHasData = rows((d.drilling || {}).rows).length>0 ||
+      Number(k.drillHoles||0)>0 || Number(k.drillMeterage||0)>0;
+    var drillValue = function(value, decimals, unit){
+      return drillHasData ? amount(value,decimals,unit) : 'Not entered';
+    };
     html += '<div class="two-col">' +
       section('Drilling performance', 'Drill and compressor HMR where recorded',
         '<div class="small-kpis">' + [
-          card('Drilled holes', amount(k.drillHoles, 0), 'Period total'),
-          card('Drill meterage', amount(k.drillMeterage, 2, ' m'), 'ROM / OB / BHJ / BHQ'),
-          card('Drill metres / hour', amount(k.drillMeterPerHour, 2, ' m/h'), 'HMR-based drilling rate'),
+          card('Drilled holes', drillValue(k.drillHoles, 0), 'Period total'),
+          card('Drill meterage', drillValue(k.drillMeterage, 2, ' m'), 'ROM / OB / BHJ / BHQ'),
+          card('Drill metres / hour', drillValue(k.drillMeterPerHour, 2, ' m/h'), 'HMR-based drilling rate'),
           card('Drill HSD issued', amount(k.drillHsdLitres, 1, ' L'), 'Drill + compressor'),
           card('Drill breakdown', amount(k.drillBreakdownHours, 1, ' h'), 'Recorded breakdown hours'),
           card('Drill HSD / metre', amount(k.drillMeterage > 0 && k.drillHsdLitres != null ? Number(k.drillHsdLitres) / Number(k.drillMeterage) : null, 3, ' L/m'), 'Issued HSD / measured meterage')
