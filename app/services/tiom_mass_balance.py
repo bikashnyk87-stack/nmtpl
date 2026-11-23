@@ -4,8 +4,10 @@ All figures are tonnes and represent a common selected operating period.
 WB movements are measured; MIS factor rows are estimates. A material's
 appearance at more than one stage is expected, so *route facts are not additive*.
 
-Stock, WIP, rejects and losses are UNKNOWN until supported by source entries.
-Never set a balance or freshness allocation to verified using a zero default.
+TIOM has no WIP measurement system. WIP is not a required input, and any
+input/output difference is an *unexplained provisional variance*, never
+automatically assigned to WIP, rejects, loss or stock. Stock closing balance
+also remains unknown without an actual stock source.
 """
 from __future__ import annotations
 
@@ -53,11 +55,12 @@ def _n(value):
 
 
 def calculate_tiom_mass_balance(facts_by_source, inventory=None):
-    """Derive comparable movement facts, optional fully evidenced stock/WIP balances.
+    """Reconcile observed movements without requiring unmeasured WIP.
 
-    `facts_by_source` is {code: {WB: mt, MIS: mt, MANUAL: mt}}. Entries
-    are stage-specific, not unique fresh tonnes across stages.
-    Missing inventory fields are None, NOT 0.
+    `facts_by_source` is {code: {WB: mt, MIS: mt, MANUAL: mt}}.
+    Stage facts overlap across processes. The unallocated difference is
+    informational only and never creates an inventory, scrap or loss entry.
+    Optional *stock* evidence is accepted if independently established.
     """
     source = facts_by_source or {}
     inv = inventory or {}
@@ -117,21 +120,6 @@ def calculate_tiom_mass_balance(facts_by_source, inventory=None):
         + amount("ROM_STOCK_TO_CRUSHER") + amount("LUMPS_TO_CRUSHER_FROM_STOCK")
         + amount("SPILLAGE_TO_CRUSHER") + amount("CRUSHER_BLEND_FEED")
     )
-    msp_open = _decimal(inv.get("mspOpeningWipMt"))
-    msp_close = _decimal(inv.get("mspClosingWipMt"))
-    msp_reject = _decimal(inv.get("mspRejectMt"))
-    msp_loss = _decimal(inv.get("mspLossMt"))
-    crusher_open = _decimal(inv.get("crusherOpeningWipMt"))
-    crusher_close = _decimal(inv.get("crusherClosingWipMt"))
-    crusher_reject = _decimal(inv.get("crusherRejectMt"))
-    crusher_loss = _decimal(inv.get("crusherLossMt"))
-
-    msp_inventory_complete = all(x is not None for x in (
-        msp_open, msp_close, msp_reject, msp_loss
-    ))
-    crusher_inventory_complete = all(x is not None for x in (
-        crusher_open, crusher_close, crusher_reject, crusher_loss
-    ))
     has_msp_feed = recorded("MSP_FEED")
     has_msp_output = any(recorded(code) for code in (
         "SCREEN_FINES", "SCREEN_5_18", "RE_SCREEN_FINES",
@@ -140,8 +128,8 @@ def calculate_tiom_mass_balance(facts_by_source, inventory=None):
     has_crusher_feed = recorded("CRUSHER_FEED")
     has_crusher_output = recorded("CRUSHER_FINES") or recorded("CRUSHER_5_18")
 
-    # This candidate deliberately assumes no unrecorded inventory or reject.
-    # It is *not* an approved estimate of actual lumps production.
+    # Only a residual from known movement data. No WIP, loss or stock
+    # quantity is assumed, and this is not approved lumps production.
     provisional_lumps = msp_feed - msp_final if has_msp_feed and has_msp_output else None
     observed_msp_difference = (
         msp_feed - (msp_final + screened_lumps)
@@ -150,17 +138,6 @@ def calculate_tiom_mass_balance(facts_by_source, inventory=None):
     observed_crusher_difference = (
         crusher_feed - crusher_output if has_crusher_feed and has_crusher_output else None
     )
-    verified_msp = (
-        msp_feed + msp_open - msp_close - msp_reject - msp_loss
-        - msp_final - screened_lumps
-        if msp_inventory_complete and has_msp_feed and has_msp_output else None
-    )
-    verified_crusher = (
-        crusher_feed + crusher_open - crusher_close - crusher_reject
-        - crusher_loss - crusher_output
-        if crusher_inventory_complete and has_crusher_feed and has_crusher_output else None
-    )
-
     stock_open = _decimal(inv.get("stockOpeningMt"))
     stock_close = _decimal(inv.get("stockClosingMt"))
     stock_other_in = _decimal(inv.get("stockOtherReceiptsMt"))
@@ -177,18 +154,13 @@ def calculate_tiom_mass_balance(facts_by_source, inventory=None):
         if stock_complete else None
     )
 
-    missing_msp = [label for key, label in (
-        ("mspOpeningWipMt", "Opening MSP WIP"),
-        ("mspClosingWipMt", "Closing MSP WIP"),
-        ("mspRejectMt", "MSP rejects"),
-        ("mspLossMt", "MSP losses"),
-    ) if _decimal(inv.get(key)) is None]
-    missing_crusher = [label for key, label in (
-        ("crusherOpeningWipMt", "Opening crusher WIP"),
-        ("crusherClosingWipMt", "Closing crusher WIP"),
-        ("crusherRejectMt", "Crusher rejects"),
-        ("crusherLossMt", "Crusher losses"),
-    ) if _decimal(inv.get(key)) is None]
+    # Site has no WIP capture. Only missing movement sources can block the
+    # indicative comparison. Rejects, inter-shift hold-up, sampling/moisture
+    # and scale/factor differences remain possible explanations, not inputs.
+    missing_msp = ([] if has_msp_feed else ["MSP feed movements"]) + (
+        [] if has_msp_output else ["MSP output movements"])
+    missing_crusher = ([] if has_crusher_feed else ["Crusher feed movements"]) + (
+        [] if has_crusher_output else ["Crusher output movements"])
     missing_stock = [label for key, label in (
         ("stockOpeningMt", "Opening stock"),
         ("stockClosingMt", "Closing stock"),
@@ -197,14 +169,16 @@ def calculate_tiom_mass_balance(facts_by_source, inventory=None):
     ) if _decimal(inv.get(key)) is None]
 
     return {
-        "status": "PENDING_SOURCE_INPUT" if any((
-            verified_msp is None, verified_crusher is None, stock_variance is None
-        )) else "AVAILABLE_FOR_RECONCILIATION",
+        "status": ("PROVISIONAL_RECONCILIATION"
+                   if observed_msp_difference is not None
+                   or observed_crusher_difference is not None
+                   else "INSUFFICIENT_MOVEMENT_DATA"),
         "unit": "MT",
-        "method": "MOVEMENT_LEDGER_WITH_WIP_AND_STOCK",
+        "method": "OBSERVED_INPUT_OUTPUT_NO_WIP",
+        "wipCapture": "NOT_AVAILABLE_NOT_REQUIRED",
         "routes": routes,
         "msp": {
-            "status": "PENDING_SOURCE_INPUT" if verified_msp is None else "CALCULATED",
+            "status": "PROVISIONAL" if observed_msp_difference is not None else "AWAITING_MOVEMENTS",
             "externalFeedMt": _n(msp_feed) if has_msp_feed else None,
             "internalRecycleMt": _n(msp_recycle) if recorded("SPILLAGE_RECYCLE_MSP") else None,
             "grossPassThroughMt": _n(msp_feed + msp_recycle) if has_msp_feed else None,
@@ -214,23 +188,21 @@ def calculate_tiom_mass_balance(facts_by_source, inventory=None):
             "recordedLumpsMt": _n(screened_lumps) if recorded("LUMPS_FROM_SCREEN") else None,
             "candidateLumpsMt": _n(provisional_lumps),
             "observedDifferenceMt": _n(observed_msp_difference),
-            "verifiedVarianceMt": _n(verified_msp),
-            "missing": missing_msp + ([] if has_msp_feed else ["MSP feed movements"])
-                                  + ([] if has_msp_output else ["MSP output movements"]),
-            "note": "Candidate lumps and observed difference omit unknown WIP/rejects/losses; recycle is internal, not fresh external feed.",
+            "verifiedVarianceMt": None,
+            "missing": missing_msp,
+            "note": "This is an unexplained input-output difference, not WIP, rejects or loss. No WIP entry is required; recycle is internal, not additional feed.",
         },
         "crusher": {
-            "status": "PENDING_SOURCE_INPUT" if verified_crusher is None else "CALCULATED",
+            "status": "PROVISIONAL" if observed_crusher_difference is not None else "AWAITING_MOVEMENTS",
             "totalFeedMt": _n(crusher_feed) if has_crusher_feed else None,
             "recordedOutputMt": _n(crusher_output) if has_crusher_output else None,
             "sourceBreakdown": crusher_sources,
             "sourceUnclassifiedMt": _n(crusher_feed - known_crusher_sources)
                 if has_crusher_feed else None,
             "observedDifferenceMt": _n(observed_crusher_difference),
-            "verifiedVarianceMt": _n(verified_crusher),
-            "missing": missing_crusher + ([] if has_crusher_feed else ["Crusher feed movements"])
-                                      + ([] if has_crusher_output else ["Crusher output movements"]),
-            "note": "Origin breakdown may not equal total feed until routes are mapped; stock-origin feed is not new mine production.",
+            "verifiedVarianceMt": None,
+            "missing": missing_crusher,
+            "note": "The observed difference is unexplained, not automatically WIP or loss. Origin breakdown may remain incomplete; stock-origin feed is not fresh production.",
         },
         "stock": {
             "status": "PENDING_STOCK_LEDGER" if stock_variance is None else "CALCULATED",
