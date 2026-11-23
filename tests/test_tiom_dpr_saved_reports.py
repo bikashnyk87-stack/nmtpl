@@ -48,7 +48,7 @@ def sample():
 def test_dpr_excel_dates_sections_formulas_and_mtd():
     wb=load_workbook(build_dpr_workbook(sample()))
     assert wb.sheetnames==["Summary","11.10.26","Stack Summary","Stacking",
-                           "Drilling Detail","Source Data","Data Quality"]
+                           "Drilling Detail","Material Flow","Mass Balance","Source Data","Data Quality"]
     ws=wb["11.10.26"]
     assert ws["A5"].value=="ROM"
     assert ws["E5"].value==100.0
