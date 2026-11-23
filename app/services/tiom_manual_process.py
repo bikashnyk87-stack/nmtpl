@@ -50,7 +50,7 @@ def manual_lump_process_codes(product, source, destination):
         # Mine/face origin: primary excavation, not another screen output.
         codes = ["ROM_LUMPS"]
         if to_crusher:
-            codes.append("CRUSHER_FEED")
+            codes += ["ROM_FEED_TO_CRUSHER", "CRUSHER_FEED"]
         elif to_screen:
             codes.append("MSP_FEED")
     return tuple(codes)
@@ -64,7 +64,7 @@ def manual_rom_process_codes(product, source, destination):
     product_text = " ".join(str(getattr(product, f, "") or "")
                             for f in ("product_id", "name")).upper()
     normalized = re.sub(r"[^A-Z0-9]+", " ", product_text).strip()
-    if not re.search(r"\\bROM\\b", normalized):
+    if not re.search(r"\bROM\b", normalized):
         return ()
     # Named lumps use the more specific classifier, never both.
     if canonical_manual_45_material(
@@ -74,8 +74,8 @@ def manual_rom_process_codes(product, source, destination):
     src = _loc_text(source)
     dst = _loc_text(destination)
     from_stock = "STOCK" in src or "STACK" in src
-    to_crusher = "CRUSH" in dst or bool(re.search(r"\\bOCP\\b", dst))
-    to_screen = bool(re.search(r"\\b(MSP[ -]?\\d*|SCREEN|SCREENING)\\b", dst))
+    to_crusher = "CRUSH" in dst or bool(re.search(r"\bOCP\b", dst))
+    to_screen = bool(re.search(r"\b(MSP[ -]?\d*|SCREEN|SCREENING)\b", dst))
     to_stock = "STOCK" in dst or "STACK" in dst
     if from_stock:
         codes = ["ROM_REHANDLED"]
