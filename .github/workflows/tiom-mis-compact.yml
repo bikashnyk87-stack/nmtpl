@@ -8,6 +8,8 @@ on:
       - "app/static/index.html"
       - "tests/test_tiom_mis_compact_lead.py"
       - "tests/tiom_mis_wb_vehicle_scope.cjs"
+      - "tests/tiom_mis_linked_wb_preview.cjs"
+      - "app/routers/webapp.py"
       - ".github/workflows/tiom-mis-compact.yml"
   workflow_dispatch:
 
@@ -24,6 +26,8 @@ jobs:
         run: node --check app/static/tiom_phase1.js
       - name: Guard MIS WB rows by selected vehicle and report state
         run: node tests/tiom_mis_wb_vehicle_scope.cjs
+      - name: Confirm linked WB movements remain viewable without duplicate MIS entries
+        run: node tests/tiom_mis_linked_wb_preview.cjs
       - name: MIS compact table regression
         run: |
           python -m pip install pytest
