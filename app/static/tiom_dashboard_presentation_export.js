@@ -118,6 +118,22 @@
         balanceSummary.map(function(x){return [x[0],amount(x[1],2,' t'),x[2]];}))+
       '<p class="notice">Unexplained difference is NOT WIP, waste, stock or approved loss. '+
       'WB weights are measured; MIS-factor quantities are estimates. Stage totals overlap.</p>');
+    var crusherBreakdown=cb.sourceBreakdown||{};
+    var crusherSources=[
+      ['MSP screened lumps → Crusher',crusherBreakdown.fromMspLumpsMt],
+      ['ROM / lumps from face → Crusher',crusherBreakdown.fromFaceRomMt],
+      ['ROM from stock → Crusher',crusherBreakdown.fromRomStockMt],
+      ['Lumps from stock → Crusher',crusherBreakdown.fromLumpsStockMt],
+      ['Spillage → Crusher',crusherBreakdown.fromSpillageMt],
+      ['Company old-stock blend → Crusher',crusherBreakdown.companyBlendMt],
+      ['Unattributed crusher feed',cb.sourceUnclassifiedMt]
+    ].filter(function(x){return x[1]!=null;});
+    if(crusherSources.length){
+      html+=section('Crusher feed by physical source',
+        'These are components of total crusher feed, not additional production',
+        table(['Origin / route','Included feed MT'],
+          crusherSources.map(function(x){return [x[0],amount(x[1],2,' t')];})));
+    }
     var stageFacts=rows(mb.routes).filter(function(x){return x.recorded;});
     if(stageFacts.length){
       html+=section('Measured vs manual movement evidence','Movement stage totals are not additive as fresh production',
