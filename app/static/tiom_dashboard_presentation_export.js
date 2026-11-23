@@ -99,6 +99,32 @@
           escapeText(x[1] == null ? 'Pending' : amount(x[1], 1, ' t')) + '</b></div>';
       }).join('') + '</div>' +
       (allocationPending ? '<p class="notice">Fresh crusher-output allocation is pending supporting feed / blend evidence. Final fresh production is not estimated.</p>' : ''));
+    var mb=d.materialBalance||{}, ms=mb.msp||{}, cb=mb.crusher||{}, sb=mb.stock||{};
+    var balanceSummary=[
+      ['MSP external feed',ms.externalFeedMt,'Observed feed'],
+      ['MSP recycle (internal pass)',ms.internalRecycleMt,'Not new ROM'],
+      ['Calculated lumps (indicative)',ms.candidateLumpsMt,'Not measured output'],
+      ['Lumps recorded',ms.recordedLumpsMt,'WB / approved trip-factor'),
+      ['MSP unexplained difference',ms.observedDifferenceMt,'No WIP assumption'],
+      ['Crusher physical feed',cb.totalFeedMt,'All sources once'],
+      ['Crusher recorded output',cb.recordedOutputMt,'Gross output'],
+      ['Crusher unexplained difference',cb.observedDifferenceMt,'Not assumed loss'],
+      ['Stock observed receipts',sb.observedReceiptsMt,'Confirmed destination transfers'],
+      ['Stock observed withdrawals',sb.observedIssuesMt,'Confirmed stock-source transfers']
+    ];
+    html+=section('Material flow and mass balance',
+      'Provisional input-output reconciliation • WIP measurement is not available or required',
+      table(['Process / measure','Recorded / indicative MT','Meaning'],
+        balanceSummary.map(function(x){return [x[0],amount(x[1],2,' t'),x[2]];}))+
+      '<p class="notice">Unexplained difference is NOT WIP, waste, stock or approved loss. '+
+      'WB weights are measured; MIS-factor quantities are estimates. Stage totals overlap.</p>');
+    var stageFacts=rows(mb.routes).filter(function(x){return x.recorded;});
+    if(stageFacts.length){
+      html+=section('Measured vs manual movement evidence','Movement stage totals are not additive as fresh production',
+      table(['Movement stage','WB measured t','MIS/factor estimated t','Stage total t'],
+        stageFacts.map(function(x){return [x.label||x.code,
+          amount(x.measuredMt,2),amount(x.estimatedMt,2),amount(x.qtyMt,2)];})));
+    }
     var prodData = production.map(function (x) {
       return [x.label || '—', amount(x.trips, 0), amount(x.tonnes, 2, ' t'),
         amount(x.monthTonnes, 2, ' t'), x.excluded ? 'EXCLUDED' : amount(x.pct, 1, '%')];
