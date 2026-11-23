@@ -85,6 +85,26 @@ class ManualLumpsFlowTests(unittest.TestCase):
         self.assertNotIn("CRUSHER_FEED", screen)
         self.assertIn("ROM_STOCK_YARD", stock)
 
+    def test_numbered_stockpile_s3_to_crusher_is_rehandling(self):
+        codes=manual_process_codes(obj("LUMPS","Lumps"),obj("S3","S3"),obj("CRUSHER","Crusher"))
+        self.assertIn("PRODUCT_REHANDLED",codes)
+        self.assertIn("LUMPS_TO_CRUSHER_FROM_STOCK",codes)
+        self.assertNotIn("ROM_LUMPS",codes)
+        self.assertNotIn("LUMPS_FROM_SCREEN",codes)
+
+    def test_screen_to_numbered_stockpile_s3_records_stock_receipt(self):
+        codes=manual_process_codes(obj("LUMPS","Lumps"),obj("MSP-3","MSP-3"),obj("S3","S3"))
+        self.assertIn("LUMPS_FROM_SCREEN",codes)
+        self.assertIn("LUMPS_SHIFTED_TO_STOCK",codes)
+        self.assertNotIn("CRUSHER_FEED",codes)
+
+    def test_rom_from_numbered_stockpile_not_fresh_rom(self):
+        codes=manual_process_codes(obj("ROM","ROM"),obj("S3","S3"),obj("CRUSHER","Crusher"))
+        self.assertIn("ROM_REHANDLED",codes)
+        self.assertIn("ROM_STOCK_TO_CRUSHER",codes)
+        self.assertNotIn("ROM",codes)
+
+
     def test_lumps_face_to_crusher_is_mine_lumps(self):
         codes = manual_process_codes(obj("ROM-LUMPS", "Lumps"),
                                      obj("PIT1", "Mine Face"), obj("Crusher"))
