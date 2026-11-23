@@ -37,7 +37,7 @@ def manual_lump_process_codes(product, source, destination):
     if from_stock:
         codes = ["PRODUCT_REHANDLED"]
         if to_crusher:
-            codes += ["LUMPS_TO_CRUSHER_FROM_STOCK", "CRUSHER_FEED"]
+            codes += ["LUMPS_TO_CRUSHER_FROM_STOCK", "CRUSHER_STOCK_FEED", "CRUSHER_FEED"]
         elif to_screen:
             codes.append("MSP_FEED")
     elif from_screen:
@@ -56,8 +56,55 @@ def manual_lump_process_codes(product, source, destination):
     return tuple(codes)
 
 
-def unweighed_lump_trip_facts(db, first, last, shift="ALL", allowed_shifts=None):
-    """Submitted no-WB lumps only. Never re-count a saved WB-linked MIS trip.
+
+def manual_rom_process_codes(product, source, destination):
+    """General ROM, distinct from named lumps and CLO, including face crusher."""
+    if product is None:
+        return ()
+    product_text = " ".join(str(getattr(product, f, "") or "")
+                            for f in ("product_id", "name")).upper()
+    normalized = re.sub(r"[^A-Z0-9]+", " ", product_text).strip()
+    if not re.search(r"\\bROM\\b", normalized):
+        return ()
+    # Named lumps use the more specific classifier, never both.
+    if canonical_manual_45_material(
+        getattr(product, "product_id", ""), getattr(product, "name", "")
+    ) == "ROM_LUMPS":
+        return ()
+    src = _loc_text(source)
+    dst = _loc_text(destination)
+    from_stock = "STOCK" in src or "STACK" in src
+    to_crusher = "CRUSH" in dst or bool(re.search(r"\\bOCP\\b", dst))
+    to_screen = bool(re.search(r"\\b(MSP[ -]?\\d*|SCREEN|SCREENING)\\b", dst))
+    to_stock = "STOCK" in dst or "STACK" in dst
+    if from_stock:
+        codes = ["ROM_REHANDLED"]
+        if to_crusher:
+            codes += ["ROM_STOCK_TO_CRUSHER", "CRUSHER_STOCK_FEED", "CRUSHER_FEED"]
+        elif to_screen:
+            codes += ["ROM_STOCK_TO_PLANT_FEED", "MSP_FEED"]
+        elif to_stock:
+            codes.append("ROM_STOCK_TO_STOCK")
+    else:
+        codes = ["ROM"]
+        if to_crusher:
+            codes += ["ROM_FEED_TO_CRUSHER", "CRUSHER_FEED"]
+        elif to_screen:
+            codes.append("MSP_FEED")
+        elif to_stock:
+            codes.append("ROM_STOCK_YARD")
+    return tuple(codes)
+
+
+def manual_process_codes(product, source, destination):
+    """Dispatch to one exclusive material classifier; facts may span stages."""
+    return manual_lump_process_codes(product, source, destination) or (
+        manual_rom_process_codes(product, source, destination)
+    )
+
+
+def unweighed_process_trip_facts(db, first, last, shift="ALL", allowed_shifts=None):
+    """Submitted no-WB ROM and lumps. Never re-count a saved WB-linked MIS trip.
 
     Returns physical movements with explicit MIS trip-factor provenance.
     No inference from similar weights, vehicles or nearby WB timestamps.
@@ -109,7 +156,7 @@ def unweighed_lump_trip_facts(db, first, last, shift="ALL", allowed_shifts=None)
         destination = locations.get(detail.destination_location_id)
         if product is None or source is None or destination is None:
             continue
-        codes = manual_lump_process_codes(product, source, destination)
+        codes = manual_process_codes(product, source, destination)
         if not codes:
             continue
         qty = Decimal(detail.calculated_qty_mt)
