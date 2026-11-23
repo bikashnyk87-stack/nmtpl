@@ -104,6 +104,36 @@
       box('Drilling & entry completeness','<div class="mc-three">'+drill+'</div>'+footer,'Blank/missing meter readings are not zero')+
       '</div><p class="mc-caveat">Owner Overview summarizes the live TIOM records. Quantities shown as pending are not treated as confirmed. Source-based entries are not counted twice.</p>');
   }
+  function massBalancePanel(d) {
+    const b=d.materialBalance||{},m=b.msp||{},c=b.crusher||{},stock=b.stock||{};
+    if(!b.routes)return '<p class="mc-empty">Material balance not available from the selected report.</p>';
+    const measured=arr(b.routes).filter(r=>r.recorded);
+    const top='<div class="mc-recon-kpis">'+
+      metric('MSP external feed',fmt(m.externalFeedMt,2,' t'),'Fresh ROM + approved stock feed','teal')+
+      metric('MSP recycle throughput',fmt(m.internalRecycleMt,2,' t'),'Internal pass, not additional fresh ore','blue')+
+      metric('Lumps recorded',fmt(m.recordedLumpsMt,2,' t'),'WB or declared MIS-factor route','blue')+
+      metric('Lumps balance candidate',fmt(m.candidateLumpsMt,2,' t'),'Provisional before stock/WIP/rejects','amber')+
+      metric('Crusher physical feed',fmt(c.totalFeedMt,2,' t'),'All origins, counted once','teal')+
+      metric('Crusher output',fmt(c.recordedOutputMt,2,' t'),'Recorded products, not fresh allocation','blue')+
+      metric('MSP provisional variance',fmt(m.observedDifferenceMt,2,' t'),'Incomplete balance; not a stock receipt','amber')+
+      metric('Crusher provisional variance',fmt(c.observedDifferenceMt,2,' t'),'Excludes unknown WIP/rejects/loss','amber')+
+      metric('Stock verified balance',fmt(stock.verifiedVarianceMt,2,' t'),stock.status==='CALCULATED'?'Source ledger supplied':'Opening and closing stock pending','amber')+
+      '</div>';
+    const rows=measured.map(r=>[
+      '<b>'+E(r.label||r.code)+'</b>',
+      fmt(r.measuredMt,2),
+      fmt(r.estimatedMt,2),
+      fmt(r.qtyMt,2)
+    ]);
+    const flags='<div class="mc-flow-alert">'+
+      '<b>Balance status: '+E(b.status||'PENDING')+'</b>'+
+      ' · MSP missing: '+E(arr(m.missing).join(', ')||'none')+
+      ' · Crusher missing: '+E(arr(c.missing).join(', ')||'none')+
+      ' · Stock missing: '+E(arr(stock.missing).join(', ')||'none')+
+      '</div>';
+    return top+flags+tbl(['Recorded movement / stage','WB t','Manual / factor t','Stage t'],rows)+
+      '<p class="mc-caveat">Stage quantities overlap physically: do not sum this table as total production. Recycled spillage is a second processing pass. Manual-factor quantities are estimates, and provisional variances are not approved recovery, stock or fresh output.</p>';
+  }
   window.tiomEquipMode=function(mode){S.tiomEquipMode=mode; if(S.tiomOwnerData)ownerView(S.tiomOwnerData);};
   function setupOwner() {
     const today=E(S.boot.today);
@@ -190,6 +220,7 @@
       '<b>'+E(x.shift)+'</b>',fmt(x.trips,0),fmt(x.tonnes,1),fmt(x.fuel,1)]));
     return '<div class="mc-dashboard-presentation">'+sourceNotice+'<div class="mc-dash-metrics">'+metrics+'</div>'+
       box('Production flow & allocation',flow,'Fresh output is shown only where allocation evidence is complete')+
+      box('Material flow & mass balance',massBalancePanel(d),'MSP, Crusher and Stock · WB measured versus MIS estimated')+
       '<div class="mc-dash-main">'+box('Plant feed vs output',plantTable(d,false),'Plant-level physical movement and actual HMR')+
       box('Movement reconciliation',recon,'Confirmed WB is authoritative for weighed movements')+
       box('Equipment & vehicle performance',equip,'Submitted MIS equipment attribution; further drilldowns below')+
