@@ -7,6 +7,7 @@ from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.pool import StaticPool
 
+import app.auth  # Register web_user before creating all FK-linked tables
 from app.db import Base
 from app.routers import automation
 from app.services import volvo_control, volvo_store
