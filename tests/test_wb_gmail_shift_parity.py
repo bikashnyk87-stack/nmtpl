@@ -10,9 +10,13 @@ from scripts.wb_gmail_worker import infer_file_context
 class FakeDb:
     def __init__(self):
         self.definitions = {
-            "A": SimpleNamespace(start_time=time(5, 0), end_time=time(13, 0), active=True),
-            "B": SimpleNamespace(start_time=time(13, 0), end_time=time(21, 0), active=True),
-            "C": SimpleNamespace(start_time=time(21, 0), end_time=time(5, 0), active=True),
+            code: SimpleNamespace(shift=code, start_time=start, end_time=end,
+                                  active=True, scheduled_hours=8)
+            for code, (start, end) in {
+                "A": (time(6, 0), time(14, 0)),
+                "B": (time(14, 0), time(22, 0)),
+                "C": (time(22, 0), time(6, 0)),
+            }.items()
         }
 
     def get(self, _model, shift):
