@@ -19,6 +19,8 @@ function setup({vehicle='DT-10',rows=[],misReportId='',date='2026-11-22',shift='
     collectTripRows:()=>currentRows.map(x=>({...x})),
     renderMisRows:r=>{renders++;currentRows=r.map(x=>({...x}));},
     tripSourceChanged:()=>{},
+    // Linked preview is tested end-to-end in tiom_mis_linked_wb_preview.cjs.
+    renderMisLinkedWb:()=>{},
     draftSave:()=>{saves++;},
   };
   vm.runInNewContext(loader,ctx,{timeout:1000});
