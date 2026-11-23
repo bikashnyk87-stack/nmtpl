@@ -74,6 +74,27 @@ def test_excel_report_is_styled_multi_sheet_and_has_48_kpi_cards():
     assert loaded["WB Material Audit"]["A7"].data_type != "f"
 
 
+def test_management_report_preserves_manual_factor_and_unexplained_balance():
+    from app.services.tiom_mass_balance import calculate_tiom_mass_balance
+    data=dashboard_data()
+    data["materialBalance"]=calculate_tiom_mass_balance({
+        "MSP_FEED":{"WB":933.64},
+        "SCREEN_FINES":{"WB":299.32},
+        "LUMPS_FROM_SCREEN":{"MIS_FACTOR":990},
+        "CRUSHER_FEED":{"MIS_FACTOR":990},
+        "CRUSHER_FINES":{"WB":356.70},
+    })
+    wb,_=make_workbook(data)
+    summary=wb["Mass Balance"]
+    source=wb["Material Flow"]
+    rows=[[cell.value for cell in row] for row in summary.iter_rows(min_row=6)]
+    assert any(row[0]=="MSP / Screening" and row[1]=="Unexplained difference"
+               and abs(row[2]+355.68)<1e-8 for row in rows)
+    facts=[[cell.value for cell in row] for row in source.iter_rows(min_row=6)]
+    assert any(row[1]=="LUMPS_FROM_SCREEN" and row[3]==990 for row in facts)
+    assert all("WIP" not in str(row[4]) for row in rows)
+
+
 def test_allocation_pending_and_denominator_safety():
     data = dashboard_data(pending=True)
     data["kpis"]["drillMeterage"] = 0
