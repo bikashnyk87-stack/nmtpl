@@ -519,20 +519,39 @@ async def lifespan(app):
     historical_despatch_task = asyncio.create_task(
         _repair_despatch_nov_source(), name="despatch-nov-verified-source-repair"
     )
+    async def _revalidate_confirmed_22nov_a():
+        # Correct saved REVIEW rows only after comparing every movement to
+        # the original SHA256-identical authorised Gmail XLSX. Never reimport.
+        await asyncio.sleep(10)
+        try:
+            from app.services.tiom_wb_confirmed_revalidation import repair_22nov_a_confirmed_from_gmail
+            result = await asyncio.to_thread(repair_22nov_a_confirmed_from_gmail)
+            print("TIOM_22NOV_A_SOURCE_REVALIDATION=" +
+                  json.dumps(result, sort_keys=True, default=str), flush=True)
+        except Exception as exc:
+            print("TIOM_22NOV_A_SOURCE_REVALIDATION_FAILED=" +
+                  type(exc).__name__ + ": " + str(exc)[:300], flush=True)
+
     attendance_task = asyncio.create_task(automation_loop(), name="attendance-auto-close")
     cloud_automation_task = asyncio.create_task(automation.automation_loop(), name="cloud-integrations")
+    wb_revalidation_task = asyncio.create_task(
+        _revalidate_confirmed_22nov_a(), name="tiom-wb-22nov-a-source-revalidation"
+    )
     try:
         yield
     finally:
         historical_despatch_task.cancel()
         attendance_task.cancel()
         cloud_automation_task.cancel()
+        wb_revalidation_task.cancel()
         with suppress(asyncio.CancelledError):
             await historical_despatch_task
         with suppress(asyncio.CancelledError):
             await attendance_task
         with suppress(asyncio.CancelledError):
             await cloud_automation_task
+        with suppress(asyncio.CancelledError):
+            await wb_revalidation_task
 
 
 app = FastAPI(title="NMTPL Central Operations Platform", version="1.0.0-tiom2.1.0-field-hardening", lifespan=lifespan)
