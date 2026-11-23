@@ -327,6 +327,19 @@ def make_workbook(d):
             balance_rows.append([label,display,part.get(field),part.get("status"),
                  "; ".join(part.get("missing") or []),
                  "Provisional only. Never book difference as WIP, loss or stock."])
+    if isinstance((balance.get("crusher") or {}).get("sourceBreakdown"),dict):
+        origin=(balance["crusher"]["sourceBreakdown"])
+        for key,label in (
+            ("fromMspLumpsMt","MSP screened lumps → Crusher"),
+            ("fromFaceRomMt","Mine-face ROM → Crusher"),
+            ("fromRomStockMt","ROM stock → Crusher"),
+            ("fromLumpsStockMt","Lumps stock → Crusher"),
+            ("fromSpillageMt","Spillage → Crusher"),
+            ("companyBlendMt","Company blend → Crusher"),
+        ):
+            balance_rows.append(["Crusher feed origin",label,origin.get(key),"PROVISIONAL",
+                "Refer to confirmed WB or estimated MIS factor",
+                "Part of total crusher feed; do not add again to total"])
     detail_sheet(wb, "Mass Balance", "MSP / CRUSHER / STOCK • OBSERVED INPUT-OUTPUT BALANCE", d,
         ["Area","Metric","MT","Status","Missing movement / stock source","Interpretation"],
         balance_rows,[27,44,20,29,61,68])
