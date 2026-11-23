@@ -1,4 +1,4 @@
-"""TIOM 5 AM, 1 PM, 9 PM operational shifts and 11-Oct five WB reviews."""
+"""TIOM effective 1-Oct 06/14/22 shifts; former C reviews require audit."""
 from datetime import date, datetime, time
 from decimal import Decimal
 from types import SimpleNamespace
@@ -29,7 +29,7 @@ def test_tiom_shift_master_aligned_without_changing_socp_or_kocp():
             SiteShift(site_id="KOCP",shift="C",start_time=time(21),end_time=time(5),
                       shift_name="Shift C",scheduled_hours=8,sequence_no=3,active=True),
         ])
-        for shift,minutes in (("A",(6,14)),("B",(14,22)),("C",(22,6))):
+        for shift,minutes in (("A",(5,13)),("B",(13,21)),("C",(21,5))):
             db.add(ShiftMaster(shift=shift,start_time=time(minutes[0]),end_time=time(minutes[1]),
                                scheduled_hours=8,active=True))
         db.flush()
@@ -44,24 +44,24 @@ def test_tiom_shift_master_aligned_without_changing_socp_or_kocp():
     engine.dispose()
 
 
-def test_all_five_c_shift_times_and_midnight_date_convention():
-    c=SimpleNamespace(start_time=time(21),end_time=time(5))
-    b=SimpleNamespace(start_time=time(13),end_time=time(21))
-    clocks=[time(21,33,33),time(21,37,45),time(21,51,44),time(21,53,2),time(0,0,27)]
-    assert all(clock_in_shift(c,x) for x in clocks)
-    assert all(not clock_in_shift(b,x) for x in clocks)
-    for x in clocks[:4]:
-        issues,notes=validate_wb_operational_metadata(DAY,"C","B",DAY,x,c)
-        assert issues==[]
-        assert any("SAP Shift B" in n for n in notes)
-    midnight=clocks[-1]
-    assert expected_movement_date(DAY,midnight,c)==date(2026,10,12)
-    problems,notes=validate_wb_operational_metadata(DAY,"C","C",DAY,midnight,c)
-    assert problems==[]
-    assert any("operational date" in n for n in notes)
-    problems,_=validate_wb_operational_metadata(DAY,"C","C",date(2026,10,10),midnight,c)
-    assert problems
-    assert all(datetime.fromisoformat(EXCEPTIONS[k][1]).time() in clocks for k in EXCEPTIONS)
+def test_october_11_physical_clock_uses_new_shift_boundaries():
+    from app.services.tiom_shift_schedule import context_at, definition_for_day
+    from app.services.time_context import TZ
+    new_b=SimpleNamespace(shift="B",start_time=time(14),end_time=time(22),
+                          active=True,scheduled_hours=8)
+    new_c=SimpleNamespace(shift="C",start_time=time(22),end_time=time(6),
+                          active=True,scheduled_hours=8)
+    b=definition_for_day(DAY,new_b)
+    c=definition_for_day(DAY,new_c)
+    for _,(vehicle,physical,mt,material) in list(EXCEPTIONS.items())[:4]:
+        assert clock_in_shift(b,datetime.fromisoformat(physical).time())
+        assert not clock_in_shift(c,datetime.fromisoformat(physical).time())
+        assert context_at(datetime.fromisoformat(physical).replace(tzinfo=TZ))==(DAY,"B")
+    midnight=datetime(2026,10,12,0,0,27,tzinfo=TZ)
+    assert context_at(midnight)==(DAY,"C")
+    assert expected_movement_date(DAY,midnight.time(),c)==date(2026,10,12)
+    assert definition_for_day(date(2026,9,30),new_c).start_time==time(21)
+
 
 
 def seed_wb(db):
@@ -79,32 +79,31 @@ def seed_wb(db):
     db.flush()
 
 
-def test_all_five_review_movements_corrected_once_with_original_evidence():
+def test_legacy_oct11_reviews_are_not_auto_promoted_on_restart():
     engine=create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as db:
         seed_wb(db)
+        original={
+            no:(db.get(WbMovement,"confirmed-C:"+no).row_status,
+                db.get(WbMovement,"confirmed-C:"+no).weigh_at)
+            for no in EXCEPTIONS
+        }
         result=resolve_oct11_five_wb_reviews(db)
-        assert result["corrected"]==5,result
-        assert result["skipped"]=={}
+        assert result["corrected"]==0
+        assert "policy" in result["skipped"]
         batch=db.get(WbImportBatch,"confirmed-C")
-        assert batch.valid_rows==15 and batch.review_rows==0
-        for no,(_,physical,mt,_) in EXCEPTIONS.items():
-            w=db.get(WbMovement,"confirmed-C:"+no)
-            assert w.row_status=="VALID"
-            assert w.weigh_at.replace(tzinfo=None)==datetime.fromisoformat(physical)
-            assert w.net_kg/Decimal(1000)==mt
-            assert w.issue.startswith("VERIFIED_TIOM_SHIFT_C_21_TO_05:")
-        logs=list(db.scalars(select(AuditLog).where(AuditLog.action=="TIOM_WB_REVIEW_SHIFT_C_VERIFIED")))
-        assert len(logs)==5
-        again=resolve_oct11_five_wb_reviews(db)
-        assert again["corrected"]==0 and again["alreadyValid"]==5
-        assert len(list(db.scalars(select(AuditLog).where(
-            AuditLog.action=="TIOM_WB_REVIEW_SHIFT_C_VERIFIED"))))==5
+        assert batch.valid_rows==10 and batch.review_rows==5
+        for no in EXCEPTIONS:
+            wb=db.get(WbMovement,"confirmed-C:"+no)
+            assert (wb.row_status,wb.weigh_at)==original[no]
+        assert not list(db.scalars(select(AuditLog).where(
+            AuditLog.action=="TIOM_WB_REVIEW_SHIFT_C_VERIFIED")))
     engine.dispose()
 
 
-def test_duplicate_wb_movement_prevents_review_promotion():
+
+def test_existing_duplicate_does_not_trigger_silent_reclassification():
     engine=create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine)
     with Session(engine) as db:
@@ -119,7 +118,7 @@ def test_duplicate_wb_movement_prevents_review_promotion():
             gross_kg=Decimal("51521"),weigh_at=datetime(2026,10,11,20,45),row_status="VALID"))
         db.flush()
         result=resolve_oct11_five_wb_reviews(db)
-        assert result["corrected"]==4
-        assert result["skipped"][no]=="DUPLICATE_ACTIVE_CONFIRMED_WB"
+        assert result["corrected"]==0
         assert db.get(WbMovement,"confirmed-C:"+no).row_status=="REVIEW"
+        assert db.get(WbMovement,"active-B:"+no).row_status=="VALID"
     engine.dispose()
