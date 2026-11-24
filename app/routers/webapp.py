@@ -2273,7 +2273,7 @@ def masters_desk(db,user):
 
 
 def save_master_record(db,user,p):
-    require(user,admin=True)
+    require(user, 'MASTERS')
     table=str(p.get('table') or '').upper()
     r=p.get('row') if isinstance(p.get('row'),dict) else {}
     intent=str(p.get('intent') or '').lower()
@@ -2495,7 +2495,7 @@ OPTION_CATEGORIES = {'PERSON.role':80, 'PERSON.department':80, 'EQUIPMENT.type':
 
 
 def save_master_option(db, user, p):
-    require(user, admin=True)
+    require(user, 'MASTERS')
     category = str(p.get('category') or '')
     value = short(p.get('value', '')).strip()
     if category not in OPTION_CATEGORIES or not value or len(value) > OPTION_CATEGORIES[category]:
@@ -2507,7 +2507,7 @@ def save_master_option(db, user, p):
 
 
 def save_rotation_team(db, user, p):
-    require(user, admin=True)
+    require(user, 'MASTERS')
     key = short(p.get('id','')).strip().upper()
     name = short(p.get('name','')).strip()
     shift = str(p.get('shift') or '').upper()
