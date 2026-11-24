@@ -330,6 +330,11 @@ const wbCanonicalFields=[
   ['tare','Tare weight'],['gross','Gross weight'],['net','Net weight'],['time','WB gross time']
 ];
 let masterPage=0, masterEditing=null;
+// A MASTERS assignment grants master-data entry; Management is for account
+// administration, not a prerequisite for editing operating master records.
+function canEditTiomMasters(){
+  return !!S.boot?.user?.modules?.includes('MASTERS');
+}
 
 renderMasters=function(){
   masterPage=0;masterEditing=null;
@@ -338,7 +343,7 @@ renderMasters=function(){
       <label>Master<select id="master_type" onchange="masterPage=0;masterEditing=null;renderMasterTable()">${Object.entries(masterConfig).map(([k,c])=>`<option value="${k}">${c.label}</option>`).join('')}</select></label>
       <label class="search-label">Search<input id="master_search" type="search" placeholder="Search any field…" oninput="masterPage=0;renderMasterRows()"></label>
       <label>Status<select id="master_status" onchange="masterPage=0;renderMasterRows()"><option value="ALL">All records</option><option value="true">Active</option><option value="false">Inactive</option></select></label>
-      ${S.boot.user.isManagement?'<button class="btn primary" onclick="editMaster(-1)">+ Add record</button>':''}
+      ${canEditTiomMasters()?'<button class="btn primary" onclick="editMaster(-1)">+ Add record</button>':''}
     </div>
     <div class="panel note"><b>ERP master rule:</b> one Equipment Master and one Location Master are used everywhere. Route Master defines Source → Destination + WB path; Lead Master stores the approved Bench RL → Lead KM. Drill Sets pair Drill + Compressor without duplicating HMR transactions.</div>
     <div id="master_body"><div class="loading">Loading masters…</div></div>`);
@@ -353,7 +358,7 @@ function renderMasterRows(){
   const rows=(S.mastersDesk[cfg.key]||[]).map((row,index)=>({row,index}))
     .filter(({row})=>(status==='ALL'||String(row.active)===status)&&Object.values(row).some(v=>String(v??'').toLowerCase().includes(query)));
   const pages=Math.max(1,Math.ceil(rows.length/25));masterPage=Math.min(masterPage,pages-1);
-  const headers=cfg.fields.map(f=>fieldLabels[f]);if(S.boot.user.isManagement)headers.push('Action');
+  const headers=cfg.fields.map(f=>fieldLabels[f]);if(canEditTiomMasters())headers.push('Action');
   const bools=new Set(['active','vehicleRequired','required']);
   html('master_records',table(headers,rows.slice(masterPage*25,(masterPage+1)*25).map(({row,index})=>{
     const cells=cfg.fields.map(f=>{
@@ -361,7 +366,7 @@ function renderMasterRows(){
       if(bools.has(f))return row[f]?'Yes':'No';
       return esc(row[f]??'—');
     });
-    if(S.boot.user.isManagement)cells.push(`<button class="btn secondary small" aria-label="Edit ${esc(row.id||row.field||'record')}" onclick="editMaster(${index})">Edit</button>`);
+    if(canEditTiomMasters())cells.push(`<button class="btn secondary small" aria-label="Edit ${esc(row.id||row.field||'record')}" onclick="editMaster(${index})">Edit</button>`);
     return cells;
   })));
   html('master_pagination',`<span>${rows.length?masterPage*25+1:0}–${Math.min((masterPage+1)*25,rows.length)} of ${rows.length} records</span><div><button class="btn secondary small" ${masterPage===0?'disabled':''} onclick="masterPage--;renderMasterRows()">Previous</button><span> ${masterPage+1} / ${pages} </span><button class="btn secondary small" ${masterPage>=pages-1?'disabled':''} onclick="masterPage++;renderMasterRows()">Next</button></div>`);
@@ -410,6 +415,7 @@ function fieldOptions(t,f,current){
 }
 
 function editMaster(index){
+  if(!canEditTiomMasters()){toast('Masters access is required to edit records.');return;}
   const t=val('master_type'),cfg=masterConfig[t];
   const row=index<0?{active:true,vehicleRequired:false,required:false,occurrence:1,priority:100,direction:'ANY'}:S.mastersDesk[cfg.key][index];
   masterEditing=index<0?null:row.id;
@@ -451,6 +457,7 @@ function editMaster(index){
 function closeMasterEditor(){document.getElementById('master_editor').hidden=true;masterEditing=null;}
 
 saveMasterUi=function(){
+  if(!canEditTiomMasters()){toast('Masters access is required to save records.');return;}
   const t=val('master_type'),row={},bools=new Set(['active','vehicleRequired','required']);
   masterConfig[t].fields.forEach(f=>{row[f]=bools.has(f)?val('mf_'+f)==='true':val('mf_'+f).trim();});
   if(t==='WBHEADER'&&masterEditing!==null)row.id=masterEditing;
