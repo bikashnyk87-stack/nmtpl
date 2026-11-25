@@ -162,6 +162,21 @@
 .drill-report-sheet .drill-report-kpis b{font-size:15px}
 @media(max-width:760px){.drill-report-sheet .drill-report-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
 
+.drill-entry-scroll{max-height:none;overflow:visible}
+.drill-entry-table{width:100%;min-width:0;table-layout:fixed}
+.drill-entry-table th,.drill-entry-table td{padding:4px 3px;font-size:11px;vertical-align:middle;white-space:normal;overflow-wrap:anywhere}
+.drill-entry-table th:first-child,.drill-entry-table td:first-child{width:15%;min-width:0;max-width:none;text-align:left}
+.drill-entry-table th:nth-child(2){width:15%}
+.drill-entry-table th:nth-child(3),.drill-entry-table th:nth-child(4){width:12%}
+.drill-entry-table th:last-child{width:13%}
+.drill-entry-table input,.drill-entry-table .tiom-combo input.combo-text{box-sizing:border-box;width:100%;min-width:0;max-width:100%;height:28px;font-size:11px;padding:3px 4px}
+.drill-entry-table input[id^="dr_note_"]{min-width:0;width:100%}
+.drill-meter{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:2px;text-align:center}
+.drill-meter span{display:grid;font-size:9px;color:#52697c}
+.drill-meter b{font-size:11px;color:#17364a}
+.drill-view-tabs{display:flex;flex-wrap:wrap;gap:6px}
+@media(max-width:1100px){.drill-entry-table th,.drill-entry-table td{font-size:10px;padding:3px 2px}.drill-meter{grid-template-columns:1fr}.drill-meter span{display:flex;justify-content:space-between}}
+
 .dpr-toolbar .dpr-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
 .dpr-toolbar .dpr-actions .btn{min-height:26px;white-space:nowrap}
 @media(max-width:760px){.dpr-toolbar .dpr-actions{width:100%;margin-left:0;justify-content:flex-start}}
