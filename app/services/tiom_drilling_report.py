@@ -32,11 +32,11 @@ def drilling_report_svg(report):
              '<rect width="1400" height="100%" fill="white"/>',
              '<rect x="20" y="20" width="1360" height="55" fill="#a9d18e"/>',
              '<text x="700" y="57" text-anchor="middle" font-size="28" font-weight="bold">Drilling Report</text>',
-             f'<text x="700" y="103" text-anchor="middle" font-size="16" fill="#234b65">TIOM | Day: {escape(report["date"])} (all shifts) | Month-to-date: {escape(report["monthFrom"])} to {escape(report["date"])}</text>',
+             f'<text x="700" y="103" text-anchor="middle" font-size="16" fill="#234b65">TIOM | Day: {escape(report["date"])} ({escape(report.get("shift","ALL"))}) | Selected period: {escape(report["monthFrom"])} to {escape(report["date"])}</text>',
              '<rect x="20" y="115" width="1360" height="57" fill="#f4b183"/>',
              '<text x="35" y="139" font-size="15" font-weight="bold">Equipment name</text>',
              '<text x="630" y="139" font-size="15" font-weight="bold">For the day</text>',
-             '<text x="1110" y="139" font-size="15" font-weight="bold">For the month</text>']
+             '<text x="1110" y="139" font-size="15" font-weight="bold">For the period</text>']
     xs = [35, 475, 575, 675, 795, 935, 1035, 1135, 1255]
     labels = ['Equipment', 'HMR', 'Holes', 'Meterage', 'm/hr', 'HMR', 'Holes', 'Meterage', 'm/hr']
     for x, label in zip(xs, labels):
@@ -78,13 +78,13 @@ def drilling_workbook(report, detail_rows, period):
     ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 34
     ws.merge_cells("A2:J2")
-    ws["A2"] = f"TIOM  |  Day: {report['date']} (all shifts)  |  Month-to-date: {report['monthFrom']} to {report['date']}"
+    ws["A2"] = f"TIOM  |  Day: {report['date']} ({report.get('shift','ALL')})  |  Selected period: {report['monthFrom']} to {report['date']}"
     ws["A2"].alignment = Alignment(horizontal="center")
     ws["A2"].font = Font(bold=True, size=10, color=BLUE)
     ws.row_dimensions[2].height = 22
 
     for region, label in (("A3:A4", "Sl.No"), ("B3:B4", "Equipment name"),
-                          ("C3:F3", "For The Day"), ("G3:J3", "For The Month")):
+                          ("C3:F3", "For The Day"), ("G3:J3", "For The Period")):
         ws.merge_cells(region)
         cell = ws[region.split(":")[0]]
         cell.value = label
@@ -280,6 +280,28 @@ def drilling_workbook(report, detail_rows, period):
             cell.fill=PatternFill('solid',fgColor='E8F0E5')
             cell.font=Font(bold=True)
             cell.border=Border(left=LINE,right=LINE,top=LINE,bottom=LINE)
+        remarks_row=last+1
+        sheet.merge_cells(start_row=remarks_row,start_column=1,end_row=remarks_row,end_column=10)
+        sheet.cell(remarks_row,1,'Remarks — selected period by date and shift' if name=='Cumulative' else 'Remarks — selected day by drill set and shift')
+        sheet.cell(remarks_row,1).fill=PatternFill('solid',fgColor='EDF3ED')
+        sheet.cell(remarks_row,1).font=Font(bold=True)
+        sheet.row_dimensions[remarks_row].height=24
+        by_set=defaultdict(list)
+        for item in daily_items:
+            note=str(item.get('remarks') or '').strip()
+            if note:
+                prefix=f"{item.get('date','')} " if name=='Cumulative' else ''
+                by_set[item['label']].append(f"{prefix}{item.get('shift','')}: {note}")
+        for offset,label in enumerate(names,remarks_row+1):
+            sheet.cell(offset,2,label)
+            sheet.merge_cells(start_row=offset,start_column=3,end_row=offset,end_column=10)
+            sheet.cell(offset,3,' | '.join(by_set[label]) if by_set[label] else '—')
+            sheet.cell(offset,3).alignment=Alignment(vertical='center',wrap_text=True)
+            sheet.row_dimensions[offset].height=min(96,max(23,18*(1+len(str(sheet.cell(offset,3).value))//105)))
+            for cell in sheet[offset][:10]: cell.border=Border(left=LINE,right=LINE,top=LINE,bottom=LINE)
+        if not names:
+            sheet.cell(remarks_row+1,2,'No drilling entries for this day')
+        sheet.print_area=f'A1:J{max(remarks_row+len(names),remarks_row+1)}'
         for pos,width in enumerate((10,38,14,12,16,16,14,12,16,16),1):sheet.column_dimensions[get_column_letter(pos)].width=width
         sheet.freeze_panes='C5';sheet.sheet_view.showGridLines=False
         sheet.page_setup.orientation='landscape';sheet.page_setup.fitToWidth=1

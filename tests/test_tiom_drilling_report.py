@@ -43,10 +43,13 @@ def test_drilling_excel_layout_and_all_report_sheets():
     assert wb["Cumulative"]["E5"].value==276
     assert wb["2026-10-16"]["A5"].value=="Total"
     assert wb["2026-10-17"]["C3"].value=="For The Day"
+    assert wb["2026-10-17"]["A7"].value.startswith("Remarks")
+    assert "B: Diesel supply 1 hr" in wb["2026-10-17"]["C8"].value
+    assert "B: Diesel supply 1 hr" in wb["Cumulative"]["C8"].value
     ws=wb.worksheets[0]
     assert ws["A1"].value=="Drilling Report"
     assert str(ws["C3"].value)=="For The Day"
-    assert str(ws["G3"].value)=="For The Month"
+    assert str(ws["G3"].value)=="For The Period"
     assert ws["B5"].value=="DM-01"
     assert ws["C5"].value==7.5
     assert ws["D5"].value==31
@@ -80,10 +83,10 @@ def test_drilling_screen_and_export_are_connected():
     js=(ROOT/"app/static/tiom_phase1.js").read_text(encoding="utf-8")
     assert "def _tiom_drilling_report_table" in api
     assert "/tiom/drilling-report.xlsx" in api
-    assert "'reportTable':_tiom_drilling_report_table(db,report_to)" in api
+    assert "'reportTable':_tiom_drilling_report_table(db,report_to,report_from,report_shift)" in api
     assert "downloadAllDrillingReports" in js
     assert "renderDrillingPublishedReport(d.reportTable)" in js
-    assert 'placeholder="Shift notes"' in js
+    assert 'placeholder="Enter shift remarks"' in js
 
 
 def test_drilling_image_escapes_remarks_and_entry_keeps_hmr_read_only():
@@ -93,7 +96,13 @@ def test_drilling_image_escapes_remarks_and_entry_keeps_hmr_read_only():
     assert '&lt;face unavailable&gt;' in svg
     js=(ROOT/'app/static/tiom_phase1.js').read_text(encoding='utf-8')
     assert 'downloadDrillingImage' in js
-    assert "combo('dr_src_'+i,d.sourceLocations" in js
+    assert 'function drillingReportControls(d)' in js
+    assert 'id="dr_from"' in js and 'id="dr_to"' in js
+    assert 'function renderDrillingReportPanel(d)' in js
+    assert 'function renderDrillingReportPanel(d){return `<div class="panel tiom-sap-card drill-report-panel">${drillingReportControls(d)}' in js
+    assert 'window.loadDrillingReport=function()' in js
+    assert '<textarea id="dr_note_' in js
+    assert '<select id="dr_src_${i}"' in js
     assert 'const meter=(open,close)' in js
     assert '<input id="dr_do_' not in js
     api=(ROOT/'app/routers/webapp.py').read_text(encoding='utf-8')
