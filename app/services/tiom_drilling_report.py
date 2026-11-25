@@ -1,5 +1,7 @@
 """Excel reports for TIOM drilling, independent of live database writes."""
 from io import BytesIO
+from collections import defaultdict
+from datetime import date, timedelta
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -161,6 +163,34 @@ def drilling_workbook(report, detail_rows, period):
              "metersPerHour", "breakdownHours", "remarks", "enteredBy", "enteredAt")])
     add_sheet("Shift Details", cols, records,
               [13, 8, 32, 32, 32, 28, 15, 15, 12, 15, 15, 12, 13, 14, 14, 14, 14, 14, 12, 15, 65, 18, 21])
+
+    # Each date has its own tab; keep missing HMR distinct from a measured zero.
+    def aggregate(items):
+        groups = defaultdict(list)
+        for item in items:
+            groups[(item["drillSetId"], item["label"])].append(item)
+        result = []
+        for (_, label), entries in sorted(groups.items(), key=lambda pair: pair[0][1].casefold()):
+            measured = [x.get("drillHours") for x in entries if x.get("drillHours") is not None]
+            metres = sum(x.get("totalMeterage") or 0 for x in entries)
+            incomplete = any((x.get("totalMeterage") or 0) > 0 and x.get("drillHours") is None for x in entries)
+            hours = sum(measured) if measured else None
+            result.append([label, hours, sum(x.get("holes") or 0 for x in entries), metres,
+                           round(metres / hours, 2) if hours and not incomplete else None,
+                           sum(x.get("romObHoles") or 0 for x in entries),
+                           sum(x.get("bhjBhqHoles") or 0 for x in entries),
+                           "YES" if any(x.get("romObHoles") is None or x.get("bhjBhqHoles") is None for x in entries) else "NO"])
+        return result
+
+    summary_columns = ["Equipment", "Drill HMR", "Holes", "Meterage (m)", "Meters/hr",
+                       "ROM/OB Holes", "BHJ/BHQ Holes", "Unclassified Hole Records"]
+    start, end = date.fromisoformat(period["fromDate"]), date.fromisoformat(period["toDate"])
+    current = start
+    while current <= end:
+        daily = [x for x in detail_rows if x.get("date") == current.isoformat()]
+        add_sheet(current.isoformat(), summary_columns, aggregate(daily), [40, 15, 14, 18, 15, 18, 18, 30])
+        current += timedelta(days=1)
+    add_sheet("Cumulative", summary_columns, aggregate(detail_rows), [40, 15, 14, 18, 15, 18, 18, 30])
 
     # Split summary deliberately omits historic holes not assigned to a material.
     for title, holes_key, metres_key in (

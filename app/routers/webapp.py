@@ -5896,7 +5896,7 @@ def tiom_drilling_desk(db,user,p):
     return {'date':str(day),'shift':sh,'reportFrom':str(report_from),'reportTo':str(report_to),'reportShift':report_shift,
         'sourceLocations':[{'id':x['id'],'label':f"{x['label']} · {x['id']}"} for x in source_locations],
         'rows':rows,'summaryToday':_tiom_drilling_summary(db,day,day,sh),'summaryRange':_tiom_drilling_summary(db,report_from,report_to,report_shift),
-        'reportTable':_tiom_drilling_report_table(db,day)}
+        'reportTable':_tiom_drilling_report_table(db,report_to)}
 
 
 def save_tiom_drilling_shift(db,user,p):
@@ -6453,7 +6453,7 @@ def tiom_drilling_report_export(request:Request,date:str='',fromDate:str='',toDa
 
     user=get_user(db,request)
     require(user,'PRODUCTION')
-    day=_parse_ui_date_v2(date,'drilling date') if date else operating_context()[0]
+    day=_parse_ui_date_v2(date,'drilling date') if date else operating_context()[0]-timedelta(days=1)
     from_day=_parse_ui_date_v2(fromDate,'report from date') if fromDate else day.replace(day=1)
     to_day=_parse_ui_date_v2(toDate,'report to date') if toDate else day
     if to_day<from_day or (to_day-from_day).days>366:
@@ -6511,10 +6511,10 @@ def tiom_drilling_report_export(request:Request,date:str='',fromDate:str='',toDa
             'remarks':r.remarks or '',
             'enteredBy':r.entered_by or '',
             'enteredAt':str(r.entered_at or '')})
-    report=_tiom_drilling_report_table(db,day)
+    report=_tiom_drilling_report_table(db,to_day)
     buf=drilling_workbook(report,details,
                           {'fromDate':str(from_day),'toDate':str(to_day),'shift':shift})
-    filename=f"TIOM_Drilling_Report_{day}_All_Detail_{from_day}_to_{to_day}.xlsx"
+    filename=f"TIOM_Drilling_Report_{from_day}_to_{to_day}_{shift}.xlsx"
     return StreamingResponse(buf,media_type=MIME,
         headers={'Content-Disposition':f'attachment; filename="{filename}"',
                  'Cache-Control':'no-store'})

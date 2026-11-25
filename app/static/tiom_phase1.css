@@ -145,6 +145,23 @@
 #dr_body td textarea[id^="dr_note_"]{width:240px;min-height:45px;resize:vertical;white-space:normal}
 @media(max-width:850px){.drill-report-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.drill-report-sheet .tiom-card-title{flex-wrap:wrap}}
 
+/* Drilling entry: keep one short, legible row per machine. */
+.drill-toolbar{gap:10px;padding:8px 12px}
+.drill-toolbar>b{min-width:118px;font-size:12px}
+.drill-toolbar label{font-size:11px;min-width:120px}
+.drill-toolbar input,.drill-toolbar select{height:32px;font-size:13px}
+.drill-entry-scroll{max-height:270px}
+.drill-entry-table{table-layout:auto;min-width:1580px}
+.drill-entry-table th,.drill-entry-table td{padding:4px 5px;font-size:11px;line-height:1.2}
+.drill-entry-table td:first-child{min-width:168px;max-width:200px;white-space:normal;font-weight:600}
+.drill-entry-table input{min-width:0;width:82px;min-height:29px;font-size:12px;padding:3px 5px}
+.drill-entry-table input[id^="dr_src_"]{width:95px}
+.drill-entry-table textarea[id^="dr_note_"]{width:150px;min-height:29px;height:29px;padding:4px 5px;font-size:11px}
+.drill-report-sheet .drill-report-kpis{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px;margin:7px 0}
+.drill-report-sheet .drill-report-kpis>div{padding:6px 8px}
+.drill-report-sheet .drill-report-kpis b{font-size:15px}
+@media(max-width:760px){.drill-report-sheet .drill-report-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
 .dpr-toolbar .dpr-actions{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-left:auto}
 .dpr-toolbar .dpr-actions .btn{min-height:26px;white-space:nowrap}
 @media(max-width:760px){.dpr-toolbar .dpr-actions{width:100%;margin-left:0;justify-content:flex-start}}
