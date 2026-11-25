@@ -3535,22 +3535,24 @@ def _tiom_drilling_summary(db,from_day,to_day,shift='ALL'):
 
 
 
-def _tiom_drilling_report_table(db, day):
-    """Fixed-format all-shift daily / month-to-date drilling report.
+def _tiom_drilling_report_table(db, day, from_day=None, shift='ALL'):
+    """Selected-day and selected-period drilling report.
 
     The HMR and meters/hr fields are deliberately blank if readings are missing;
     a partial HMR denominator must never inflate reported productivity.
     """
-    month_start=day.replace(day=1)
-    daily=_tiom_drilling_summary(db,day,day,'ALL')
-    monthly=_tiom_drilling_summary(db,month_start,day,'ALL')
+    month_start=from_day or day.replace(day=1)
+    daily=_tiom_drilling_summary(db,day,day,shift)
+    monthly=_tiom_drilling_summary(db,month_start,day,shift)
     day_map={r['id']:r for r in daily['rows']}
     month_map={r['id']:r for r in monthly['rows']}
     sets={r.drill_set_id:r for r in db.scalars(select(TiomDrillSet))}
-    records=list(db.scalars(select(TiomDrillingShift).where(
+    query=select(TiomDrillingShift).where(
         TiomDrillingShift.operating_date>=month_start,
         TiomDrillingShift.operating_date<=day
-    ).order_by(TiomDrillingShift.operating_date,TiomDrillingShift.shift)))
+    )
+    if shift!='ALL':query=query.where(TiomDrillingShift.shift==shift)
+    records=list(db.scalars(query.order_by(TiomDrillingShift.operating_date,TiomDrillingShift.shift)))
     monthly_records={}
     daily_records={}
     for r in records:
@@ -3588,7 +3590,7 @@ def _tiom_drilling_report_table(db, day):
                      'day':metrics(day_map.get(sid,{}),daily_members),
                      'month':metrics(month_map.get(sid,{}),month_members),
                      'remarks':remarks})
-    return {'date':str(day),'monthFrom':str(month_start),'rows':rows,
+    return {'date':str(day),'monthFrom':str(month_start),'shift':shift,'rows':rows,
             'dayTotals':metrics(daily['totals'],[r for r in records if r.operating_date==day]),
             'monthTotals':metrics(monthly['totals'],records)}
 
@@ -5904,9 +5906,9 @@ def tiom_drilling_desk(db,user,p):
             'compressorCloseHmr':reading(r.compressor_close_hmr if r else None,comp_meter,'closing_reading'),
             'breakdownHours':float(r.breakdown_hours) if r and r.breakdown_hours is not None else None,'remarks':r.remarks or '' if r else ''})
     return {'date':str(day),'shift':sh,'reportFrom':str(report_from),'reportTo':str(report_to),'reportShift':report_shift,
-        'sourceLocations':[{'id':x['id'],'label':f"{x['label']} · {x['id']}"} for x in source_locations],
+        'sourceLocations':[{'id':x['id'],'label':x['label']} for x in source_locations],
         'rows':rows,'summaryToday':_tiom_drilling_summary(db,day,day,sh),'summaryRange':_tiom_drilling_summary(db,report_from,report_to,report_shift),
-        'reportTable':_tiom_drilling_report_table(db,report_to)}
+        'reportTable':_tiom_drilling_report_table(db,report_to,report_from,report_shift)}
 
 
 def save_tiom_drilling_shift(db,user,p):
@@ -6529,7 +6531,7 @@ def tiom_drilling_report_export(request:Request,date:str='',fromDate:str='',toDa
             'remarks':r.remarks or '',
             'enteredBy':r.entered_by or '',
             'enteredAt':str(r.entered_at or '')})
-    report=_tiom_drilling_report_table(db,to_day)
+    report=_tiom_drilling_report_table(db,to_day,from_day,shift)
     buf=drilling_workbook(report,details,
                           {'fromDate':str(from_day),'toDate':str(to_day),'shift':shift})
     filename=f"TIOM_Drilling_Report_{from_day}_to_{to_day}_{shift}.xlsx"
@@ -6539,12 +6541,16 @@ def tiom_drilling_report_export(request:Request,date:str='',fromDate:str='',toDa
 
 
 @router.get('/tiom/drilling-report.svg')
-def tiom_drilling_report_image(request:Request,date:str='',db:Session=Depends(get_db)):
+def tiom_drilling_report_image(request:Request,date:str='',fromDate:str='',shift:str='ALL',db:Session=Depends(get_db)):
     from app.services.tiom_drilling_report import drilling_report_svg
     user=get_user(db,request)
     require(user,'PRODUCTION')
     day=_parse_ui_date_v2(date,'drilling date') if date else operating_context()[0]-timedelta(days=1)
-    content=drilling_report_svg(_tiom_drilling_report_table(db,day))
+    from_day=_parse_ui_date_v2(fromDate,'report from date') if fromDate else day.replace(day=1)
+    if from_day>day or (day-from_day).days>366:raise HTTPException(422,'Select a valid report range of at most 367 days.')
+    shift=(shift or 'ALL').upper()
+    if shift!='ALL':require(user,shift=shift)
+    content=drilling_report_svg(_tiom_drilling_report_table(db,day,from_day,shift))
     return Response(content,media_type='image/svg+xml',headers={
         'Content-Disposition':f'attachment; filename="TIOM_Drilling_{day}.svg"',
         'Cache-Control':'no-store'})

@@ -215,3 +215,21 @@
 #tm_trip_panel .tiom-wb-linked-table th{background:#f4f8fa;font-weight:650}
 #tm_trip_panel .tiom-wb-linked-table tbody tr:last-child td{border-bottom:none}
 #tm_trip_panel .tiom-wb-linked-table .btn{min-height:23px;font-size:10px}
+
+/* Drilling: short headings, readable remarks and a clear report filter. */
+.drill-entry-table th:first-child{width:15%}
+.drill-entry-table th:nth-child(2){width:13%}
+.drill-entry-table th:nth-child(3),.drill-entry-table th:nth-child(4){width:8%}
+.drill-entry-table th:nth-child(5),.drill-entry-table th:nth-child(6),.drill-entry-table th:nth-child(8),.drill-entry-table th:nth-child(9){width:6%}
+.drill-entry-table th:nth-child(7),.drill-entry-table th:nth-child(10),.drill-entry-table th:nth-child(11){width:5%}
+.drill-entry-table th:last-child{width:17%}
+.drill-entry-table thead th{font-size:10px;line-height:1.2;white-space:normal;overflow-wrap:normal;text-align:left}
+.drill-entry-table .drill-meter{display:grid;grid-template-columns:1fr;gap:1px}
+.drill-entry-table .drill-meter b{font-size:12px}
+.drill-entry-table .drill-meter small{font-size:9px;white-space:nowrap}
+.drill-entry-table select[id^="dr_src_"]{width:100%;min-width:0;max-width:100%;height:30px;font-size:11px;text-overflow:ellipsis}
+#dr_body .drill-entry-table textarea[id^="dr_note_"]{width:100%;box-sizing:border-box;min-height:56px;height:56px;resize:vertical;white-space:normal;font-size:11px;line-height:1.25;padding:5px}
+.drill-report-panel .drill-report-controls{margin:0 0 8px;max-width:none;background:#eef5f8}
+.drill-report-panel .drill-report-controls>b{font-size:12px;min-width:240px}
+.drill-report-panel .drill-report-controls label{min-width:120px}
+.drill-report-panel .drill-report-controls .btn{white-space:nowrap}

@@ -50,5 +50,5 @@ def test_ten_column_css_and_contained_form_controls():
 
 
 def test_live_asset_urls_refer_to_updated_scripts():
-    assert "/static/tiom_phase1.js?v=tiom-drilling-static-hmr-20261125" in PAGE
-    assert "/static/tiom_phase1.css?v=tiom-drilling-fit-entry-20261125" in PAGE
+    assert "/static/tiom_phase1.js?v=tiom-drilling-remarks-r2-20261125" in PAGE
+    assert "/static/tiom_phase1.css?v=tiom-drilling-entry-r2-20261125" in PAGE
