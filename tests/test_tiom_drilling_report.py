@@ -37,7 +37,11 @@ def test_drilling_excel_layout_and_all_report_sheets():
     stream=drilling_workbook(_summary(),_details(),
         {"fromDate":"2026-10-01","toDate":"2026-10-17","shift":"ALL"})
     wb=load_workbook(stream)
-    assert wb.sheetnames==["Drilling Report","Shift Details","ROM-OB Summary","BHJ-BHQ Summary"]
+    assert wb.sheetnames[:2]==["Drilling Report","Shift Details"]
+    assert wb.sheetnames[-3]=="Cumulative"
+    assert wb["2026-10-17"]["D2"].value==276
+    assert wb["Cumulative"]["D2"].value==276
+    assert wb["2026-10-16"].max_row==1
     ws=wb.worksheets[0]
     assert ws["A1"].value=="Drilling Report"
     assert str(ws["C3"].value)=="For The Day"
@@ -75,7 +79,7 @@ def test_drilling_screen_and_export_are_connected():
     js=(ROOT/"app/static/tiom_phase1.js").read_text(encoding="utf-8")
     assert "def _tiom_drilling_report_table" in api
     assert "/tiom/drilling-report.xlsx" in api
-    assert "'reportTable':_tiom_drilling_report_table(db,day)" in api
+    assert "'reportTable':_tiom_drilling_report_table(db,report_to)" in api
     assert "downloadAllDrillingReports" in js
     assert "renderDrillingPublishedReport(d.reportTable)" in js
     assert "Shift / stoppage details" in js
