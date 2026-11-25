@@ -3,7 +3,7 @@ from pathlib import Path
 
 from openpyxl import load_workbook
 
-from app.services.tiom_drilling_report import drilling_workbook
+from app.services.tiom_drilling_report import drilling_workbook, drilling_report_svg
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,9 +39,10 @@ def test_drilling_excel_layout_and_all_report_sheets():
     wb=load_workbook(stream)
     assert wb.sheetnames[:2]==["Drilling Report","Shift Details"]
     assert wb.sheetnames[-3]=="Cumulative"
-    assert wb["2026-10-17"]["D2"].value==276
-    assert wb["Cumulative"]["D2"].value==276
-    assert wb["2026-10-16"].max_row==1
+    assert wb["2026-10-17"]["E5"].value==276
+    assert wb["Cumulative"]["E5"].value==276
+    assert wb["2026-10-16"]["A5"].value=="Total"
+    assert wb["2026-10-17"]["C3"].value=="For The Day"
     ws=wb.worksheets[0]
     assert ws["A1"].value=="Drilling Report"
     assert str(ws["C3"].value)=="For The Day"
@@ -82,4 +83,20 @@ def test_drilling_screen_and_export_are_connected():
     assert "'reportTable':_tiom_drilling_report_table(db,report_to)" in api
     assert "downloadAllDrillingReports" in js
     assert "renderDrillingPublishedReport(d.reportTable)" in js
-    assert "Shift / stoppage details" in js
+    assert 'placeholder="Shift notes"' in js
+
+
+def test_drilling_image_escapes_remarks_and_entry_keeps_hmr_read_only():
+    report=_summary()
+    report['rows'][0]['remarks'][0]['text']='<face unavailable>'
+    svg=drilling_report_svg(report)
+    assert '&lt;face unavailable&gt;' in svg
+    js=(ROOT/'app/static/tiom_phase1.js').read_text(encoding='utf-8')
+    assert 'downloadDrillingImage' in js
+    assert "combo('dr_src_'+i,d.sourceLocations" in js
+    assert 'const meter=(open,close)' in js
+    assert '<input id="dr_do_' not in js
+    api=(ROOT/'app/routers/webapp.py').read_text(encoding='utf-8')
+    save=api.split('def save_tiom_drilling_shift(',1)[1].split('def tiom_hsd_desk(',1)[0]
+    assert '_tiom_upsert_hmr(' not in save
+    assert 'stable_reading(' in save

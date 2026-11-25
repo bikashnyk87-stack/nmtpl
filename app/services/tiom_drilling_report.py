@@ -2,6 +2,8 @@
 from io import BytesIO
 from collections import defaultdict
 from datetime import date, timedelta
+from xml.sax.saxutils import escape
+from textwrap import wrap
 
 from openpyxl import Workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -13,6 +15,51 @@ PEACH = "F4B183"
 BLUE = "234B65"
 WHITE = "FFFFFF"
 LINE = Side(style="thin", color="687785")
+
+
+def drilling_report_svg(report):
+    """Render the selected day's report as a portable vector image."""
+    rows = report.get('rows', [])
+    height = 265 + len(rows) * 40
+    remarks = []
+    for item in rows:
+        note = ' | '.join(f"{x['shift']}: {x['text']}" for x in item.get('remarks', []))
+        if note:
+            remarks.append((item['label'], wrap(note, 104) or ['']))
+            height += 25 + 22 * len(remarks[-1][1])
+    height = max(height, 340)
+    parts = [f'<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="{height}" viewBox="0 0 1400 {height}">',
+             '<rect width="1400" height="100%" fill="white"/>',
+             '<rect x="20" y="20" width="1360" height="55" fill="#a9d18e"/>',
+             '<text x="700" y="57" text-anchor="middle" font-size="28" font-weight="bold">Drilling Report</text>',
+             f'<text x="700" y="103" text-anchor="middle" font-size="16" fill="#234b65">TIOM | Day: {escape(report["date"])} (all shifts) | Month-to-date: {escape(report["monthFrom"])} to {escape(report["date"])}</text>',
+             '<rect x="20" y="115" width="1360" height="57" fill="#f4b183"/>',
+             '<text x="35" y="139" font-size="15" font-weight="bold">Equipment name</text>',
+             '<text x="630" y="139" font-size="15" font-weight="bold">For the day</text>',
+             '<text x="1110" y="139" font-size="15" font-weight="bold">For the month</text>']
+    xs = [35, 475, 575, 675, 795, 935, 1035, 1135, 1255]
+    labels = ['Equipment', 'HMR', 'Holes', 'Meterage', 'm/hr', 'HMR', 'Holes', 'Meterage', 'm/hr']
+    for x, label in zip(xs, labels):
+        parts.append(f'<text x="{x}" y="162" font-size="13" font-weight="bold">{label}</text>')
+    def value(obj, key):
+        v = obj.get(key)
+        return '—' if v is None else f'{v:,.2f}'.rstrip('0').rstrip('.') if isinstance(v, float) else str(v)
+    for i, item in enumerate(rows + [{'label':'TOTAL','day':report.get('dayTotals',{}),'month':report.get('monthTotals',{})}]):
+        y = 172 + i * 40
+        parts.append(f'<rect x="20" y="{y}" width="1360" height="40" fill="{"#e8f0e5" if i == len(rows) else ("#ffffff" if i % 2 == 0 else "#f5f8fa")}" stroke="#9aaab3"/>')
+        entries = [item['label']] + [value(item.get('day',{}), k) for k in ('hmr','holes','meterage','metersPerHour')] + [value(item.get('month',{}), k) for k in ('hmr','holes','meterage','metersPerHour')]
+        for x, entry in zip(xs, entries):
+            parts.append(f'<text x="{x}" y="{y+25}" font-size="14" font-family="Arial, sans-serif">{escape(str(entry))}</text>')
+    y = 172 + (len(rows)+1) * 40 + 18
+    parts.append(f'<text x="35" y="{y}" font-size="16" font-weight="bold">Remarks</text>')
+    for name, lines in remarks:
+        y += 26
+        parts.append(f'<text x="35" y="{y}" font-size="13" font-weight="bold">{escape(name)}</text>')
+        for line in lines:
+            y += 22
+            parts.append(f'<text x="475" y="{y}" font-size="13">{escape(line)}</text>')
+    parts.append('</svg>')
+    return ''.join(parts)
 
 
 def drilling_workbook(report, detail_rows, period):
@@ -185,12 +232,68 @@ def drilling_workbook(report, detail_rows, period):
     summary_columns = ["Equipment", "Drill HMR", "Holes", "Meterage (m)", "Meters/hr",
                        "ROM/OB Holes", "BHJ/BHQ Holes", "Unclassified Hole Records"]
     start, end = date.fromisoformat(period["fromDate"]), date.fromisoformat(period["toDate"])
+    def add_daily_form(name, daily_items, cumulative_items, heading):
+        sheet = wb.create_sheet(name)
+        sheet.merge_cells('A1:J1')
+        sheet['A1'] = 'Drilling Report'
+        sheet['A1'].fill = PatternFill('solid', fgColor=GREEN)
+        sheet['A1'].font = Font(size=18, bold=True)
+        sheet['A1'].alignment = Alignment(horizontal='center')
+        sheet.row_dimensions[1].height = 34
+        sheet.merge_cells('A2:J2')
+        sheet['A2'] = heading
+        sheet['A2'].alignment = Alignment(horizontal='center')
+        sheet['A2'].font = Font(bold=True, color=BLUE)
+        headers = ['Sl.No', 'Equipment name', 'HMR', 'Holes', 'Meterage', 'Meters/hr.',
+                   'HMR', 'Holes', 'Meterage', 'Meters/hr.']
+        sheet.merge_cells('A3:A4'); sheet.merge_cells('B3:B4')
+        sheet.merge_cells('C3:F3'); sheet.merge_cells('G3:J3')
+        for cell, label in [('A3','Sl.No'),('B3','Equipment name'),('C3','For The Day'),('G3','For The Period')]:
+            sheet[cell] = label
+        for col in range(3,11): sheet.cell(4,col,headers[col-1])
+        for row in sheet.iter_rows(min_row=3,max_row=4,max_col=10):
+            for cell in row:
+                cell.fill=PatternFill('solid',fgColor=PEACH)
+                cell.font=Font(bold=True)
+                cell.alignment=Alignment(horizontal='center',vertical='center')
+                cell.border=Border(left=LINE,right=LINE,top=LINE,bottom=LINE)
+        today={x[0]:x for x in aggregate(daily_items)}
+        period_rows={x[0]:x for x in aggregate(cumulative_items)}
+        def values(x): return [x[1],x[2],x[3],x[4]] if x else [None]*4
+        names=sorted(set(today)|set(period_rows),key=str.casefold)
+        for pos,label in enumerate(names,5):
+            data=[pos-4,label]+values(today.get(label))+values(period_rows.get(label))
+            for col,value in enumerate(data,1): sheet.cell(pos,col,value)
+            for cell in sheet[pos][:10]:cell.border=Border(left=LINE,right=LINE,top=LINE,bottom=LINE)
+        last=5+len(names)
+        sheet.merge_cells(start_row=last,start_column=1,end_row=last,end_column=2)
+        sheet.cell(last,1,'Total')
+        for offset,items in [(3,daily_items),(7,cumulative_items)]:
+            group=aggregate(items)
+            hours=[r[1] for r in group if r[1] is not None]
+            hmr=sum(hours) if hours else None
+            holes=sum(r[2] for r in group)
+            metres=sum(r[3] for r in group)
+            rate=round(metres/hmr,2) if hmr and not any(r[3]>0 and r[4] is None for r in group) else None
+            for col,value in enumerate([hmr,holes,metres,rate],offset):sheet.cell(last,col,value)
+        for cell in sheet[last][:10]:
+            cell.fill=PatternFill('solid',fgColor='E8F0E5')
+            cell.font=Font(bold=True)
+            cell.border=Border(left=LINE,right=LINE,top=LINE,bottom=LINE)
+        for pos,width in enumerate((10,38,14,12,16,16,14,12,16,16),1):sheet.column_dimensions[get_column_letter(pos)].width=width
+        sheet.freeze_panes='C5';sheet.sheet_view.showGridLines=False
+        sheet.page_setup.orientation='landscape';sheet.page_setup.fitToWidth=1
+        sheet.sheet_properties.pageSetUpPr.fitToPage=True
+
     current = start
     while current <= end:
         daily = [x for x in detail_rows if x.get("date") == current.isoformat()]
-        add_sheet(current.isoformat(), summary_columns, aggregate(daily), [40, 15, 14, 18, 15, 18, 18, 30])
+        to_date = [x for x in detail_rows if x.get('date','') <= current.isoformat()]
+        add_daily_form(current.isoformat(),daily,to_date,
+                       f'TIOM | Day: {current.isoformat()} | Selected period: {start} to {current}')
         current += timedelta(days=1)
-    add_sheet("Cumulative", summary_columns, aggregate(detail_rows), [40, 15, 14, 18, 15, 18, 18, 30])
+    add_daily_form('Cumulative',detail_rows,detail_rows,
+                   f'TIOM | Cumulative: {start} to {end}')
 
     # Split summary deliberately omits historic holes not assigned to a material.
     for title, holes_key, metres_key in (

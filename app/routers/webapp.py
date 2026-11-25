@@ -5881,17 +5881,27 @@ def tiom_drilling_desk(db,user,p):
     sets=list(db.scalars(select(TiomDrillSet).where(TiomDrillSet.active.is_(True)).order_by(TiomDrillSet.drill_set_name)))
     equipment={x.machine_id:x for x in db.scalars(select(Equipment))}
     current={x.drill_set_id:x for x in db.scalars(select(TiomDrillingShift).where(TiomDrillingShift.operating_date==day,TiomDrillingShift.shift==sh))}
+    meters={x.asset_id:x for x in db.scalars(select(SiteAssetMeter).where(
+        SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,
+        SiteAssetMeter.shift==sh,SiteAssetMeter.meter_type=='HMR'))}
     rows=[]
     for st in sets:
         r=current.get(st.drill_set_id)
+        drill_meter=meters.get(st.drill_machine_id)
+        comp_meter=meters.get(st.compressor_machine_id)
+        def reading(stored,meter,field):
+            value=stored if stored is not None else getattr(meter,field,None)
+            return float(value) if value is not None else None
         rows.append({'drillSetId':st.drill_set_id,'label':st.drill_set_name,
             'drillMachineId':st.drill_machine_id,'drillMachineLabel':_tiom_asset_label(equipment.get(st.drill_machine_id)) if equipment.get(st.drill_machine_id) else st.drill_machine_id,
             'compressorMachineId':st.compressor_machine_id,'compressorMachineLabel':_tiom_asset_label(equipment.get(st.compressor_machine_id)) if equipment.get(st.compressor_machine_id) else st.compressor_machine_id,
             'sourceLocationId':r.source_location_id if r else '', 'holes':r.holes if r else 0,
             'romObHoles':r.rom_ob_holes if r else None,'bhjBhqHoles':r.bhj_bhq_holes if r else None,
             'romObMeterage':float(r.rom_ob_meterage) if r else 0,'bhjBhqMeterage':float(r.bhj_bhq_meterage) if r else 0,
-            'drillOpenHmr':float(r.drill_open_hmr) if r and r.drill_open_hmr is not None else None,'drillCloseHmr':float(r.drill_close_hmr) if r and r.drill_close_hmr is not None else None,
-            'compressorOpenHmr':float(r.compressor_open_hmr) if r and r.compressor_open_hmr is not None else None,'compressorCloseHmr':float(r.compressor_close_hmr) if r and r.compressor_close_hmr is not None else None,
+            'drillOpenHmr':reading(r.drill_open_hmr if r else None,drill_meter,'opening_reading'),
+            'drillCloseHmr':reading(r.drill_close_hmr if r else None,drill_meter,'closing_reading'),
+            'compressorOpenHmr':reading(r.compressor_open_hmr if r else None,comp_meter,'opening_reading'),
+            'compressorCloseHmr':reading(r.compressor_close_hmr if r else None,comp_meter,'closing_reading'),
             'breakdownHours':float(r.breakdown_hours) if r and r.breakdown_hours is not None else None,'remarks':r.remarks or '' if r else ''})
     return {'date':str(day),'shift':sh,'reportFrom':str(report_from),'reportTo':str(report_to),'reportShift':report_shift,
         'sourceLocations':[{'id':x['id'],'label':f"{x['label']} · {x['id']}"} for x in source_locations],
@@ -5930,24 +5940,32 @@ def save_tiom_drilling_shift(db,user,p):
             holes=rom_holes+bhj_holes
         else:rom_holes=None;bhj_holes=None
         rom=dec(rom_raw,f'ROM/OB meterage row {idx}',True); bhj=dec(bhj_raw,f'BHJ/BHQ meterage row {idx}',True)
-        do=dec(item.get('drillOpenHmr'),f'Drill HMR opening row {idx}'); dc=dec(item.get('drillCloseHmr'),f'Drill HMR closing row {idx}')
-        co=dec(item.get('compressorOpenHmr'),f'Compressor HMR opening row {idx}'); cc=dec(item.get('compressorCloseHmr'),f'Compressor HMR closing row {idx}')
+        existing=db.scalar(select(TiomDrillingShift).where(TiomDrillingShift.operating_date==day,TiomDrillingShift.shift==sh,TiomDrillingShift.drill_set_id==set_id))
+        def stable_reading(machine_id,stored,field):
+            if stored is not None: return Decimal(stored)
+            meter=db.scalar(select(SiteAssetMeter).where(
+                SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,
+                SiteAssetMeter.shift==sh,SiteAssetMeter.asset_id==machine_id,
+                SiteAssetMeter.meter_type=='HMR'))
+            value=getattr(meter,field,None)
+            return Decimal(value) if value is not None else None
+        do=stable_reading(st.drill_machine_id,existing.drill_open_hmr if existing else None,'opening_reading')
+        dc=stable_reading(st.drill_machine_id,existing.drill_close_hmr if existing else None,'closing_reading')
+        co=stable_reading(st.compressor_machine_id,existing.compressor_open_hmr if existing else None,'opening_reading')
+        cc=stable_reading(st.compressor_machine_id,existing.compressor_close_hmr if existing else None,'closing_reading')
         bd=dec(item.get('breakdownHours'),f'Breakdown hours row {idx}')
         if do is not None and dc is not None and dc<do: raise HTTPException(422,f'Drilling row {idx}: Drill closing HMR cannot be below opening HMR.')
         if co is not None and cc is not None and cc<co: raise HTTPException(422,f'Drilling row {idx}: Compressor closing HMR cannot be below opening HMR.')
-        existing=db.scalar(select(TiomDrillingShift).where(TiomDrillingShift.operating_date==day,TiomDrillingShift.shift==sh,TiomDrillingShift.drill_set_id==set_id))
         obj=existing or TiomDrillingShift(drilling_id=str(uuid4()),operating_date=day,shift=sh,drill_set_id=set_id,entered_by=user.login_id,entered_at=now_local())
         obj.source_location_id=source_id or None; obj.holes=holes
         obj.rom_ob_holes=rom_holes;obj.bhj_bhq_holes=bhj_holes
         obj.rom_ob_meterage=rom; obj.bhj_bhq_meterage=bhj
         obj.drill_open_hmr=do; obj.drill_close_hmr=dc; obj.compressor_open_hmr=co; obj.compressor_close_hmr=cc
         obj.breakdown_hours=bd; obj.remarks=short(str(item.get('remarks') or '')); obj.entered_by=user.login_id; obj.entered_at=now_local(); db.add(obj)
-        _tiom_upsert_hmr(db,user,day,sh,st.drill_machine_id,do,dc,'TIOM_DRILLING',f'[DRILL_SET:{set_id}]')
-        _tiom_upsert_hmr(db,user,day,sh,st.compressor_machine_id,co,cc,'TIOM_DRILLING',f'[DRILL_SET:{set_id}]')
         saved+=1
     if not saved: raise HTTPException(422,'Add at least one Drill Set row.')
     audit(db,user,'TIOM_DRILLING_SHIFT','tiom_drilling_shift',f'{day}:{sh}',{'rows':saved})
-    return {'ok':True,'message':f'{saved} drilling row(s) saved. Drill and Compressor HMR were written to the central meter ledger.'}
+    return {'ok':True,'message':f'{saved} drilling row(s) saved. HMR readings remain sourced from the central meter ledger.'}
 
 
 def tiom_hsd_desk(db,user,p):
@@ -6518,6 +6536,18 @@ def tiom_drilling_report_export(request:Request,date:str='',fromDate:str='',toDa
     return StreamingResponse(buf,media_type=MIME,
         headers={'Content-Disposition':f'attachment; filename="{filename}"',
                  'Cache-Control':'no-store'})
+
+
+@router.get('/tiom/drilling-report.svg')
+def tiom_drilling_report_image(request:Request,date:str='',db:Session=Depends(get_db)):
+    from app.services.tiom_drilling_report import drilling_report_svg
+    user=get_user(db,request)
+    require(user,'PRODUCTION')
+    day=_parse_ui_date_v2(date,'drilling date') if date else operating_context()[0]-timedelta(days=1)
+    content=drilling_report_svg(_tiom_drilling_report_table(db,day))
+    return Response(content,media_type='image/svg+xml',headers={
+        'Content-Disposition':f'attachment; filename="TIOM_Drilling_{day}.svg"',
+        'Cache-Control':'no-store'})
 
 
 @router.get('/tiom/mis-entry-export.xlsx')
