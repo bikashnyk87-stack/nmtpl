@@ -102,7 +102,9 @@ def test_drilling_image_escapes_remarks_and_entry_keeps_hmr_read_only():
     assert 'function renderDrillingReportPanel(d){return `<div class="panel tiom-sap-card drill-report-panel">${drillingReportControls(d)}' in js
     assert 'window.loadDrillingReport=function()' in js
     assert '<textarea id="dr_note_' in js
-    assert '<select id="dr_src_${i}"' in js
+    assert "combo('dr_src_'+i,d.sourceLocations||[],r.sourceLocationId,'','Search / select source')" in js
+    assert "if(!comboResolve(id)&&v(id+'_text').trim())" in js
+    assert "sourceLocationId:v('dr_src_'+i)" in js
     assert 'const meter=(open,close)' in js
     assert '<input id="dr_do_' not in js
     api=(ROOT/'app/routers/webapp.py').read_text(encoding='utf-8')
