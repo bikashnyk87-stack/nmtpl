@@ -5943,18 +5943,32 @@ def save_tiom_drilling_shift(db,user,p):
         else:rom_holes=None;bhj_holes=None
         rom=dec(rom_raw,f'ROM/OB meterage row {idx}',True); bhj=dec(bhj_raw,f'BHJ/BHQ meterage row {idx}',True)
         existing=db.scalar(select(TiomDrillingShift).where(TiomDrillingShift.operating_date==day,TiomDrillingShift.shift==sh,TiomDrillingShift.drill_set_id==set_id))
-        def stable_reading(machine_id,stored,field):
-            if stored is not None: return Decimal(stored)
+        def editable_readings(machine_id,stored_open,stored_close,open_key,close_key,label):
             meter=db.scalar(select(SiteAssetMeter).where(
                 SiteAssetMeter.site_id=='TIOM',SiteAssetMeter.operating_date==day,
                 SiteAssetMeter.shift==sh,SiteAssetMeter.asset_id==machine_id,
                 SiteAssetMeter.meter_type=='HMR'))
-            value=getattr(meter,field,None)
-            return Decimal(value) if value is not None else None
-        do=stable_reading(st.drill_machine_id,existing.drill_open_hmr if existing else None,'opening_reading')
-        dc=stable_reading(st.drill_machine_id,existing.drill_close_hmr if existing else None,'closing_reading')
-        co=stable_reading(st.compressor_machine_id,existing.compressor_open_hmr if existing else None,'opening_reading')
-        cc=stable_reading(st.compressor_machine_id,existing.compressor_close_hmr if existing else None,'closing_reading')
+            ledger=(getattr(meter,'opening_reading',None),getattr(meter,'closing_reading',None))
+            previous=tuple(Decimal(value) if value is not None else None for value in
+                (stored_open if stored_open is not None else ledger[0],
+                 stored_close if stored_close is not None else ledger[1]))
+            if open_key not in item and close_key not in item:
+                return previous
+            opening=dec(item[open_key],f'{label} HMR opening row {idx}') if open_key in item else previous[0]
+            closing=dec(item[close_key],f'{label} HMR closing row {idx}') if close_key in item else previous[1]
+            if (opening,closing)==previous:
+                return previous
+            if opening is None or closing is None:
+                raise HTTPException(422,f'Drilling row {idx}: Enter both {label} opening and closing HMR to change readings.')
+            if closing<opening:
+                raise HTTPException(422,f'Drilling row {idx}: {label} closing HMR cannot be below opening HMR.')
+            if (opening,closing)!=ledger:
+                _tiom_upsert_hmr(db,user,day,sh,machine_id,opening,closing,'TIOM_DRILLING',f'[DRILL_SET:{set_id}]')
+            return opening,closing
+        do,dc=editable_readings(st.drill_machine_id,existing.drill_open_hmr if existing else None,
+            existing.drill_close_hmr if existing else None,'drillOpenHmr','drillCloseHmr','Drill')
+        co,cc=editable_readings(st.compressor_machine_id,existing.compressor_open_hmr if existing else None,
+            existing.compressor_close_hmr if existing else None,'compressorOpenHmr','compressorCloseHmr','Compressor')
         bd=dec(item.get('breakdownHours'),f'Breakdown hours row {idx}')
         if do is not None and dc is not None and dc<do: raise HTTPException(422,f'Drilling row {idx}: Drill closing HMR cannot be below opening HMR.')
         if co is not None and cc is not None and cc<co: raise HTTPException(422,f'Drilling row {idx}: Compressor closing HMR cannot be below opening HMR.')
@@ -5967,7 +5981,7 @@ def save_tiom_drilling_shift(db,user,p):
         saved+=1
     if not saved: raise HTTPException(422,'Add at least one Drill Set row.')
     audit(db,user,'TIOM_DRILLING_SHIFT','tiom_drilling_shift',f'{day}:{sh}',{'rows':saved})
-    return {'ok':True,'message':f'{saved} drilling row(s) saved. HMR readings remain sourced from the central meter ledger.'}
+    return {'ok':True,'message':f'{saved} drilling row(s) saved. HMR changes are linked to the central meter ledger.'}
 
 
 def tiom_hsd_desk(db,user,p):

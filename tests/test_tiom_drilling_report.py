@@ -89,7 +89,7 @@ def test_drilling_screen_and_export_are_connected():
     assert 'placeholder="Enter shift remarks"' in js
 
 
-def test_drilling_image_escapes_remarks_and_entry_keeps_hmr_read_only():
+def test_drilling_image_escapes_remarks_and_entry_restores_editable_hmr():
     report=_summary()
     report['rows'][0]['remarks'][0]['text']='<face unavailable>'
     svg=drilling_report_svg(report)
@@ -105,9 +105,16 @@ def test_drilling_image_escapes_remarks_and_entry_keeps_hmr_read_only():
     assert "combo('dr_src_'+i,d.sourceLocations||[],r.sourceLocationId,'','Search / select source')" in js
     assert "if(!comboResolve(id)&&v(id+'_text').trim())" in js
     assert "sourceLocationId:v('dr_src_'+i)" in js
-    assert 'const meter=(open,close)' in js
-    assert '<input id="dr_do_' not in js
+    assert 'const meter=(prefix,i,open,close,label)' in js
+    assert "meter('d',i,r.drillOpenHmr,r.drillCloseHmr,'Drill')" in js
+    assert "meter('c',i,r.compressorOpenHmr,r.compressorCloseHmr,'Compressor')" in js
+    assert "drillOpenHmr:v('dr_do_'+i).trim()" in js
+    assert "compressorCloseHmr:v('dr_cc_'+i).trim()" in js
+    assert "hours>8" in js
     api=(ROOT/'app/routers/webapp.py').read_text(encoding='utf-8')
     save=api.split('def save_tiom_drilling_shift(',1)[1].split('def tiom_hsd_desk(',1)[0]
-    assert '_tiom_upsert_hmr(' not in save
-    assert 'stable_reading(' in save
+    assert '_tiom_upsert_hmr(' in save
+    assert 'editable_readings(' in save
+    assert "if (opening,closing)==previous:" in save
+    assert "if (opening,closing)!=ledger:" in save
+    assert "if opening is None or closing is None:" in save

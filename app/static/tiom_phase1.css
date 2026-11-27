@@ -233,3 +233,9 @@
 .drill-report-panel .drill-report-controls>b{font-size:12px;min-width:240px}
 .drill-report-panel .drill-report-controls label{min-width:120px}
 .drill-report-panel .drill-report-controls .btn{white-space:nowrap}
+
+/* Compact, scroll-safe drilling HMR entry. */
+.drill-entry-table .drill-meter-edit{gap:3px}
+.drill-meter-edit label{display:grid;grid-template-columns:32px minmax(0,1fr);align-items:center;gap:2px;font-size:10px;color:#52697c;text-align:left}
+.drill-entry-table .drill-meter-edit input{height:25px;padding:2px 3px}
+.drill-entry-table .drill-meter-edit .drill-hmr-warning{color:#a84b00;background:#fff1d6;border-radius:3px}
